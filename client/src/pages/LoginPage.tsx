@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-import { Dumbbell } from "lucide-react";
+import { Loader2 } from "lucide-react";
 
 const loginSchema = z.object({
   email: z.string().email("Invalid email"),
@@ -20,8 +20,23 @@ const registerSchema = loginSchema.extend({
   displayName: z.string().optional(),
 });
 
-type LoginForm = z.infer<typeof loginSchema>;
 type RegisterForm = z.infer<typeof registerSchema>;
+
+/** Inline logo mark — same as Layout */
+function LogoMark({ size = 40 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 32 32" fill="none" aria-label="Macro logo">
+      <rect width="32" height="32" rx="8" fill="hsl(var(--primary))" opacity="0.12" />
+      <path
+        d="M5 22V11l5.5 7.5L16 11l5.5 7.5L27 11v11"
+        stroke="hsl(var(--primary))"
+        strokeWidth="2.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
 
 export default function LoginPage() {
   const [isRegister, setIsRegister] = useState(false);
@@ -54,24 +69,29 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
-      <div className="w-full max-w-sm">
-        {/* Logo */}
-        <div className="flex items-center gap-3 mb-8 justify-center">
-          <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center">
-            <Dumbbell className="w-5 h-5 text-primary-foreground" />
-          </div>
-          <div>
-            <h1 className="text-xl font-bold text-foreground leading-none">WVU Dining</h1>
-            <p className="text-xs text-muted-foreground">Tracker</p>
+      <div className="w-full max-w-[360px] fade-up">
+
+        {/* Brand header */}
+        <div className="flex flex-col items-center gap-3 mb-8">
+          <LogoMark size={48} />
+          <div className="text-center">
+            <h1
+              className="text-2xl font-bold text-foreground leading-none tracking-tight"
+              style={{ fontFamily: "var(--font-display)" }}
+            >
+              Macro
+            </h1>
+            <p className="text-xs text-muted-foreground mt-1">Nutrition &amp; Performance Tracker</p>
           </div>
         </div>
 
-        <div className="bg-card border border-border rounded-xl p-6">
-          <h2 className="text-lg font-semibold mb-1">
+        {/* Auth card */}
+        <div className="bg-card border border-border rounded-2xl p-6 shadow-sm">
+          <h2 className="text-base font-semibold mb-0.5">
             {isRegister ? "Create account" : "Welcome back"}
           </h2>
           <p className="text-sm text-muted-foreground mb-5">
-            {isRegister ? "Start tracking your nutrition" : "Sign in to your account"}
+            {isRegister ? "Start tracking your nutrition today" : "Sign in to continue"}
           </p>
 
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
@@ -120,14 +140,12 @@ export default function LoginPage() {
               data-testid="button-submit"
             >
               {form.formState.isSubmitting
-                ? "Please wait..."
-                : isRegister
-                ? "Create account"
-                : "Sign in"}
+                ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Please wait</>
+                : isRegister ? "Create account" : "Sign in"}
             </Button>
           </form>
 
-          <div className="mt-4 text-center">
+          <div className="mt-5 pt-4 border-t border-border text-center">
             <button
               type="button"
               onClick={() => { setIsRegister(!isRegister); form.reset(); }}
@@ -141,8 +159,10 @@ export default function LoginPage() {
           </div>
         </div>
 
-        <p className="text-center text-xs text-muted-foreground mt-6">
-          West Virginia University · Dining Nutrition Tracker
+        <p className="text-center text-xs text-muted-foreground mt-5">
+          <a href="https://www.perplexity.ai/computer" target="_blank" rel="noopener noreferrer" className="hover:text-primary transition-colors">
+            Created with Perplexity Computer
+          </a>
         </p>
       </div>
     </div>
