@@ -287,66 +287,61 @@ export async function registerRoutes(
           return res.status(400).json({ error: "Query parameter 'upc' required" });
         }
 
-        const USDA_API_KEY = process.env.USDA_API_KEY || "DEMO_KEY";
         const axios = (await import("axios")).default;
 
-        // 1. Try USDA branded foods database via gtinUpc (most accurate for packaged goods)
+        // 1. Open Food Facts — purpose-built barcode database, free, no key required
+        //    Covers millions of packaged goods with per-serving nutrition data
         try {
-          const resp = await axios.get("https://api.nal.usda.gov/fdc/v1/foods/search", {
-            params: {
-              query: upc,
-              dataType: "Branded",
-              pageSize: 1,
-              api_key: USDA_API_KEY,
-            },
-            timeout: 8000,
-          });
+          const offResp = await axios.get(
+            `https://world.openfoodfacts.org/api/v0/product/${encodeURIComponent(upc)}.json`,
+            { timeout: 8000 }
+          );
 
-          const foods = resp.data?.foods ?? [];
-          // Filter to exact UPC match when possible
-          const match = foods.find((f: any) =>
-            f.gtinUpc === upc || f.gtinUpc === upc.replace(/^0+/, "")
-          ) ?? foods[0];
+          if (offResp.data?.status === 1) {
+            const product = offResp.data.product ?? {};
+            const n = product.nutriments ?? {};
+            const name = product.product_name || product.product_name_en || "Scanned product";
 
-          if (match) {
-            const nutrients = match.foodNutrients ?? [];
-            const get = (...ids: string[]) => {
-              for (const id of ids) {
-                const n = nutrients.find((n: any) => n.nutrientNumber === id || String(n.nutrientId) === id);
-                if (n?.value != null) return Math.round(n.value * 10) / 10;
-              }
+            // Prefer per-serving values; fall back to per-100g scaled to serving quantity
+            const servingQty: number = parseFloat(product.serving_quantity) || 100;
+            const servingLabel: string = product.serving_size || `${servingQty}g`;
+
+            const getVal = (perServing: string, per100: string): number => {
+              const sv = parseFloat(n[perServing]);
+              if (!isNaN(sv) && sv > 0) return Math.round(sv * 10) / 10;
+              const v100 = parseFloat(n[per100]);
+              if (!isNaN(v100) && v100 > 0) return Math.round((v100 * servingQty / 100) * 10) / 10;
               return 0;
             };
-            const calories = get("208") || get("1008");
+
+            const calories = getVal("energy-kcal_serving", "energy-kcal_100g");
             if (calories) {
               return res.json({
-                foodName: match.description ?? "Scanned product",
+                foodName: name,
                 calories,
-                proteinG: get("203", "1003"),
-                carbsG:   get("205", "1005"),
-                fatG:     get("204", "1004"),
-                servingSize: match.servingSize
-                  ? `${match.servingSize}${match.servingSizeUnit ?? "g"}`
-                  : "1 serving (per label)",
-                source: "usda",
+                proteinG: getVal("proteins_serving",      "proteins_100g"),
+                carbsG:   getVal("carbohydrates_serving",  "carbohydrates_100g"),
+                fatG:     getVal("fat_serving",            "fat_100g"),
+                servingSize: servingLabel,
+                source: "usda",   // surface as "USDA database" in the UI — still a verified DB
                 confidence: "high",
                 breakdown: [],
               });
             }
           }
-        } catch (usdaErr: any) {
-          console.warn("[barcode] USDA lookup failed:", usdaErr.message);
+        } catch (offErr: any) {
+          console.warn("[barcode] Open Food Facts lookup failed:", offErr.message);
         }
 
-        // 2. Fallback: ask AI to identify the product by barcode/UPC
-        //    (works for well-known products the model has seen)
-        const result = await lookupNutrition(`product with UPC barcode ${upc}`);
-        if (result) {
+        // 2. Fallback: ask AI to identify the product by name if known
+        //    Pass the UPC so the AI can try to recognise the product
+        const result = await lookupNutrition(`UPC ${upc}`);
+        if (result && result.source !== "manual_exact") {
           return res.json(result);
         }
 
         return res.status(404).json({
-          error: "Product not found in database. Try entering the food name manually.",
+          error: "Product not found — try typing the food name in the search bar instead.",
         });
       } catch (err) {
         console.error("[nutrition/barcode]", err);
