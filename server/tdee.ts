@@ -109,7 +109,16 @@ export function computeDailyTargets(
         (new Date(user.targetDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24)
       )
     );
-    const kgToChange = user.targetWeightKg - user.weightKg;
+    // When water cut is enabled for a loss goal, reserve the final 1% of bodyweight
+    // for the water cut — so the daily calorie deficit only targets down to
+    // (targetWeightKg + 1% current bodyweight), not all the way to the weigh-in weight.
+    const isLossGoal =
+      user.goalType === "weight_loss" || user.goalType === "powerlifting_loss";
+    const dietTargetKg =
+      user.enableWaterCut && isLossGoal
+        ? user.targetWeightKg + user.weightKg * 0.01
+        : user.targetWeightKg;
+    const kgToChange = dietTargetKg - user.weightKg;
     // 1 kg fat ≈ 7700 kcal
     const dailyAdjust = (kgToChange * 7700) / daysLeft;
 
