@@ -1,9 +1,15 @@
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
-import { getToken, kgToLbs, todayStr } from "@/lib/api";
+import { apiRequest } from "@/lib/queryClient";
+import { kgToLbs, todayStr } from "@/lib/api";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
-import { Droplets, Target, Zap, Dumbbell } from "lucide-react";
+import { Droplets, Target, Dumbbell, Waves } from "lucide-react";
+
+/** Round to 1 decimal place */
+function r1(n: number) {
+  return Math.round(n * 10) / 10;
+}
 
 export default function DietPlanPage() {
   const { user } = useAuth();
@@ -12,9 +18,7 @@ export default function DietPlanPage() {
   const { data, isLoading } = useQuery<any>({
     queryKey: ["/api/targets", today],
     queryFn: async () => {
-      const res = await fetch(`/api/targets?date=${today}`, {
-        headers: { Authorization: `Bearer ${getToken()}` },
-      });
+      const res = await apiRequest("GET", `/api/targets?date=${today}`);
       if (!res.ok) throw new Error("Failed to get targets");
       return res.json();
     },
@@ -23,7 +27,7 @@ export default function DietPlanPage() {
   const { data: weightLogs = [] } = useQuery<any[]>({
     queryKey: ["/api/weight"],
     queryFn: async () => {
-      const res = await fetch("/api/weight?limit=30", { headers: { Authorization: `Bearer ${getToken()}` } });
+      const res = await apiRequest("GET", "/api/weight?limit=30");
       if (!res.ok) return [];
       return res.json();
     },
@@ -60,9 +64,24 @@ export default function DietPlanPage() {
     ? Math.max(0, Math.round((new Date(user.targetDate).getTime() - Date.now()) / 86400000))
     : null;
 
-  const currentLbs = latestWeight ? kgToLbs(latestWeight) : null;
-  const targetLbs = user?.targetWeightKg ? kgToLbs(user.targetWeightKg) : null;
-  const lbsRemaining = currentLbs && targetLbs ? Math.abs(targetLbs - currentLbs) : null;
+  const currentLbs = latestWeight ? r1(kgToLbs(latestWeight)) : null;
+  const targetLbs  = user?.targetWeightKg ? r1(kgToLbs(user.targetWeightKg)) : null;
+
+  // Water cut buffer: stop diet ~1% of current bodyweight above target,
+  // leaving that room for the water cut to handle.
+  const waterCutEnabled = !!user?.enableWaterCut;
+  const bufferLbs = currentLbs ? r1(currentLbs * 0.01) : 0;
+
+  // Effective diet target when water cut is on = actual target + 1% buffer
+  const dietTargetLbs = targetLbs !== null && waterCutEnabled
+    ? r1(targetLbs + bufferLbs)
+    : targetLbs;
+
+  const lbsRemaining = currentLbs !== null && dietTargetLbs !== null
+    ? r1(Math.abs(dietTargetLbs - currentLbs))
+    : null;
+
+  const isGain = user?.goalType?.includes("gain");
 
   return (
     <div className="p-4 md:p-6 max-w-xl space-y-5">
@@ -76,7 +95,7 @@ export default function DietPlanPage() {
       </div>
 
       {/* Goal progress */}
-      {currentLbs && targetLbs && (
+      {currentLbs !== null && targetLbs !== null && (
         <div className="bg-card border border-border rounded-xl p-4">
           <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">Progress</h2>
           <div className="grid grid-cols-3 gap-3 text-center">
@@ -84,17 +103,37 @@ export default function DietPlanPage() {
               <p className="text-xl font-bold">{currentLbs}</p>
               <p className="text-xs text-muted-foreground">Current (lbs)</p>
             </div>
+
+            {/* Centre: lbs to go */}
             <div className="flex items-center justify-center">
               <div className="text-center">
                 <p className="text-sm font-semibold text-primary">{lbsRemaining} lbs</p>
                 <p className="text-xs text-muted-foreground">to go</p>
+                {waterCutEnabled && (
+                  <p className="text-xs text-blue-400 mt-0.5 flex items-center justify-center gap-0.5">
+                    <Waves className="w-3 h-3" />
+                    +{bufferLbs} for cut
+                  </p>
+                )}
               </div>
             </div>
+
             <div>
               <p className="text-xl font-bold">{targetLbs}</p>
               <p className="text-xs text-muted-foreground">Target (lbs)</p>
             </div>
           </div>
+
+          {/* Water cut buffer explanation */}
+          {waterCutEnabled && (
+            <div className="mt-3 pt-3 border-t border-border">
+              <p className="text-xs text-blue-400 flex items-start gap-1.5">
+                <Waves className="w-3 h-3 mt-0.5 flex-shrink-0" />
+                Diet to <span className="font-semibold text-foreground">{dietTargetLbs} lbs</span> — the final {bufferLbs} lbs ({`1% bodyweight`}) is reserved for your water cut.
+              </p>
+            </div>
+          )}
+
           {daysToTarget !== null && (
             <div className="mt-3 pt-3 border-t border-border flex justify-between text-sm">
               <span className="text-muted-foreground">Days remaining</span>
@@ -115,16 +154,16 @@ export default function DietPlanPage() {
             <span className="font-bold text-primary">{targets.calories.toLocaleString()} kcal</span>
           </div>
           <div className="flex justify-between items-center">
-            <span className="text-sm macro-protein">Protein</span>
-            <span className="font-semibold macro-protein">{targets.proteinG}g</span>
+            <span className="text-sm text-green-400">Protein</span>
+            <span className="font-semibold text-green-400">{targets.proteinG}g</span>
           </div>
           <div className="flex justify-between items-center">
-            <span className="text-sm macro-carbs">Carbohydrates</span>
-            <span className="font-semibold macro-carbs">{targets.carbsG}g</span>
+            <span className="text-sm text-yellow-400">Carbohydrates</span>
+            <span className="font-semibold text-yellow-400">{targets.carbsG}g</span>
           </div>
           <div className="flex justify-between items-center">
-            <span className="text-sm macro-fat">Fat</span>
-            <span className="font-semibold macro-fat">{targets.fatG}g</span>
+            <span className="text-sm text-orange-400">Fat</span>
+            <span className="font-semibold text-orange-400">{targets.fatG}g</span>
           </div>
           <div className="pt-2 border-t border-border space-y-1 text-xs text-muted-foreground">
             <div className="flex justify-between">
@@ -161,7 +200,7 @@ export default function DietPlanPage() {
               >
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-sm font-semibold">
-                    {day.daysOut === 1 ? "Meet day -1" : `${day.daysOut} days out`}
+                    {day.daysOut === 1 ? "Meet day −1" : `${day.daysOut} days out`}
                   </span>
                   <div className="flex gap-3 text-xs">
                     <span className="text-primary">{day.targetCalories} kcal</span>
@@ -177,7 +216,7 @@ export default function DietPlanPage() {
         </div>
       )}
 
-      {/* Powerlifting info */}
+      {/* Powerlifting meet info */}
       {user?.meetDate && (
         <div className="bg-card border border-border rounded-xl p-4">
           <div className="flex items-center gap-2 mb-2">
@@ -191,9 +230,7 @@ export default function DietPlanPage() {
             </span>
           </p>
           {daysToTarget !== null && (
-            <p className="text-sm text-muted-foreground">
-              {daysToTarget} days away
-            </p>
+            <p className="text-sm text-muted-foreground mt-0.5">{daysToTarget} days away</p>
           )}
         </div>
       )}
