@@ -61,12 +61,12 @@ export default function SettingsPage() {
       const heightCm = (parseInt(heightFt) * 12 + parseInt(heightIn)) * 2.54;
       const payload: Record<string, any> = {
         sex, dateOfBirth: dob, heightCm, activityLevel, goalType,
-        targetWeightKg: targetWeightLbs ? lbsToKg(parseFloat(targetWeightLbs)) : null,
-        targetDate: targetDate || null,
-        burnMode,
-        trainingDays,
-        meetDate: meetDate || null,
-        enableWaterCut,
+        burnMode, trainingDays, enableWaterCut,
+        // targetDate and targetWeightKg must be omitted (not null) when empty
+        // — the server schema does not accept null for these fields
+        ...(targetWeightLbs ? { targetWeightKg: lbsToKg(parseFloat(targetWeightLbs)) } : {}),
+        ...(targetDate ? { targetDate } : {}),
+        meetDate: meetDate || null,  // meetDate is nullable on the server
       };
       const res = await api.updateProfile(payload);
       const updated = await res.json();
