@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useLocation } from "wouter";
+import { useHashLocation } from "wouter/use-hash-location";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -34,7 +35,7 @@ type FormData = z.infer<typeof schema>;
 
 export default function OnboardingPage() {
   const [step, setStep] = useState(0);
-  const [, setLocation] = useLocation();
+  const [, setLocation] = useHashLocation();
   const { updateUser } = useAuth();
   const { toast } = useToast();
 
@@ -82,8 +83,22 @@ export default function OnboardingPage() {
 
       const resp = await api.updateProfile(payload);
       const updated = await resp.json();
-      updateUser(updated);
-      setLocation("/");
+
+      // Also log the starting weight so it appears on the dashboard chart
+      try {
+        await api.logWeight({
+          date: new Date().toISOString().slice(0, 10),
+          weightKg,
+        });
+      } catch {
+        // Non-fatal — ignore if weight log fails
+      }
+
+      // Update auth context with the fully-saved profile from the server response
+      updateUser({ ...updated, onboardingComplete: true });
+
+      // Small delay to let React flush the state update before routing
+      setTimeout(() => setLocation("/"), 50);
     } catch (err: any) {
       toast({ title: "Setup failed", description: err.message, variant: "destructive" });
     }
