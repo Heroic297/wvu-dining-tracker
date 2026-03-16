@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+  <!-- Dark background pill -->
+  <rect width="32" height="32" rx="8" fill="#0f1a14"/>
+  <!-- M letterform — two peaks, clean geometric -->
+  <path d="M6 23V10l5 8 5-8v13" stroke="#34d399" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M16 23V10l5 8 5-8v13" stroke="#34d399" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
