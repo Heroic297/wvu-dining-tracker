@@ -4,47 +4,78 @@ import { fmt1, todayStr, formatDate, kgToLbs } from "@/lib/api";
 import { apiRequest } from "@/lib/queryClient";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
-import { PlusCircle, Flame, TrendingUp } from "lucide-react";
+import { PlusCircle, Flame, TrendingUp, UtensilsCrossed } from "lucide-react";
 import { AreaChart, Area, XAxis, Tooltip, ResponsiveContainer } from "recharts";
 
-function MacroRing({ value, max, color, label }: { value: number; max: number; color: string; label: string }) {
+// ── Macro token colours (CSS vars resolved at runtime) ─────────────────────
+const TOKEN = {
+  protein:  "var(--color-protein)",
+  carbs:    "var(--color-carbs)",
+  fat:      "var(--color-fat)",
+  calories: "var(--color-calories)",
+};
+
+// Hex fallbacks for recharts (can't use CSS vars in SVG attrs via recharts)
+const HEX = {
+  protein:  "#34d399",
+  carbs:    "#f59e0b",
+  fat:      "#fb923c",
+  calories: "#34d399",
+};
+
+// ── Ring component ──────────────────────────────────────────────────────────
+function MacroRing({
+  value, max, color, label,
+}: {
+  value: number; max: number; color: string; label: string;
+}) {
   const pct = Math.min(1, max > 0 ? value / max : 0);
-  const r = 28, cx = 32, cy = 32, stroke = 5;
+  const r = 26, cx = 32, cy = 32, sw = 5;
   const circ = 2 * Math.PI * r;
   const dash = circ * pct;
 
   return (
-    <div className="flex flex-col items-center gap-1">
+    <div className="flex flex-col items-center gap-1.5">
       <svg width={64} height={64} viewBox="0 0 64 64">
-        <circle cx={cx} cy={cy} r={r} fill="none" stroke="hsl(220 14% 14%)" strokeWidth={stroke} />
+        {/* Track */}
+        <circle cx={cx} cy={cy} r={r} fill="none" stroke="hsl(var(--muted))" strokeWidth={sw} />
+        {/* Fill */}
         <circle
           cx={cx} cy={cy} r={r}
           fill="none"
           stroke={color}
-          strokeWidth={stroke}
+          strokeWidth={sw}
           strokeLinecap="round"
           strokeDasharray={`${dash} ${circ}`}
           transform="rotate(-90 32 32)"
-          style={{ transition: "stroke-dasharray 0.5s ease" }}
+          style={{ transition: "stroke-dasharray 0.55s cubic-bezier(0.34,1.56,0.64,1)" }}
         />
-        <text x={cx} y={cy} textAnchor="middle" dominantBaseline="central" fontSize="11" fill="hsl(44 15% 92%)" fontWeight="600">
+        <text
+          x={cx} y={cy}
+          textAnchor="middle" dominantBaseline="central"
+          fontSize="11" fontWeight="700"
+          fill="hsl(var(--foreground))"
+        >
           {Math.round(value)}
         </text>
       </svg>
-      <span className="text-xs text-muted-foreground">{label}</span>
+      <span className="text-[11px] text-muted-foreground font-medium">{label}</span>
     </div>
   );
 }
 
-// Inline icon to avoid import issues
-function UtensilsCrossed({ className }: { className?: string }) {
+// ── Stat card ───────────────────────────────────────────────────────────────
+function StatCard({ label, value, sub, accent }: { label: string; value: string; sub?: string; accent?: string }) {
   return (
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <path d="m16 2-2.3 2.3a3 3 0 0 0 0 4.2l1.8 1.8a3 3 0 0 0 4.2 0L22 8"/><path d="M15 15 3.3 3.3a4.2 4.2 0 0 0 0 6l7.3 7.3c.7.7 2 .7 2.8 0L15 15Zm0 0 7 7"/><path d="m2.1 21.8 6.4-6.3"/><path d="m19 5-7 7"/>
-    </svg>
+    <div className="bg-card border border-border rounded-xl p-4">
+      <p className="text-xs text-muted-foreground font-medium mb-1">{label}</p>
+      <p className="text-xl font-bold" style={{ color: accent ?? "hsl(var(--foreground))" }}>{value}</p>
+      {sub && <p className="text-xs text-muted-foreground mt-0.5">{sub}</p>}
+    </div>
   );
 }
 
+// ── Page ────────────────────────────────────────────────────────────────────
 export default function DashboardPage() {
   const today = todayStr();
 
@@ -68,35 +99,41 @@ export default function DashboardPage() {
 
   if (isLoading) {
     return (
-      <div className="p-4 md:p-6 space-y-4">
-        <Skeleton className="h-8 w-48" />
+      <div className="p-4 md:p-6 space-y-5 max-w-3xl">
+        <Skeleton className="h-7 w-36 rounded-lg" />
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           {[...Array(4)].map((_, i) => <Skeleton key={i} className="h-24 rounded-xl" />)}
         </div>
-        <Skeleton className="h-48 rounded-xl" />
+        <Skeleton className="h-52 rounded-xl" />
+        <Skeleton className="h-36 rounded-xl" />
       </div>
     );
   }
 
-  const totals = data?.totals ?? { calories: 0, protein: 0, carbs: 0, fat: 0 };
+  const totals  = data?.totals  ?? { calories: 0, protein: 0, carbs: 0, fat: 0 };
   const targets = data?.targets;
-  const meals = data?.meals ?? [];
+  const meals   = data?.meals   ?? [];
   const recentActivity = data?.activities ?? [];
 
-  // Weight chart data
   const weightChartData = (weightData ?? [])
     .slice(0, 14)
     .reverse()
     .map((w: any) => ({
-      date: w.date.slice(5), // MM-DD
-      lbs: kgToLbs(w.weightKg),
+      date: w.date.slice(5),
+      lbs:  +kgToLbs(w.weightKg).toFixed(1),
     }));
 
-  const calPct = targets ? Math.min(100, (totals.calories / targets.calories) * 100) : 0;
-  const calColor = calPct > 105 ? "#ef4444" : calPct > 90 ? "#22c55e" : "#facc15";
+  const calPct   = targets ? Math.min(100, (totals.calories / targets.calories) * 100) : 0;
+  const calRemain = targets ? Math.round(targets.calories - totals.calories) : null;
+  // Colour the calorie ring: green when on track, amber nearing cap, red over
+  const calStroke =
+    calPct > 105 ? "#ef4444"
+    : calPct > 92  ? HEX.protein
+    : HEX.calories;
 
   return (
-    <div className="p-4 md:p-6 space-y-5 max-w-3xl">
+    <div className="p-4 md:p-6 space-y-5 max-w-3xl fade-up">
+
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -112,7 +149,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Calorie ring + macros */}
-      <div className="bg-card border border-border rounded-xl p-5">
+      <div className="bg-card border border-border rounded-2xl p-5">
         <div className="flex items-center gap-6">
           {/* Big calorie ring */}
           <div className="relative flex-shrink-0">
@@ -120,66 +157,88 @@ export default function DashboardPage() {
               const r = 44, circ = 2 * Math.PI * r;
               const pct = targets ? Math.min(1, totals.calories / targets.calories) : 0;
               return (
-                <svg width={104} height={104} viewBox="0 0 104 104">
-                  <circle cx={52} cy={52} r={r} fill="none" stroke="hsl(220 14% 14%)" strokeWidth={8} />
+                <svg width={108} height={108} viewBox="0 0 108 108">
+                  {/* Outer glow track */}
+                  <circle cx={54} cy={54} r={r} fill="none" stroke="hsl(var(--muted))" strokeWidth={9} />
                   <circle
-                    cx={52} cy={52} r={r}
-                    fill="none" stroke={calColor} strokeWidth={8}
+                    cx={54} cy={54} r={r}
+                    fill="none"
+                    stroke={calStroke}
+                    strokeWidth={9}
                     strokeLinecap="round"
                     strokeDasharray={`${circ * pct} ${circ}`}
-                    transform="rotate(-90 52 52)"
-                    style={{ transition: "stroke-dasharray 0.6s ease" }}
+                    transform="rotate(-90 54 54)"
+                    style={{ transition: "stroke-dasharray 0.65s cubic-bezier(0.34,1.56,0.64,1), stroke 0.3s ease" }}
                   />
-                  <text x={52} y={46} textAnchor="middle" fontSize="18" fontWeight="700" fill="hsl(44 15% 92%)">
+                  <text x={54} y={49} textAnchor="middle" fontSize="20" fontWeight="800" fill="hsl(var(--foreground))" fontFamily="var(--font-display)">
                     {Math.round(totals.calories)}
                   </text>
-                  <text x={52} y={63} textAnchor="middle" fontSize="11" fill="hsl(220 8% 50%)">
-                    {targets ? `/ ${targets.calories}` : "kcal"}
+                  <text x={54} y={66} textAnchor="middle" fontSize="11" fill="hsl(var(--muted-foreground))">
+                    {targets ? `/ ${targets.calories} kcal` : "kcal"}
                   </text>
                 </svg>
               );
             })()}
           </div>
 
-          <div className="flex-1 space-y-2">
-            <p className="text-sm font-medium">Calories consumed</p>
-            {targets && (
-              <p className="text-xs text-muted-foreground">
-                {Math.round(targets.calories - totals.calories)} kcal remaining
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold mb-0.5">Calories</p>
+            {calRemain !== null && (
+              <p className="text-xs text-muted-foreground mb-3">
+                {calRemain >= 0
+                  ? <><span className="text-foreground font-medium">{calRemain}</span> kcal remaining</>
+                  : <><span className="text-destructive font-medium">{Math.abs(calRemain)}</span> kcal over</>}
               </p>
             )}
-            <div className="flex gap-4 mt-3">
-              <MacroRing value={totals.protein} max={targets?.proteinG ?? 160} color="#4ade80" label="Protein" />
-              <MacroRing value={totals.carbs} max={targets?.carbsG ?? 250} color="#facc15" label="Carbs" />
-              <MacroRing value={totals.fat} max={targets?.fatG ?? 70} color="#fb923c" label="Fat" />
+            <div className="flex gap-5">
+              <MacroRing value={totals.protein} max={targets?.proteinG ?? 160} color={TOKEN.protein} label="Protein" />
+              <MacroRing value={totals.carbs}   max={targets?.carbsG   ?? 250} color={TOKEN.carbs}   label="Carbs" />
+              <MacroRing value={totals.fat}     max={targets?.fatG     ?? 70}  color={TOKEN.fat}     label="Fat" />
             </div>
           </div>
         </div>
       </div>
 
-      {/* Meals list */}
+      {/* Stat row */}
+      {targets && (
+        <div className="grid grid-cols-3 gap-3">
+          <StatCard label="Protein goal" value={`${targets.proteinG}g`} sub={`${fmt1(totals.protein)}g logged`} accent={HEX.protein} />
+          <StatCard label="Carb goal"    value={`${targets.carbsG}g`}   sub={`${fmt1(totals.carbs)}g logged`}   accent={HEX.carbs} />
+          <StatCard label="Fat goal"     value={`${targets.fatG}g`}     sub={`${fmt1(totals.fat)}g logged`}     accent={HEX.fat} />
+        </div>
+      )}
+
+      {/* Today's meals */}
       <div>
-        <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">Today's meals</h2>
+        <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-widest mb-3">Today's meals</h2>
         {meals.length === 0 ? (
-          <div className="bg-card border border-border rounded-xl p-6 text-center">
+          <div className="bg-card border border-border rounded-2xl p-8 text-center">
             <UtensilsCrossed className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
-            <p className="text-sm text-muted-foreground">No meals logged yet</p>
+            <p className="text-sm text-muted-foreground mb-3">No meals logged yet</p>
             <Link href="/log">
-              <Button variant="outline" size="sm" className="mt-3">Log your first meal</Button>
+              <Button variant="outline" size="sm">Log your first meal</Button>
             </Link>
           </div>
         ) : (
           <div className="space-y-2">
             {meals.map((meal: any) => (
-              <div key={meal.id} className="bg-card border border-border rounded-xl p-4 flex items-center justify-between" data-testid={`meal-card-${meal.id}`}>
+              <div
+                key={meal.id}
+                className="bg-card border border-border rounded-xl px-4 py-3 flex items-center justify-between hover:border-primary/30 transition-colors"
+                data-testid={`meal-card-${meal.id}`}
+              >
                 <div>
-                  <p className="font-medium capitalize text-sm">{meal.mealType}</p>
+                  <p className="font-semibold text-sm capitalize">{meal.mealType}</p>
                   <p className="text-xs text-muted-foreground">{meal.items?.length ?? 0} items</p>
                 </div>
                 <div className="text-right">
-                  <p className="font-semibold text-sm">{Math.round(meal.totalCalories ?? 0)} kcal</p>
+                  <p className="font-bold text-sm" style={{ color: HEX.calories }}>{Math.round(meal.totalCalories ?? 0)} kcal</p>
                   <p className="text-xs text-muted-foreground">
-                    P:{fmt1(meal.totalProtein)}g · C:{fmt1(meal.totalCarbs)}g · F:{fmt1(meal.totalFat)}g
+                    <span className="macro-protein">P:{fmt1(meal.totalProtein)}g</span>
+                    {" · "}
+                    <span className="macro-carbs">C:{fmt1(meal.totalCarbs)}g</span>
+                    {" · "}
+                    <span className="macro-fat">F:{fmt1(meal.totalFat)}g</span>
                   </p>
                 </div>
               </div>
@@ -190,25 +249,38 @@ export default function DashboardPage() {
 
       {/* Weight chart */}
       {weightChartData.length > 1 && (
-        <div className="bg-card border border-border rounded-xl p-4">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-sm font-semibold">Weight (14 days)</h2>
+        <div className="bg-card border border-border rounded-2xl p-4">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-sm font-semibold">Weight trend</h2>
             <TrendingUp className="w-4 h-4 text-muted-foreground" />
           </div>
-          <ResponsiveContainer width="100%" height={120}>
-            <AreaChart data={weightChartData}>
+          <ResponsiveContainer width="100%" height={110}>
+            <AreaChart data={weightChartData} margin={{ left: -8 }}>
               <defs>
                 <linearGradient id="wGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#eab308" stopOpacity={0.3} />
-                  <stop offset="100%" stopColor="#eab308" stopOpacity={0} />
+                  <stop offset="0%"   stopColor={HEX.calories} stopOpacity={0.25} />
+                  <stop offset="100%" stopColor={HEX.calories} stopOpacity={0} />
                 </linearGradient>
               </defs>
-              <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#6b7280" }} axisLine={false} tickLine={false} />
+              <XAxis
+                dataKey="date"
+                tick={{ fontSize: 10, fill: "hsl(220 8% 50%)" }}
+                axisLine={false} tickLine={false}
+              />
               <Tooltip
-                contentStyle={{ background: "hsl(220 18% 9%)", border: "1px solid hsl(220 12% 16%)", borderRadius: 8, fontSize: 12 }}
+                contentStyle={{
+                  background: "hsl(var(--card))",
+                  border: "1px solid hsl(var(--border))",
+                  borderRadius: 10, fontSize: 12,
+                  color: "hsl(var(--foreground))",
+                }}
                 formatter={(v: number) => [`${v} lbs`, "Weight"]}
               />
-              <Area type="monotone" dataKey="lbs" stroke="#eab308" fill="url(#wGrad)" strokeWidth={2} dot={false} />
+              <Area
+                type="monotone" dataKey="lbs"
+                stroke={HEX.calories} fill="url(#wGrad)"
+                strokeWidth={2} dot={false}
+              />
             </AreaChart>
           </ResponsiveContainer>
         </div>
@@ -216,22 +288,28 @@ export default function DashboardPage() {
 
       {/* Wearable activity */}
       {recentActivity.length > 0 && (
-        <div className="bg-card border border-border rounded-xl p-4">
+        <div className="bg-card border border-border rounded-2xl p-4">
           <div className="flex items-center gap-2 mb-3">
-            <Flame className="w-4 h-4 text-orange-400" />
+            <Flame className="w-4 h-4" style={{ color: HEX.fat }} />
             <h2 className="text-sm font-semibold">Activity</h2>
           </div>
           <div className="grid grid-cols-3 gap-2">
             {recentActivity.slice(0, 3).map((a: any) => (
-              <div key={a.id} className="bg-secondary rounded-lg p-2 text-center">
+              <div key={a.id} className="bg-secondary rounded-xl p-3 text-center">
                 <p className="text-xs text-muted-foreground">{a.date.slice(5)}</p>
-                <p className="font-semibold text-sm">{a.caloriesBurned?.toLocaleString()}</p>
+                <p className="font-bold text-sm mt-0.5">{a.caloriesBurned?.toLocaleString()}</p>
                 <p className="text-xs text-muted-foreground">kcal</p>
               </div>
             ))}
           </div>
         </div>
       )}
+
+      <p className="text-center text-xs text-muted-foreground pb-2">
+        <a href="https://www.perplexity.ai/computer" target="_blank" rel="noopener noreferrer" className="hover:text-primary transition-colors">
+          Created with Perplexity Computer
+        </a>
+      </p>
     </div>
   );
 }
