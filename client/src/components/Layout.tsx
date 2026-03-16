@@ -1,47 +1,91 @@
-import { ReactNode, useState } from "react";
+import { ReactNode, useState, useEffect } from "react";
 import { Link } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
 import { useAuth } from "@/contexts/AuthContext";
 import { api } from "@/lib/api";
 import {
-  LayoutDashboard, UtensilsCrossed, Calendar, Target, Settings, LogOut, Menu, X, Dumbbell
+  LayoutDashboard, UtensilsCrossed, Clock, Target, Settings,
+  LogOut, Menu, X, Sun, Moon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const navItems = [
-  { href: "/", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/log", label: "Log Meal", icon: UtensilsCrossed },
-  { href: "/history", label: "History", icon: Calendar },
-  { href: "/plan", label: "Diet Plan", icon: Target },
-  { href: "/settings", label: "Settings", icon: Settings },
+  { href: "/",        label: "Dashboard", icon: LayoutDashboard },
+  { href: "/log",     label: "Log Meal",  icon: UtensilsCrossed  },
+  { href: "/history", label: "History",   icon: Clock            },
+  { href: "/plan",    label: "Diet Plan", icon: Target           },
+  { href: "/settings",label: "Settings",  icon: Settings         },
 ];
 
+/** Inline "M" mark — two overlapping peaks, emerald on dark pill */
+function LogoMark({ size = 32 }: { size?: number }) {
+  return (
+    <svg
+      width={size} height={size}
+      viewBox="0 0 32 32"
+      fill="none"
+      aria-label="Macro logo"
+    >
+      <rect width="32" height="32" rx="7" fill="hsl(var(--primary))" opacity="0.15" />
+      <path
+        d="M5 22V11l5.5 7.5L16 11l5.5 7.5L27 11v11"
+        stroke="hsl(var(--primary))"
+        strokeWidth="2.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 export default function Layout({ children }: { children: ReactNode }) {
-  // Must use useHashLocation to match the hash-based router in App.tsx
   const [loc] = useHashLocation();
   const { user, logout } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
+
+  // ── Theme toggle ────────────────────────────────────────────
+  const [dark, setDark] = useState(() => {
+    if (typeof window !== "undefined") {
+      return document.documentElement.classList.contains("dark");
+    }
+    return true;
+  });
+
+  useEffect(() => {
+    const root = document.documentElement;
+    if (dark) {
+      root.classList.add("dark");
+      root.classList.remove("light");
+    } else {
+      root.classList.remove("dark");
+      root.classList.add("light");
+    }
+  }, [dark]);
 
   const handleLogout = async () => {
     try { await api.logout(); } catch {}
     logout();
   };
 
+  // ── Nav content shared by desktop + mobile ───────────────────
   const NavContent = () => (
-    <>
-      {/* Logo */}
-      <div className="flex items-center gap-2.5 px-4 py-5 border-b border-border">
-        <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center flex-shrink-0">
-          <Dumbbell className="w-4 h-4 text-primary-foreground" />
-        </div>
-        <div className="min-w-0">
-          <p className="text-sm font-bold leading-none text-foreground truncate">WVU Dining</p>
-          <p className="text-xs text-muted-foreground truncate">{user?.displayName ?? user?.email}</p>
-        </div>
+    <div className="flex flex-col h-full">
+      {/* Brand */}
+      <div className="flex items-center gap-2.5 px-5 py-5 border-b border-border">
+        <LogoMark size={30} />
+        <span className="text-[15px] font-bold tracking-tight text-foreground" style={{ fontFamily: "var(--font-display)" }}>
+          Macro
+        </span>
       </div>
 
-      {/* Nav */}
-      <nav className="flex-1 p-3 space-y-1">
+      {/* User chip */}
+      <div className="px-4 py-3 border-b border-border">
+        <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-widest mb-0.5">Signed in as</p>
+        <p className="text-xs font-medium text-foreground truncate">{user?.displayName ?? user?.email}</p>
+      </div>
+
+      {/* Nav links */}
+      <nav className="flex-1 px-3 py-3 space-y-0.5">
         {navItems.map(({ href, label, icon: Icon }) => {
           const active = loc === href || (href !== "/" && loc.startsWith(href));
           return (
@@ -51,31 +95,44 @@ export default function Layout({ children }: { children: ReactNode }) {
               onClick={() => setMobileOpen(false)}
               data-testid={`nav-${label.toLowerCase().replace(" ", "-")}`}
               className={cn(
-                "flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors",
+                "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-150",
                 active
-                  ? "bg-primary text-primary-foreground"
+                  ? "bg-primary/10 text-primary"
                   : "text-muted-foreground hover:text-foreground hover:bg-secondary"
               )}
             >
-              <Icon className="w-4 h-4 flex-shrink-0" />
+              <Icon className={cn("w-[17px] h-[17px] flex-shrink-0", active && "text-primary")} />
               {label}
             </Link>
           );
         })}
       </nav>
 
-      {/* Logout */}
-      <div className="p-3 border-t border-border">
+      {/* Bottom controls */}
+      <div className="px-3 py-3 border-t border-border space-y-0.5">
+        {/* Theme toggle */}
+        <button
+          onClick={() => setDark(!dark)}
+          className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-secondary transition-all w-full"
+          data-testid="button-theme-toggle"
+        >
+          {dark
+            ? <Sun className="w-[17px] h-[17px]" />
+            : <Moon className="w-[17px] h-[17px]" />}
+          {dark ? "Light mode" : "Dark mode"}
+        </button>
+
+        {/* Sign out */}
         <button
           onClick={handleLogout}
           data-testid="button-logout"
-          className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors w-full"
+          className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-muted-foreground hover:text-destructive hover:bg-destructive/5 transition-all w-full"
         >
-          <LogOut className="w-4 h-4" />
+          <LogOut className="w-[17px] h-[17px]" />
           Sign out
         </button>
       </div>
-    </>
+    </div>
   );
 
   return (
@@ -85,14 +142,23 @@ export default function Layout({ children }: { children: ReactNode }) {
         <NavContent />
       </aside>
 
-      {/* Mobile overlay */}
+      {/* Mobile drawer overlay */}
       {mobileOpen && (
         <div className="fixed inset-0 z-50 md:hidden">
-          <div className="absolute inset-0 bg-black/60" onClick={() => setMobileOpen(false)} />
-          <aside className="absolute left-0 top-0 bottom-0 w-56 bg-card border-r border-border flex flex-col">
-            <div className="flex items-center justify-between p-4 border-b border-border">
-              <span className="font-semibold text-sm">Menu</span>
-              <button onClick={() => setMobileOpen(false)}>
+          <div
+            className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+            onClick={() => setMobileOpen(false)}
+          />
+          <aside className="absolute left-0 top-0 bottom-0 w-60 bg-card border-r border-border shadow-2xl">
+            <div className="flex items-center justify-between px-4 py-4 border-b border-border">
+              <div className="flex items-center gap-2">
+                <LogoMark size={26} />
+                <span className="text-sm font-bold" style={{ fontFamily: "var(--font-display)" }}>Macro</span>
+              </div>
+              <button
+                onClick={() => setMobileOpen(false)}
+                className="text-muted-foreground hover:text-foreground transition-colors"
+              >
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -101,19 +167,29 @@ export default function Layout({ children }: { children: ReactNode }) {
         </div>
       )}
 
-      {/* Main content */}
+      {/* Main area */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Mobile header */}
+        {/* Mobile top bar */}
         <header className="md:hidden flex items-center justify-between px-4 py-3 border-b border-border bg-card">
           <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded bg-primary flex items-center justify-center">
-              <Dumbbell className="w-3.5 h-3.5 text-primary-foreground" />
-            </div>
-            <span className="font-bold text-sm">WVU Dining</span>
+            <LogoMark size={26} />
+            <span className="font-bold text-sm" style={{ fontFamily: "var(--font-display)" }}>Macro</span>
           </div>
-          <button onClick={() => setMobileOpen(true)} data-testid="button-mobile-menu">
-            <Menu className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setDark(!dark)}
+              className="text-muted-foreground hover:text-foreground transition-colors p-1"
+            >
+              {dark ? <Sun className="w-4.5 h-4.5" /> : <Moon className="w-4.5 h-4.5" />}
+            </button>
+            <button
+              onClick={() => setMobileOpen(true)}
+              data-testid="button-mobile-menu"
+              className="text-muted-foreground hover:text-foreground transition-colors p-1"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+          </div>
         </header>
 
         <main className="flex-1 overflow-y-auto">
