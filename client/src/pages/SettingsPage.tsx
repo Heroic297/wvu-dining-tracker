@@ -323,7 +323,7 @@ export default function SettingsPage() {
                     >
                       Disconnect
                     </Button>
-                  ) : key === "garmin" ? (
+                  ) : (
                     <Button
                       size="sm"
                       disabled
@@ -331,14 +331,6 @@ export default function SettingsPage() {
                       className="opacity-60 cursor-not-allowed"
                     >
                       Connect <span className="ml-1 text-xs font-normal">(coming soon)</span>
-                    </Button>
-                  ) : (
-                    <Button
-                      size="sm"
-                      onClick={() => connectWearable(key as any)}
-                      data-testid={`button-connect-${key}`}
-                    >
-                      Connect
                     </Button>
                   )}
                 </div>
