@@ -275,6 +275,86 @@ export async function registerRoutes(
     }
   );
 
+  // ── Barcode / UPC Lookup ──────────────────────────────────────────────────
+
+  app.get(
+    "/api/nutrition/barcode",
+    requireAuth as any,
+    async (req: AuthRequest, res) => {
+      try {
+        const upc = (req.query.upc as string)?.trim();
+        if (!upc) {
+          return res.status(400).json({ error: "Query parameter 'upc' required" });
+        }
+
+        const USDA_API_KEY = process.env.USDA_API_KEY || "DEMO_KEY";
+        const axios = (await import("axios")).default;
+
+        // 1. Try USDA branded foods database via gtinUpc (most accurate for packaged goods)
+        try {
+          const resp = await axios.get("https://api.nal.usda.gov/fdc/v1/foods/search", {
+            params: {
+              query: upc,
+              dataType: "Branded",
+              pageSize: 1,
+              api_key: USDA_API_KEY,
+            },
+            timeout: 8000,
+          });
+
+          const foods = resp.data?.foods ?? [];
+          // Filter to exact UPC match when possible
+          const match = foods.find((f: any) =>
+            f.gtinUpc === upc || f.gtinUpc === upc.replace(/^0+/, "")
+          ) ?? foods[0];
+
+          if (match) {
+            const nutrients = match.foodNutrients ?? [];
+            const get = (...ids: string[]) => {
+              for (const id of ids) {
+                const n = nutrients.find((n: any) => n.nutrientNumber === id || String(n.nutrientId) === id);
+                if (n?.value != null) return Math.round(n.value * 10) / 10;
+              }
+              return 0;
+            };
+            const calories = get("208") || get("1008");
+            if (calories) {
+              return res.json({
+                foodName: match.description ?? "Scanned product",
+                calories,
+                proteinG: get("203", "1003"),
+                carbsG:   get("205", "1005"),
+                fatG:     get("204", "1004"),
+                servingSize: match.servingSize
+                  ? `${match.servingSize}${match.servingSizeUnit ?? "g"}`
+                  : "1 serving (per label)",
+                source: "usda",
+                confidence: "high",
+                breakdown: [],
+              });
+            }
+          }
+        } catch (usdaErr: any) {
+          console.warn("[barcode] USDA lookup failed:", usdaErr.message);
+        }
+
+        // 2. Fallback: ask AI to identify the product by barcode/UPC
+        //    (works for well-known products the model has seen)
+        const result = await lookupNutrition(`product with UPC barcode ${upc}`);
+        if (result) {
+          return res.json(result);
+        }
+
+        return res.status(404).json({
+          error: "Product not found in database. Try entering the food name manually.",
+        });
+      } catch (err) {
+        console.error("[nutrition/barcode]", err);
+        res.status(500).json({ error: "Barcode lookup failed" });
+      }
+    }
+  );
+
   // ── Meal Logging ──────────────────────────────────────────────────────────
 
   app.get("/api/meals", requireAuth as any, async (req: AuthRequest, res) => {
