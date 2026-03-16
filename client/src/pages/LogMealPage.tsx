@@ -293,12 +293,42 @@ export default function LogMealPage() {
           </div>
 
           {searchResult && (
-            <div className={`p-3 rounded-lg text-sm ${searchResult.error ? "bg-destructive/10 text-destructive" : "bg-secondary"}`}>
-              {searchResult.error ? searchResult.error : (
-                <p className="text-xs text-muted-foreground">
-                  Source: <span className="capitalize">{searchResult.source?.replace("_", " ")}</span>
-                  {searchResult.confidence && ` · Confidence: ${searchResult.confidence}`}
-                </p>
+            <div className={`rounded-lg text-sm ${searchResult.error ? "bg-destructive/10 text-destructive p-3" : "bg-secondary p-3"}`}>
+              {searchResult.error ? (
+                <p>{searchResult.error}</p>
+              ) : (
+                <div className="space-y-2">
+                  {/* Source + confidence badge */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs text-muted-foreground">
+                      {searchResult.source === "ai_estimated" ? "AI estimated" : searchResult.source === "usda" ? "USDA database" : "Manual"}
+                    </span>
+                    {searchResult.confidence && (
+                      <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${
+                        searchResult.confidence === "high" ? "bg-green-500/20 text-green-400" :
+                        searchResult.confidence === "medium" ? "bg-yellow-500/20 text-yellow-400" :
+                        "bg-red-500/20 text-red-400"
+                      }`}>{searchResult.confidence} confidence</span>
+                    )}
+                    {searchResult.servingSize && (
+                      <span className="text-xs text-muted-foreground">· {searchResult.servingSize}</span>
+                    )}
+                  </div>
+                  {/* Per-item breakdown for multi-item AI results */}
+                  {searchResult.breakdown && searchResult.breakdown.length > 1 && (
+                    <div className="space-y-1 pt-1 border-t border-border/50">
+                      <p className="text-xs font-medium text-muted-foreground">Breakdown:</p>
+                      {searchResult.breakdown.map((item: any, i: number) => (
+                        <div key={i} className="flex items-center justify-between text-xs">
+                          <span className="text-foreground truncate flex-1 mr-2">{item.item}</span>
+                          <span className="text-muted-foreground flex-shrink-0">
+                            {item.calories} kcal · P:{item.proteinG}g · C:{item.carbsG}g · F:{item.fatG}g
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           )}
