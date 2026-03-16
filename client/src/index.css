@@ -1,99 +1,115 @@
-@import url('https://api.fontshare.com/v2/css?f[]=satoshi@700,500,400&f[]=cabinet-grotesk@800,700&display=swap');
+@import url('https://api.fontshare.com/v2/css?f[]=satoshi@700,600,500,400&f[]=cabinet-grotesk@800,700&display=swap');
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* ─────────────────────────────────────────────
+   MACRO — Design Tokens
+   Neutral slate base + emerald accent
+   Light & dark fully supported
+───────────────────────────────────────────── */
+
 :root {
-  /* WVU Gold + Dark Athletic Palette */
-  --background: 220 20% 6%;          /* near-black */
-  --foreground: 44 15% 92%;          /* warm off-white */
+  /* ── Light mode (default) ── */
+  --background:    0 0% 97%;          /* near-white */
+  --foreground:    220 15% 12%;       /* rich dark */
 
-  --card: 220 18% 9%;
-  --card-foreground: 44 15% 92%;
+  --card:          0 0% 100%;
+  --card-foreground: 220 15% 12%;
 
-  --popover: 220 18% 9%;
-  --popover-foreground: 44 15% 92%;
+  --popover:       0 0% 100%;
+  --popover-foreground: 220 15% 12%;
 
-  --primary: 43 96% 52%;             /* WVU Gold */
-  --primary-foreground: 220 20% 8%;
+  /* Primary: emerald — used for CTAs and active states */
+  --primary:       158 64% 42%;
+  --primary-foreground: 0 0% 100%;
 
-  --secondary: 220 14% 14%;
-  --secondary-foreground: 44 15% 88%;
+  /* Secondary: light neutral surface */
+  --secondary:     220 10% 92%;
+  --secondary-foreground: 220 15% 20%;
 
-  --muted: 220 14% 14%;
-  --muted-foreground: 220 8% 50%;
+  --muted:         220 10% 93%;
+  --muted-foreground: 220 8% 48%;
 
-  --accent: 43 96% 52%;
-  --accent-foreground: 220 20% 8%;
+  --accent:        158 64% 42%;
+  --accent-foreground: 0 0% 100%;
 
-  --destructive: 0 72% 51%;
+  --destructive:   0 72% 51%;
   --destructive-foreground: 0 0% 98%;
 
-  --border: 220 12% 16%;
-  --input: 220 12% 16%;
-  --ring: 43 96% 52%;
+  --border:        220 12% 88%;
+  --input:         220 12% 88%;
+  --ring:          158 64% 42%;
 
-  --radius: 0.5rem;
+  --radius: 0.625rem;
 
-  /* Custom tokens */
-  --color-gold: hsl(43, 96%, 52%);
-  --color-gold-muted: hsl(43, 70%, 35%);
-  --color-surface: hsl(220, 18%, 9%);
-  --color-surface-2: hsl(220, 16%, 12%);
-  --color-text: hsl(44, 15%, 92%);
-  --color-text-muted: hsl(220, 8%, 55%);
+  /* ── Custom semantic tokens ── */
+  --color-accent:         hsl(158, 64%, 42%);
+  --color-accent-dim:     hsl(158, 50%, 36%);
+  --color-accent-subtle:  hsl(158, 40%, 93%);
+  --color-surface:        hsl(0, 0%, 100%);
+  --color-surface-2:      hsl(220, 10%, 95%);
+  --color-text:           hsl(220, 15%, 12%);
+  --color-text-muted:     hsl(220, 8%, 48%);
+
+  /* ── Macro colors ── */
+  --color-protein: hsl(142, 71%, 45%);   /* green */
+  --color-carbs:   hsl(38, 92%, 52%);    /* amber */
+  --color-fat:     hsl(25, 95%, 57%);    /* orange */
+  --color-calories: hsl(158, 64%, 42%);  /* emerald = primary */
 
   --font-display: 'Cabinet Grotesk', 'Satoshi', system-ui, sans-serif;
-  --font-body: 'Satoshi', system-ui, sans-serif;
+  --font-body:    'Satoshi', system-ui, sans-serif;
 }
 
-/* Dark mode is the default — app is fitness-first, dark looks professional */
-.dark, :root {
-  --background: 220 20% 6%;
-  --foreground: 44 15% 92%;
-  --card: 220 18% 9%;
-  --card-foreground: 44 15% 92%;
-  --popover: 220 18% 9%;
-  --popover-foreground: 44 15% 92%;
-  --primary: 43 96% 52%;
-  --primary-foreground: 220 20% 8%;
-  --secondary: 220 14% 14%;
-  --secondary-foreground: 44 15% 88%;
-  --muted: 220 14% 14%;
-  --muted-foreground: 220 8% 50%;
-  --accent: 43 96% 52%;
-  --accent-foreground: 220 20% 8%;
-  --destructive: 0 72% 51%;
-  --destructive-foreground: 0 0% 98%;
-  --border: 220 12% 16%;
-  --input: 220 12% 16%;
-  --ring: 43 96% 52%;
-}
+/* ── Dark mode ── */
+.dark {
+  --background:    222 20% 7%;
+  --foreground:    210 14% 92%;
 
-/* Light mode override */
-.light {
-  --background: 44 20% 97%;
-  --foreground: 220 20% 10%;
-  --card: 0 0% 100%;
-  --card-foreground: 220 20% 10%;
-  --popover: 0 0% 100%;
-  --popover-foreground: 220 20% 10%;
-  --primary: 43 90% 44%;
+  --card:          222 18% 10%;
+  --card-foreground: 210 14% 92%;
+
+  --popover:       222 18% 10%;
+  --popover-foreground: 210 14% 92%;
+
+  --primary:       158 58% 46%;
   --primary-foreground: 0 0% 100%;
-  --secondary: 220 10% 92%;
-  --secondary-foreground: 220 20% 15%;
-  --muted: 220 10% 92%;
-  --muted-foreground: 220 8% 46%;
-  --accent: 43 90% 44%;
+
+  --secondary:     222 15% 15%;
+  --secondary-foreground: 210 12% 85%;
+
+  --muted:         222 15% 15%;
+  --muted-foreground: 220 8% 50%;
+
+  --accent:        158 58% 46%;
   --accent-foreground: 0 0% 100%;
-  --destructive: 0 72% 51%;
+
+  --destructive:   0 72% 51%;
   --destructive-foreground: 0 0% 98%;
-  --border: 220 12% 84%;
-  --input: 220 12% 84%;
-  --ring: 43 90% 44%;
+
+  --border:        222 14% 18%;
+  --input:         222 14% 18%;
+  --ring:          158 58% 46%;
+
+  --color-accent:         hsl(158, 58%, 46%);
+  --color-accent-dim:     hsl(158, 50%, 38%);
+  --color-accent-subtle:  hsl(158, 30%, 14%);
+  --color-surface:        hsl(222, 18%, 10%);
+  --color-surface-2:      hsl(222, 16%, 13%);
+  --color-text:           hsl(210, 14%, 92%);
+  --color-text-muted:     hsl(220, 8%, 50%);
+
+  --color-protein: hsl(142, 65%, 48%);
+  --color-carbs:   hsl(38, 90%, 54%);
+  --color-fat:     hsl(25, 93%, 60%);
+  --color-calories: hsl(158, 58%, 46%);
 }
 
+/* ─────────────────────────────────────────────
+   Base reset
+───────────────────────────────────────────── */
 * {
   box-sizing: border-box;
   border-color: hsl(var(--border));
@@ -116,44 +132,65 @@ h1, h2, h3, h4, h5, h6 {
   text-wrap: balance;
 }
 
-/* Macro color coding */
-.macro-protein { color: #4ade80; }
-.macro-carbs   { color: #facc15; }
-.macro-fat     { color: #fb923c; }
+/* ─────────────────────────────────────────────
+   Macro color utilities
+───────────────────────────────────────────── */
+.macro-protein { color: var(--color-protein); }
+.macro-carbs   { color: var(--color-carbs); }
+.macro-fat     { color: var(--color-fat); }
 
-/* Stat ring animation */
+/* ─────────────────────────────────────────────
+   Track ring animation
+───────────────────────────────────────────── */
 @keyframes ring-fill {
-  from { stroke-dashoffset: 100; }
-  to   { stroke-dashoffset: var(--ring-offset); }
+  from { stroke-dasharray: 0 1000; }
+  to   { stroke-dasharray: var(--ring-filled) 1000; }
 }
 
-/* Progress bar shimmer for loading */
+.ring-animate {
+  animation: ring-fill 0.7s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+/* ─────────────────────────────────────────────
+   Shimmer skeleton
+───────────────────────────────────────────── */
 @keyframes shimmer {
   0%   { background-position: -200% 0; }
-  100% { background-position: 200% 0; }
+  100% { background-position:  200% 0; }
 }
 
 .shimmer {
   background: linear-gradient(
     90deg,
-    hsl(220 14% 14%) 25%,
-    hsl(220 14% 20%) 50%,
-    hsl(220 14% 14%) 75%
+    hsl(var(--muted)) 25%,
+    hsl(var(--secondary)) 50%,
+    hsl(var(--muted)) 75%
   );
   background-size: 200% 100%;
   animation: shimmer 1.5s infinite;
 }
 
-/* Custom scrollbar */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+/* ─────────────────────────────────────────────
+   Subtle fade-in for page content
+───────────────────────────────────────────── */
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb {
-  background: hsl(220 12% 22%);
+
+.fade-up {
+  animation: fade-up 0.25s ease both;
+}
+
+/* ─────────────────────────────────────────────
+   Scrollbar
+───────────────────────────────────────────── */
+::-webkit-scrollbar        { width: 5px; height: 5px; }
+::-webkit-scrollbar-track  { background: transparent; }
+::-webkit-scrollbar-thumb  {
+  background: hsl(var(--border));
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: hsl(43 96% 52% / 0.4);
+  background: var(--color-accent);
 }
