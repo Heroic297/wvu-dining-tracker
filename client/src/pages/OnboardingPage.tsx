@@ -72,13 +72,15 @@ export default function OnboardingPage() {
         weightKg,
         activityLevel: data.activityLevel,
         goalType: data.goalType,
-        targetWeightKg,
-        targetDate: data.targetDate || null,
         trainingDays: data.trainingDays ?? [],
-        meetDate: data.meetDate || null,
         enableWaterCut: data.enableWaterCut ?? false,
         onboardingComplete: true,
         burnMode: "tdee",
+        // Only include optional fields when they have a value —
+        // the server schema rejects explicit null for targetDate
+        ...(targetWeightKg !== undefined && { targetWeightKg }),
+        ...(data.targetDate   ? { targetDate: data.targetDate }   : {}),
+        meetDate: data.meetDate || null,  // meetDate allows null on the server
       };
 
       const resp = await api.updateProfile(payload);
