@@ -1,4 +1,4 @@
-import { Route, Router } from "wouter";
+import { Route, Router, Switch } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
@@ -26,34 +26,23 @@ function AppRoutes() {
   }
 
   if (!user) {
-    return (
-      <Route path="*" component={LoginPage} />
-    );
+    return <LoginPage />;
   }
 
   if (!user.onboardingComplete) {
-    return (
-      <Route path="*" component={OnboardingPage} />
-    );
+    return <OnboardingPage />;
   }
 
   return (
     <Layout>
-      <Route path="/" component={DashboardPage} />
-      <Route path="/log" component={LogMealPage} />
-      <Route path="/history" component={HistoryPage} />
-      <Route path="/plan" component={DietPlanPage} />
-      <Route path="/settings" component={SettingsPage} />
-      {/* Default fallback */}
-      <Route path="*">
-        {({ params }) => {
-          const known = ["/", "/log", "/history", "/plan", "/settings"];
-          if (!known.includes("/" + (params as any)["*"])) {
-            return <DashboardPage />;
-          }
-          return null;
-        }}
-      </Route>
+      <Switch>
+        <Route path="/" component={DashboardPage} />
+        <Route path="/log" component={LogMealPage} />
+        <Route path="/history" component={HistoryPage} />
+        <Route path="/plan" component={DietPlanPage} />
+        <Route path="/settings" component={SettingsPage} />
+        <Route component={DashboardPage} />
+      </Switch>
     </Layout>
   );
 }
@@ -62,7 +51,7 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
-        {/* Single Router at the top wraps everything — Layout, Links, and useHashLocation all get context */}
+        {/* Single Router at the top — Layout's useHashLocation and all Links share this context */}
         <Router hook={useHashLocation}>
           <AppRoutes />
           <Toaster />
