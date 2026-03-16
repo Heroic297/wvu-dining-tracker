@@ -37,6 +37,8 @@ export const api = {
   // Nutrition
   lookupNutrition: (q: string) =>
     apiRequest("GET", `/api/nutrition/lookup?q=${encodeURIComponent(q)}`),
+  lookupBarcode: (upc: string) =>
+    apiRequest("GET", `/api/nutrition/barcode?upc=${encodeURIComponent(upc)}`),
 
   // Meals
   getMeals: (date?: string) =>
