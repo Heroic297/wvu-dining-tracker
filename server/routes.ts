@@ -268,7 +268,8 @@ export async function registerRoutes(
         if (!foodName?.trim()) {
           return res.status(400).json({ error: "Query parameter 'q' required" });
         }
-        const result = await lookupNutrition(foodName.trim());
+        // Text search always uses AI — barcode route uses USDA/Open Food Facts
+        const result = await lookupNutrition(foodName.trim(), { forceAi: true });
         if (!result) {
           return res.status(404).json({
             error: "Could not find nutrition info — please enter manually",
