@@ -27,31 +27,33 @@ function AppRoutes() {
 
   if (!user) {
     return (
-      <Router hook={useHashLocation}>
-        <Route path="/login" component={LoginPage} />
-        <Route component={LoginPage} />
-      </Router>
+      <Route path="*" component={LoginPage} />
     );
   }
 
   if (!user.onboardingComplete) {
     return (
-      <Router hook={useHashLocation}>
-        <Route component={OnboardingPage} />
-      </Router>
+      <Route path="*" component={OnboardingPage} />
     );
   }
 
   return (
     <Layout>
-      <Router hook={useHashLocation}>
-        <Route path="/" component={DashboardPage} />
-        <Route path="/log" component={LogMealPage} />
-        <Route path="/history" component={HistoryPage} />
-        <Route path="/plan" component={DietPlanPage} />
-        <Route path="/settings" component={SettingsPage} />
-        <Route component={DashboardPage} />
-      </Router>
+      <Route path="/" component={DashboardPage} />
+      <Route path="/log" component={LogMealPage} />
+      <Route path="/history" component={HistoryPage} />
+      <Route path="/plan" component={DietPlanPage} />
+      <Route path="/settings" component={SettingsPage} />
+      {/* Default fallback */}
+      <Route path="*">
+        {({ params }) => {
+          const known = ["/", "/log", "/history", "/plan", "/settings"];
+          if (!known.includes("/" + (params as any)["*"])) {
+            return <DashboardPage />;
+          }
+          return null;
+        }}
+      </Route>
     </Layout>
   );
 }
@@ -60,8 +62,11 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
-        <AppRoutes />
-        <Toaster />
+        {/* Single Router at the top wraps everything — Layout, Links, and useHashLocation all get context */}
+        <Router hook={useHashLocation}>
+          <AppRoutes />
+          <Toaster />
+        </Router>
       </AuthProvider>
     </QueryClientProvider>
   );
