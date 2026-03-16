@@ -1,9 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { fmt1, todayStr, formatDate, kgToLbs } from "@/lib/api";
+import { apiRequest } from "@/lib/queryClient";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
-import { PlusCircle, Flame, Beef, Wheat, Droplets, TrendingUp } from "lucide-react";
+import { PlusCircle, Flame, TrendingUp } from "lucide-react";
 import { AreaChart, Area, XAxis, Tooltip, ResponsiveContainer } from "recharts";
 
 function MacroRing({ value, max, color, label }: { value: number; max: number; color: string; label: string }) {
@@ -35,15 +36,22 @@ function MacroRing({ value, max, color, label }: { value: number; max: number; c
   );
 }
 
+// Inline icon to avoid import issues
+function UtensilsCrossed({ className }: { className?: string }) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="m16 2-2.3 2.3a3 3 0 0 0 0 4.2l1.8 1.8a3 3 0 0 0 4.2 0L22 8"/><path d="M15 15 3.3 3.3a4.2 4.2 0 0 0 0 6l7.3 7.3c.7.7 2 .7 2.8 0L15 15Zm0 0 7 7"/><path d="m2.1 21.8 6.4-6.3"/><path d="m19 5-7 7"/>
+    </svg>
+  );
+}
+
 export default function DashboardPage() {
   const today = todayStr();
+
   const { data, isLoading } = useQuery({
     queryKey: ["/api/dashboard"],
     queryFn: async () => {
-      const res = await fetch("/api/dashboard", {
-        headers: { Authorization: `Bearer ${getToken()}` },
-      });
-      if (!res.ok) throw new Error("Failed");
+      const res = await apiRequest("GET", "/api/dashboard");
       return res.json();
     },
     staleTime: 30000,
@@ -52,9 +60,7 @@ export default function DashboardPage() {
   const { data: weightData } = useQuery<any[]>({
     queryKey: ["/api/weight"],
     queryFn: async () => {
-      const res = await fetch("/api/weight?limit=14", {
-        headers: { Authorization: `Bearer ${(await import("@/lib/api")).getToken()}` },
-      });
+      const res = await apiRequest("GET", "/api/weight?limit=14");
       if (!res.ok) return [];
       return res.json();
     },
@@ -227,14 +233,5 @@ export default function DashboardPage() {
         </div>
       )}
     </div>
-  );
-}
-
-// Add missing import
-function UtensilsCrossed({ className }: { className?: string }) {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <path d="m16 2-2.3 2.3a3 3 0 0 0 0 4.2l1.8 1.8a3 3 0 0 0 4.2 0L22 8"/><path d="M15 15 3.3 3.3a4.2 4.2 0 0 0 0 6l7.3 7.3c.7.7 2 .7 2.8 0L15 15Zm0 0 7 7"/><path d="m2.1 21.8 6.4-6.3"/><path d="m19 5-7 7"/>
-    </svg>
   );
 }
