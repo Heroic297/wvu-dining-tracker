@@ -8,7 +8,7 @@ import { storage } from "./storage.js";
 import { requireAuth, optionalAuth, hashPassword, verifyPassword, signToken, type AuthRequest } from "./auth.js";
 import { scrapeLocationDate, scrapeAllLocations, todayString } from "./scraper.js";
 import { lookupNutrition } from "./nutrition.js";
-import { computeDailyTargets, generateWaterCutPlan } from "./tdee.js";
+import { computeDailyTargets, generateWaterCutPlan, generatePeakWeekPlan } from "./tdee.js";
 import {
   getFitbitAuthUrl,
   exchangeFitbitCode,
@@ -183,7 +183,14 @@ export async function registerRoutes(
         waterCutPlan = generateWaterCutPlan(user, user.meetDate);
       }
 
-      res.json({ targets, waterCutPlan });
+      // Peak week plan if within 14 days of meet
+      let peakWeekPlan = null;
+      if (user.meetDate) {
+        const plan = generatePeakWeekPlan(user, user.meetDate);
+        if (plan.length > 0) peakWeekPlan = plan;
+      }
+
+      res.json({ targets, waterCutPlan, peakWeekPlan });
     } catch (err) {
       console.error("[targets]", err);
       res.status(500).json({ error: "Failed to compute targets" });
