@@ -218,29 +218,35 @@ Be accurate — this data is used for athletic nutrition planning.`;
  * Main nutrition lookup entry point.
  * Cache → (USDA for simple | AI for complex) → AI fallback → null
  */
-export async function lookupNutrition(foodName: string): Promise<NutritionResult | null> {
+export async function lookupNutrition(
+  foodName: string,
+  options: { forceAi?: boolean } = {}
+): Promise<NutritionResult | null> {
   const key = normalizeKey(foodName);
 
-  // 1. Cache hit
-  const cached = await storage.getNutritionCache(key);
-  if (cached) {
-    return {
-      calories: cached.calories ?? 0,
-      proteinG: cached.proteinG ?? 0,
-      carbsG: cached.carbsG ?? 0,
-      fatG: cached.fatG ?? 0,
-      servingSize: cached.servingSize ?? "1 serving",
-      source: (cached.source as NutritionResult["source"]) ?? "ai_estimated",
-      confidence: cached.confidence ?? undefined,
-      foodName: cached.foodName,
-    };
+  // 1. Cache hit (bypass when forceAi so the AI result refreshes the cache entry)
+  if (!options.forceAi) {
+    const cached = await storage.getNutritionCache(key);
+    if (cached) {
+      return {
+        calories: cached.calories ?? 0,
+        proteinG: cached.proteinG ?? 0,
+        carbsG: cached.carbsG ?? 0,
+        fatG: cached.fatG ?? 0,
+        servingSize: cached.servingSize ?? "1 serving",
+        source: (cached.source as NutritionResult["source"]) ?? "ai_estimated",
+        confidence: cached.confidence ?? undefined,
+        foodName: cached.foodName,
+      };
+    }
   }
 
-  // 2. Route: simple foods → USDA first, complex → AI directly
+  // 2. Route:
+  //    forceAi=true  → always go to AI (text search button)
+  //    otherwise     → simple foods → USDA first, complex → AI directly
   let result: NutritionResult | null = null;
 
-  if (isComplexQuery(foodName)) {
-    // Complex query — go straight to AI for accuracy
+  if (options.forceAi || isComplexQuery(foodName)) {
     result = await estimateWithAI(foodName);
   } else {
     // Simple food — try USDA, fall back to AI
