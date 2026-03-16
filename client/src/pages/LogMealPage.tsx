@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { api, guessMealType, todayStr, fmt1 } from "@/lib/api";
+import { apiRequest } from "@/lib/queryClient";
 import { queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,19 +11,24 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { Plus, Trash2, Search, Loader2, ChefHat } from "lucide-react";
-import { getToken } from "@/lib/api";
 
 const MEAL_TYPES = ["breakfast", "lunch", "dinner", "brunch"];
+// Sentinel value used instead of "" since shadcn SelectItem crashes on empty string
+const NO_LOCATION = "__none__";
 
 export default function LogMealPage() {
   const today = todayStr();
   const [date, setDate] = useState(today);
   const [mealType, setMealType] = useState<string>(guessMealType());
-  const [locationSlug, setLocationSlug] = useState("");
+  const [locationSlug, setLocationSlug] = useState(NO_LOCATION);
   const [customSearch, setCustomSearch] = useState("");
   const [searchResult, setSearchResult] = useState<any>(null);
   const [searching, setSearching] = useState(false);
   const [activeMeal, setActiveMeal] = useState<any>(null);
+  const [manualCalories, setManualCalories] = useState("");
+  const [manualProtein, setManualProtein] = useState("");
+  const [manualCarbs, setManualCarbs] = useState("");
+  const [manualFat, setManualFat] = useState("");
   const { toast } = useToast();
 
   // Fetch locations
@@ -34,28 +40,27 @@ export default function LogMealPage() {
   const { data: meals = [], refetch: refetchMeals } = useQuery<any[]>({
     queryKey: ["/api/meals", date],
     queryFn: async () => {
-      const res = await fetch(`/api/meals?date=${date}`, { headers: { Authorization: `Bearer ${getToken()}` } });
-      if (!res.ok) return [];
+      const res = await apiRequest("GET", `/api/meals?date=${date}`);
       return res.json();
     },
   });
 
-  // Fetch menu items
+  // Fetch menu items — only when a real location is selected
+  const activeSlug = locationSlug === NO_LOCATION ? "" : locationSlug;
   const { data: menuData, isLoading: menuLoading } = useQuery<any>({
-    queryKey: ["/api/dining/menu", locationSlug, date, mealType],
+    queryKey: ["/api/dining/menu", activeSlug, date, mealType],
     queryFn: async () => {
-      if (!locationSlug) return null;
-      const res = await fetch(`/api/dining/menu?locationSlug=${locationSlug}&date=${date}&mealType=${mealType}`, {
-        headers: { Authorization: `Bearer ${getToken()}` },
-      });
-      if (!res.ok) return null;
+      const res = await apiRequest(
+        "GET",
+        `/api/dining/menu?locationSlug=${activeSlug}&date=${date}&mealType=${mealType}`
+      );
       return res.json();
     },
-    enabled: !!locationSlug,
+    enabled: !!activeSlug,
     staleTime: 10 * 60 * 1000,
   });
 
-  // Ensure meal exists for this date/type
+  // Ensure a meal record exists for this date/type, then return it
   const ensureMeal = async () => {
     const existing = meals.find((m: any) => m.mealType === mealType && m.date === date);
     if (existing) {
@@ -73,7 +78,7 @@ export default function LogMealPage() {
     return meal;
   };
 
-  // Add dining item to meal
+  // Add a dining-hall menu item to the active meal
   const addItem = async (item: any) => {
     try {
       const meal = await ensureMeal();
@@ -89,12 +94,12 @@ export default function LogMealPage() {
       await refetchMeals();
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] });
       toast({ title: `${item.name} added` });
-    } catch (err: any) {
+    } catch {
       toast({ title: "Failed to add item", variant: "destructive" });
     }
   };
 
-  // Remove item from meal
+  // Remove a logged item
   const removeItem = async (itemId: string) => {
     try {
       await api.deleteMealItem(itemId);
@@ -105,7 +110,7 @@ export default function LogMealPage() {
     }
   };
 
-  // Search nutrition
+  // Nutrition lookup for custom food
   const handleSearch = async () => {
     if (!customSearch.trim()) return;
     setSearching(true);
@@ -121,12 +126,7 @@ export default function LogMealPage() {
     }
   };
 
-  // Add custom food
-  const [manualCalories, setManualCalories] = useState("");
-  const [manualProtein, setManualProtein] = useState("");
-  const [manualCarbs, setManualCarbs] = useState("");
-  const [manualFat, setManualFat] = useState("");
-
+  // Auto-fill macro fields when nutrition lookup returns
   useEffect(() => {
     if (searchResult && !searchResult.error) {
       setManualCalories(String(searchResult.calories ?? ""));
@@ -136,6 +136,7 @@ export default function LogMealPage() {
     }
   }, [searchResult]);
 
+  // Add custom food entry
   const addCustomFood = async () => {
     if (!customSearch.trim()) return;
     try {
@@ -176,9 +177,7 @@ export default function LogMealPage() {
         <div className="space-y-1">
           <Label className="text-xs">Meal</Label>
           <Select value={mealType} onValueChange={setMealType}>
-            <SelectTrigger data-testid="select-meal-type">
-              <SelectValue />
-            </SelectTrigger>
+            <SelectTrigger data-testid="select-meal-type"><SelectValue /></SelectTrigger>
             <SelectContent>
               {MEAL_TYPES.map((m) => (
                 <SelectItem key={m} value={m} className="capitalize">{m}</SelectItem>
@@ -189,11 +188,10 @@ export default function LogMealPage() {
         <div className="space-y-1 col-span-2 md:col-span-1">
           <Label className="text-xs">Dining hall</Label>
           <Select value={locationSlug} onValueChange={setLocationSlug}>
-            <SelectTrigger data-testid="select-location">
-              <SelectValue placeholder="Select hall..." />
-            </SelectTrigger>
+            <SelectTrigger data-testid="select-location"><SelectValue placeholder="Select hall..." /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="">None (custom food only)</SelectItem>
+              {/* Never use value="" — shadcn SelectItem crashes on empty string */}
+              <SelectItem value={NO_LOCATION}>None (custom food only)</SelectItem>
               {locations.map((l: any) => (
                 <SelectItem key={l.slug} value={l.slug}>{l.name}</SelectItem>
               ))}
@@ -227,7 +225,7 @@ export default function LogMealPage() {
       )}
 
       {/* Dining hall menu */}
-      {locationSlug && (
+      {activeSlug && (
         <div>
           <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3 flex items-center gap-2">
             <ChefHat className="w-4 h-4" />
@@ -240,7 +238,7 @@ export default function LogMealPage() {
             </div>
           ) : menuItems.length === 0 ? (
             <div className="bg-card border border-border rounded-xl p-4 text-center text-sm text-muted-foreground">
-              {menuData?.message ?? "No menu available. The dining hall may be closed or the menu hasn't been scraped yet."}
+              {menuData?.message ?? "No menu available for this date and meal type."}
             </div>
           ) : (
             <div className="space-y-2">
@@ -254,23 +252,16 @@ export default function LogMealPage() {
                     <p className="text-sm font-medium truncate">{item.name}</p>
                     <div className="flex items-center gap-2 mt-0.5">
                       <span className="text-xs text-muted-foreground">{item.calories ?? "?"} kcal</span>
-                      {item.proteinG != null && (
-                        <span className="text-xs macro-protein">P:{fmt1(item.proteinG)}g</span>
-                      )}
-                      {item.carbsG != null && (
-                        <span className="text-xs macro-carbs">C:{fmt1(item.carbsG)}g</span>
-                      )}
-                      {item.fatG != null && (
-                        <span className="text-xs macro-fat">F:{fmt1(item.fatG)}g</span>
-                      )}
+                      {item.proteinG != null && <span className="text-xs text-green-400">P:{fmt1(item.proteinG)}g</span>}
+                      {item.carbsG != null && <span className="text-xs text-yellow-400">C:{fmt1(item.carbsG)}g</span>}
+                      {item.fatG != null && <span className="text-xs text-orange-400">F:{fmt1(item.fatG)}g</span>}
                       {item.nutritionSource === "ai_estimated" && (
                         <Badge variant="outline" className="text-xs h-4 px-1">AI</Badge>
                       )}
                     </div>
                   </div>
                   <Button
-                    size="sm"
-                    variant="ghost"
+                    size="sm" variant="ghost"
                     onClick={() => addItem(item)}
                     data-testid={`button-add-item-${item.id}`}
                     className="ml-2 h-8 w-8 p-0"
@@ -290,7 +281,7 @@ export default function LogMealPage() {
         <div className="bg-card border border-border rounded-xl p-4 space-y-3">
           <div className="flex gap-2">
             <Input
-              placeholder="Food name..."
+              placeholder="Food name (e.g. 'chicken breast 6oz')..."
               value={customSearch}
               onChange={(e) => setCustomSearch(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleSearch()}
@@ -304,7 +295,7 @@ export default function LogMealPage() {
           {searchResult && (
             <div className={`p-3 rounded-lg text-sm ${searchResult.error ? "bg-destructive/10 text-destructive" : "bg-secondary"}`}>
               {searchResult.error ? searchResult.error : (
-                <p className="text-xs text-muted-foreground mb-1">
+                <p className="text-xs text-muted-foreground">
                   Source: <span className="capitalize">{searchResult.source?.replace("_", " ")}</span>
                   {searchResult.confidence && ` · Confidence: ${searchResult.confidence}`}
                 </p>
@@ -322,8 +313,7 @@ export default function LogMealPage() {
               <div key={id} className="space-y-1">
                 <Label className="text-xs">{label}</Label>
                 <Input
-                  type="number"
-                  value={value}
+                  type="number" value={value}
                   onChange={(e) => setter(e.target.value)}
                   placeholder="0"
                   data-testid={`input-macro-${id}`}
