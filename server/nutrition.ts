@@ -83,7 +83,7 @@ async function lookupUsda(foodName: string): Promise<NutritionResult | null> {
       params: {
         query: foodName,
         pageSize: 3,
-        dataType: "Survey (FNDDS),SR Legacy",
+        dataType: "Foundation,SR Legacy",
         api_key: USDA_API_KEY,
       },
       timeout: 8000,
