@@ -6,4 +6,7 @@ if (!window.location.hash) {
   window.location.hash = "#/";
 }
 
+// Apply dark mode by default (matches Layout.tsx initial state)
+document.documentElement.classList.add("dark");
+
 createRoot(document.getElementById("root")!).render(<App />);
