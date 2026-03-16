@@ -122,23 +122,20 @@ export default function LogMealPage() {
     setShowScanner(false);
     setSearching(true);
     setSearchResult(null);
-    // Show the scanned code in the search field for reference
-    setCustomSearch(`Scanned: ${upc}`);
+    setCustomSearch(""); // clear while loading
     try {
       const res = await api.lookupBarcode(upc);
       if (!res.ok) {
         const err = await res.json();
         setSearchResult({ error: err.error ?? "Product not found — try entering the name manually" });
-        setCustomSearch("");
         return;
       }
       const data = await res.json();
-      // Use the product name in the search field so the user can see what was found
+      // Populate the name field with the real product name from the database
       setCustomSearch(data.foodName ?? `UPC ${upc}`);
       setSearchResult(data);
     } catch {
       setSearchResult({ error: "Barcode lookup failed — try entering the name manually" });
-      setCustomSearch("");
     } finally {
       setSearching(false);
     }
@@ -156,8 +153,7 @@ export default function LogMealPage() {
 
   const addCustomFood = async () => {
     if (!customSearch.trim()) return;
-    // Strip the "Scanned: XXXX" prefix if present
-    const name = customSearch.replace(/^Scanned:\s*\d+\s*/, "").trim() || customSearch.trim();
+    const name = customSearch.trim();
     try {
       const meal = await ensureMeal();
       await api.addMealItem(meal.id, {
