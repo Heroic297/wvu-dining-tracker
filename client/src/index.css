@@ -1,0 +1,159 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://api.fontshare.com/v2/css?f[]=satoshi@700,500,400&f[]=cabinet-grotesk@800,700&display=swap');
+
+:root {
+  /* WVU Gold + Dark Athletic Palette */
+  --background: 220 20% 6%;          /* near-black */
+  --foreground: 44 15% 92%;          /* warm off-white */
+
+  --card: 220 18% 9%;
+  --card-foreground: 44 15% 92%;
+
+  --popover: 220 18% 9%;
+  --popover-foreground: 44 15% 92%;
+
+  --primary: 43 96% 52%;             /* WVU Gold */
+  --primary-foreground: 220 20% 8%;
+
+  --secondary: 220 14% 14%;
+  --secondary-foreground: 44 15% 88%;
+
+  --muted: 220 14% 14%;
+  --muted-foreground: 220 8% 50%;
+
+  --accent: 43 96% 52%;
+  --accent-foreground: 220 20% 8%;
+
+  --destructive: 0 72% 51%;
+  --destructive-foreground: 0 0% 98%;
+
+  --border: 220 12% 16%;
+  --input: 220 12% 16%;
+  --ring: 43 96% 52%;
+
+  --radius: 0.5rem;
+
+  /* Custom tokens */
+  --color-gold: hsl(43, 96%, 52%);
+  --color-gold-muted: hsl(43, 70%, 35%);
+  --color-surface: hsl(220, 18%, 9%);
+  --color-surface-2: hsl(220, 16%, 12%);
+  --color-text: hsl(44, 15%, 92%);
+  --color-text-muted: hsl(220, 8%, 55%);
+
+  --font-display: 'Cabinet Grotesk', 'Satoshi', system-ui, sans-serif;
+  --font-body: 'Satoshi', system-ui, sans-serif;
+}
+
+/* Dark mode is the default — app is fitness-first, dark looks professional */
+.dark, :root {
+  --background: 220 20% 6%;
+  --foreground: 44 15% 92%;
+  --card: 220 18% 9%;
+  --card-foreground: 44 15% 92%;
+  --popover: 220 18% 9%;
+  --popover-foreground: 44 15% 92%;
+  --primary: 43 96% 52%;
+  --primary-foreground: 220 20% 8%;
+  --secondary: 220 14% 14%;
+  --secondary-foreground: 44 15% 88%;
+  --muted: 220 14% 14%;
+  --muted-foreground: 220 8% 50%;
+  --accent: 43 96% 52%;
+  --accent-foreground: 220 20% 8%;
+  --destructive: 0 72% 51%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 220 12% 16%;
+  --input: 220 12% 16%;
+  --ring: 43 96% 52%;
+}
+
+/* Light mode override */
+.light {
+  --background: 44 20% 97%;
+  --foreground: 220 20% 10%;
+  --card: 0 0% 100%;
+  --card-foreground: 220 20% 10%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 220 20% 10%;
+  --primary: 43 90% 44%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 220 10% 92%;
+  --secondary-foreground: 220 20% 15%;
+  --muted: 220 10% 92%;
+  --muted-foreground: 220 8% 46%;
+  --accent: 43 90% 44%;
+  --accent-foreground: 0 0% 100%;
+  --destructive: 0 72% 51%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 220 12% 84%;
+  --input: 220 12% 84%;
+  --ring: 43 90% 44%;
+}
+
+* {
+  box-sizing: border-box;
+  border-color: hsl(var(--border));
+}
+
+body {
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-family: var(--font-body);
+  font-size: 1rem;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  line-height: 1.2;
+  text-wrap: balance;
+}
+
+/* Macro color coding */
+.macro-protein { color: #4ade80; }
+.macro-carbs   { color: #facc15; }
+.macro-fat     { color: #fb923c; }
+
+/* Stat ring animation */
+@keyframes ring-fill {
+  from { stroke-dashoffset: 100; }
+  to   { stroke-dashoffset: var(--ring-offset); }
+}
+
+/* Progress bar shimmer for loading */
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.shimmer {
+  background: linear-gradient(
+    90deg,
+    hsl(220 14% 14%) 25%,
+    hsl(220 14% 20%) 50%,
+    hsl(220 14% 14%) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: hsl(220 12% 22%);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(43 96% 52% / 0.4);
+}
