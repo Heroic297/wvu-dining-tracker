@@ -46,6 +46,7 @@ export interface IStorage {
 
   // Wearables
   getWearableToken(userId: string, source: string): Promise<WearableToken | undefined>;
+  getAllWearableTokens(): Promise<WearableToken[]>;
   upsertWearableToken(token: InsertWearableToken): Promise<WearableToken>;
   deleteWearableToken(userId: string, source: string): Promise<void>;
 
@@ -154,6 +155,10 @@ export class PgStorage implements IStorage {
       })
       .returning();
     return row;
+  }
+
+  async getAllWearableTokens() {
+    return db.select().from(wearableTokens);
   }
 
   async deleteWearableToken(userId: string, source: string) {
