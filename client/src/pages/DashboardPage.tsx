@@ -41,7 +41,7 @@ export default function DashboardPage() {
     queryKey: ["/api/dashboard"],
     queryFn: async () => {
       const res = await fetch("/api/dashboard", {
-        headers: { Authorization: `Bearer ${(await import("@/lib/api")).getToken()}` },
+        headers: { Authorization: `Bearer ${getToken()}` },
       });
       if (!res.ok) throw new Error("Failed");
       return res.json();
