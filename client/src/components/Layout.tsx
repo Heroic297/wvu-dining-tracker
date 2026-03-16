@@ -1,11 +1,11 @@
 import { ReactNode, useState } from "react";
-import { Link, useLocation } from "wouter";
+import { Link } from "wouter";
+import { useHashLocation } from "wouter/use-hash-location";
 import { useAuth } from "@/contexts/AuthContext";
 import { api } from "@/lib/api";
 import {
   LayoutDashboard, UtensilsCrossed, Calendar, Target, Settings, LogOut, Menu, X, Dumbbell
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 const navItems = [
@@ -17,7 +17,8 @@ const navItems = [
 ];
 
 export default function Layout({ children }: { children: ReactNode }) {
-  const [loc] = useLocation();
+  // Must use useHashLocation to match the hash-based router in App.tsx
+  const [loc] = useHashLocation();
   const { user, logout } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
 
