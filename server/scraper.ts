@@ -236,7 +236,12 @@ export async function scrapeAllLocations(dateStr: string): Promise<void> {
   console.log(`[scraper] Done scraping ${dateStr}`);
 }
 
-/** Get today's date in YYYY-MM-DD format (server local time) */
+/** Get today's date in YYYY-MM-DD format in the America/New_York timezone */
 export function todayString(): string {
-  return new Date().toISOString().slice(0, 10);
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
 }
