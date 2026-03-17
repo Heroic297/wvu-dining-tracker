@@ -156,7 +156,7 @@ export default function SettingsPage() {
       <section className="bg-card border border-border rounded-xl p-4 space-y-4">
         <h2 className="font-semibold">Body stats &amp; TDEE</h2>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div className="space-y-1.5">
             <Label>Sex</Label>
             <Select value={sex} onValueChange={setSex}>
@@ -169,7 +169,7 @@ export default function SettingsPage() {
           </div>
           <div className="space-y-1.5">
             <Label>Date of birth</Label>
-            <Input type="date" value={dob} onChange={(e) => setDob(e.target.value)} data-testid="input-dob" />
+            <Input type="date" value={dob} onChange={(e) => setDob(e.target.value)} data-testid="input-dob" className="w-full" />
           </div>
         </div>
 
@@ -223,14 +223,14 @@ export default function SettingsPage() {
         </div>
 
         {goalType !== "maintenance" && (
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label>Target weight (lbs)</Label>
               <Input type="number" value={targetWeightLbs} onChange={(e) => setTargetWeightLbs(e.target.value)} data-testid="input-target-weight" />
             </div>
             <div className="space-y-1.5">
               <Label>Target date</Label>
-              <Input type="date" value={targetDate} onChange={(e) => setTargetDate(e.target.value)} data-testid="input-target-date" />
+              <Input type="date" value={targetDate} onChange={(e) => setTargetDate(e.target.value)} data-testid="input-target-date" className="w-full" />
             </div>
           </div>
         )}
