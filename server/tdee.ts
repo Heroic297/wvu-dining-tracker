@@ -296,7 +296,13 @@ export function generatePeakWeekPlan(
 ): PeakWeekDay[] {
   const target = new Date(meetDate + "T12:00:00");
   const now = new Date();
-  const todayStr = now.toISOString().slice(0, 10);
+  // Use Eastern time for date comparisons so the day rolls over at midnight EST
+  const todayStr = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(now);
 
   const daysToMeet = Math.round(
     (target.getTime() - now.setHours(12, 0, 0, 0)) / (1000 * 60 * 60 * 24)
