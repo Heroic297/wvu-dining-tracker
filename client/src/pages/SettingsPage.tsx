@@ -5,6 +5,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DateInput } from "@/components/DateInput";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -147,7 +148,7 @@ export default function SettingsPage() {
             />
             <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">lbs</span>
           </div>
-          <Input type="date" value={weightDate} onChange={(e) => setWeightDate(e.target.value)} className="flex-1" data-testid="input-weight-date" />
+          <DateInput value={weightDate} onChange={setWeightDate} testId="input-weight-date" className="flex-1" />
           <Button onClick={logWeight} disabled={!weightLbs} data-testid="button-log-weight">Save</Button>
         </div>
       </section>
@@ -169,7 +170,7 @@ export default function SettingsPage() {
           </div>
           <div className="space-y-1.5">
             <Label>Date of birth</Label>
-            <Input type="date" value={dob} onChange={(e) => setDob(e.target.value)} data-testid="input-dob" className="w-full" />
+            <DateInput value={dob} onChange={setDob} testId="input-dob" />
           </div>
         </div>
 
@@ -230,7 +231,7 @@ export default function SettingsPage() {
             </div>
             <div className="space-y-1.5">
               <Label>Target date</Label>
-              <Input type="date" value={targetDate} onChange={(e) => setTargetDate(e.target.value)} data-testid="input-target-date" className="w-full" />
+              <DateInput value={targetDate} onChange={setTargetDate} testId="input-target-date" />
             </div>
           </div>
         )}
@@ -259,7 +260,7 @@ export default function SettingsPage() {
 
             <div className="space-y-1.5">
               <Label>Meet date</Label>
-              <Input type="date" value={meetDate} onChange={(e) => setMeetDate(e.target.value)} data-testid="input-meet-date" />
+              <DateInput value={meetDate} onChange={setMeetDate} testId="input-meet-date" />
             </div>
 
             <div className="flex items-center gap-3">
