@@ -193,10 +193,10 @@ export default function LogMealPage() {
         <h1 className="text-xl font-bold">Log meal</h1>
 
         {/* Controls */}
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
           <div className="space-y-1">
             <Label className="text-xs">Date</Label>
-            <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} data-testid="input-date" />
+            <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} data-testid="input-date" className="w-full" />
           </div>
           <div className="space-y-1">
             <Label className="text-xs">Meal</Label>
@@ -209,7 +209,7 @@ export default function LogMealPage() {
               </SelectContent>
             </Select>
           </div>
-          <div className="space-y-1 col-span-2 md:col-span-1">
+          <div className="space-y-1 sm:col-span-2 md:col-span-1">
             <Label className="text-xs">Dining hall</Label>
             <Select value={locationSlug} onValueChange={setLocationSlug}>
               <SelectTrigger data-testid="select-location"><SelectValue placeholder="Select hall..." /></SelectTrigger>
