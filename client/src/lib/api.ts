@@ -88,9 +88,14 @@ export function getToken(): string | null {
   return _token;
 }
 
-/** Today's date in YYYY-MM-DD */
+/** Today's date in YYYY-MM-DD, expressed in Eastern Time (America/New_York) */
 export function todayStr(): string {
-  return new Date().toISOString().slice(0, 10);
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
 }
 
 /** Guess current meal type based on local time */
