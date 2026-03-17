@@ -8,6 +8,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { api, lbsToKg, kgToLbs } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DateInput } from "@/components/DateInput";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -126,7 +127,7 @@ export default function OnboardingPage() {
             {/* Step 0: Body stats */}
             {step === 0 && (
               <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-1.5">
                     <Label>Sex</Label>
                     <Select onValueChange={(v) => form.setValue("sex", v as any)} defaultValue="male">
@@ -141,7 +142,11 @@ export default function OnboardingPage() {
                   </div>
                   <div className="space-y-1.5">
                     <Label>Date of birth</Label>
-                    <Input type="date" data-testid="input-dob" {...form.register("dateOfBirth")} />
+                    <DateInput
+                      value={form.watch("dateOfBirth") ?? ""}
+                      onChange={(v) => form.setValue("dateOfBirth", v)}
+                      testId="input-dob"
+                    />
                   </div>
                 </div>
 
@@ -210,7 +215,11 @@ export default function OnboardingPage() {
                     </div>
                     <div className="space-y-1.5">
                       <Label>Target date</Label>
-                      <Input type="date" data-testid="input-target-date" {...form.register("targetDate")} />
+                      <DateInput
+                        value={form.watch("targetDate") ?? ""}
+                        onChange={(v) => form.setValue("targetDate", v)}
+                        testId="input-target-date"
+                      />
                     </div>
                   </>
                 )}
@@ -251,7 +260,11 @@ export default function OnboardingPage() {
 
                 <div className="space-y-1.5">
                   <Label>Meet date (optional)</Label>
-                  <Input type="date" data-testid="input-meet-date" {...form.register("meetDate")} />
+                  <DateInput
+                    value={form.watch("meetDate") ?? ""}
+                    onChange={(v) => form.setValue("meetDate", v)}
+                    testId="input-meet-date"
+                  />
                 </div>
 
                 <div className="flex items-center gap-3">
