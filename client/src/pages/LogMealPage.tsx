@@ -31,7 +31,11 @@ export default function LogMealPage() {
   const [manualCarbs, setManualCarbs] = useState("");
   const [manualFat, setManualFat] = useState("");
   const [showScanner, setShowScanner] = useState(false);
+  const [quantity, setQuantity] = useState<number>(1);
+  const [customQty, setCustomQty] = useState("");
   const { toast } = useToast();
+
+  const QTY_PRESETS = [0.5, 1, 1.5, 2];
 
   // Fetch locations
   const { data: locations = [] } = useQuery<any[]>({
@@ -75,18 +79,20 @@ export default function LogMealPage() {
   const addItem = async (item: any) => {
     try {
       const meal = await ensureMeal();
+      const qty = quantity;
       await api.addMealItem(meal.id, {
         diningItemId: item.id,
-        calories: item.calories ?? 0,
-        proteinG: item.proteinG ?? 0,
-        carbsG: item.carbsG ?? 0,
-        fatG: item.fatG ?? 0,
-        servings: 1,
+        calories: Math.round((item.calories ?? 0) * qty),
+        proteinG: Math.round((item.proteinG ?? 0) * qty * 10) / 10,
+        carbsG:   Math.round((item.carbsG   ?? 0) * qty * 10) / 10,
+        fatG:     Math.round((item.fatG     ?? 0) * qty * 10) / 10,
+        servings: qty,
         source: "wvu",
       });
       await refetchMeals();
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] });
-      toast({ title: `${item.name} added` });
+      const label = qty === 1 ? item.name : `${item.name} ×${qty}`;
+      toast({ title: `${label} added` });
     } catch {
       toast({ title: "Failed to add item", variant: "destructive" });
     }
@@ -155,15 +161,16 @@ export default function LogMealPage() {
   const addCustomFood = async () => {
     if (!customSearch.trim()) return;
     const name = customSearch.trim();
+    const qty = quantity;
     try {
       const meal = await ensureMeal();
       await api.addMealItem(meal.id, {
         customName: name,
-        calories: parseFloat(manualCalories) || 0,
-        proteinG: parseFloat(manualProtein) || 0,
-        carbsG: parseFloat(manualCarbs) || 0,
-        fatG: parseFloat(manualFat) || 0,
-        servings: 1,
+        calories: Math.round((parseFloat(manualCalories) || 0) * qty),
+        proteinG: Math.round((parseFloat(manualProtein) || 0) * qty * 10) / 10,
+        carbsG:   Math.round((parseFloat(manualCarbs)   || 0) * qty * 10) / 10,
+        fatG:     Math.round((parseFloat(manualFat)     || 0) * qty * 10) / 10,
+        servings: qty,
         source: searchResult && !searchResult.error ? searchResult.source : "manual_exact",
       });
       await refetchMeals();
@@ -171,7 +178,9 @@ export default function LogMealPage() {
       setCustomSearch("");
       setSearchResult(null);
       setManualCalories(""); setManualProtein(""); setManualCarbs(""); setManualFat("");
-      toast({ title: `${name} added` });
+      setQuantity(1); setCustomQty("");
+      const label = qty === 1 ? name : `${name} ×${qty}`;
+      toast({ title: `${label} added` });
     } catch {
       toast({ title: "Failed to add food", variant: "destructive" });
     }
@@ -248,6 +257,57 @@ export default function LogMealPage() {
           </div>
         )}
 
+        {/* Quantity / Portion selector */}
+        <div className="bg-card border border-border rounded-xl px-4 py-3">
+          <div className="flex items-center gap-3 flex-wrap">
+            <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide shrink-0">Portion</span>
+            <div className="flex gap-1.5 flex-wrap">
+              {QTY_PRESETS.map((q) => (
+                <button
+                  key={q}
+                  type="button"
+                  data-testid={`button-qty-${q}`}
+                  onClick={() => { setQuantity(q); setCustomQty(""); }}
+                  className={`px-3 py-1 rounded-lg text-sm font-medium border transition-colors ${
+                    quantity === q && !customQty
+                      ? "bg-primary text-primary-foreground border-primary"
+                      : "bg-secondary text-secondary-foreground border-border hover:border-primary"
+                  }`}
+                >
+                  {q === 1 ? "1×" : `${q}×`}
+                </button>
+              ))}
+              {/* Custom qty input */}
+              <div className="flex items-center gap-1">
+                <input
+                  type="number"
+                  min="0.1"
+                  step="0.1"
+                  placeholder="Custom"
+                  value={customQty}
+                  data-testid="input-qty-custom"
+                  onChange={(e) => {
+                    setCustomQty(e.target.value);
+                    const v = parseFloat(e.target.value);
+                    if (!isNaN(v) && v > 0) setQuantity(v);
+                  }}
+                  className={`w-20 h-8 rounded-lg border text-sm text-center font-medium bg-background px-2 outline-none transition-colors ${
+                    customQty
+                      ? "border-primary text-primary"
+                      : "border-border text-muted-foreground"
+                  } focus:border-primary`}
+                />
+                <span className="text-xs text-muted-foreground">×</span>
+              </div>
+            </div>
+            {quantity !== 1 && (
+              <span className="text-xs text-primary font-medium ml-auto">
+                {quantity}× serving selected
+              </span>
+            )}
+          </div>
+        </div>
+
         {/* Dining hall menu */}
         {activeSlug && (
           <div>
@@ -274,10 +334,14 @@ export default function LogMealPage() {
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium truncate">{item.name}</p>
                       <div className="flex items-center gap-2 mt-0.5">
-                        <span className="text-xs text-muted-foreground">{item.calories ?? "?"} kcal</span>
-                        {item.proteinG != null && <span className="text-xs macro-protein">P:{fmt1(item.proteinG)}g</span>}
-                        {item.carbsG != null && <span className="text-xs macro-carbs">C:{fmt1(item.carbsG)}g</span>}
-                        {item.fatG != null && <span className="text-xs macro-fat">F:{fmt1(item.fatG)}g</span>}
+                        <span className="text-xs text-muted-foreground">
+                          {quantity !== 1 && item.calories != null
+                            ? <><span className="line-through opacity-50">{item.calories}</span>{" "}<span className="text-primary font-medium">{Math.round(item.calories * quantity)}</span> kcal</>                            : <>{item.calories ?? "?"} kcal</>
+                          }
+                        </span>
+                        {item.proteinG != null && <span className="text-xs macro-protein">P:{fmt1(item.proteinG * quantity)}g</span>}
+                        {item.carbsG != null && <span className="text-xs macro-carbs">C:{fmt1(item.carbsG * quantity)}g</span>}
+                        {item.fatG != null && <span className="text-xs macro-fat">F:{fmt1(item.fatG * quantity)}g</span>}
                         {item.nutritionSource === "ai_estimated" && (
                           <Badge variant="outline" className="text-xs h-4 px-1">AI</Badge>
                         )}
