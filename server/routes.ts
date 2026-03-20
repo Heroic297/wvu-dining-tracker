@@ -392,7 +392,13 @@ export async function registerRoutes(
           startDate,
           endDate
         );
-        res.json(meals);
+        const mealsWithItems = await Promise.all(
+          meals.map(async (meal) => ({
+            ...meal,
+            items: await storage.getUserMealItems(meal.id),
+          }))
+        );
+        res.json(mealsWithItems);
       } catch (err: any) {
         if (err.name === "ZodError") {
           return res.status(400).json({ error: err.errors[0].message });
