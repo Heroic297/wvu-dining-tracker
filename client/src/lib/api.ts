@@ -8,8 +8,8 @@ export const api = {
   // Auth
   login: (email: string, password: string) =>
     apiRequest("POST", "/api/auth/login", { email, password }),
-  register: (email: string, password: string, displayName?: string) =>
-    apiRequest("POST", "/api/auth/register", { email, password, displayName }),
+  register: (email: string, password: string, displayName?: string, inviteCode?: string) =>
+    apiRequest("POST", "/api/auth/register", { email, password, displayName, inviteCode }),
   logout: () => apiRequest("POST", "/api/auth/logout"),
   me: () => apiRequest("GET", "/api/auth/me"),
 
