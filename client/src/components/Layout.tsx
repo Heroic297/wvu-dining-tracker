@@ -5,16 +5,22 @@ import { useAuth } from "@/contexts/AuthContext";
 import { api } from "@/lib/api";
 import {
   LayoutDashboard, UtensilsCrossed, Clock, Target, Settings,
-  LogOut, Menu, X, Sun, Moon,
+  LogOut, Menu, X, Sun, Moon, Users,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-const navItems = [
+const OWNER_EMAIL = "phenlabs@protonmail.com";
+
+const BASE_NAV = [
   { href: "/",        label: "Dashboard", icon: LayoutDashboard },
   { href: "/log",     label: "Log Meal",  icon: UtensilsCrossed  },
   { href: "/history", label: "History",   icon: Clock            },
   { href: "/plan",    label: "Diet Plan", icon: Target           },
   { href: "/settings",label: "Settings",  icon: Settings         },
+];
+
+const OWNER_NAV = [
+  { href: "/invites", label: "Invites",   icon: Users            },
 ];
 
 /** Inline "M" mark — two overlapping peaks, emerald on dark pill */
@@ -41,6 +47,8 @@ function LogoMark({ size = 32 }: { size?: number }) {
 export default function Layout({ children }: { children: ReactNode }) {
   const [loc] = useHashLocation();
   const { user, logout } = useAuth();
+  const isOwner = user?.email === OWNER_EMAIL;
+  const navItems = isOwner ? [...BASE_NAV, ...OWNER_NAV] : BASE_NAV;
   const [mobileOpen, setMobileOpen] = useState(false);
 
   // ── Theme toggle ────────────────────────────────────────────
