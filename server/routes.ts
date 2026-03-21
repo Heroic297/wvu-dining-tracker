@@ -71,7 +71,7 @@ export async function registerRoutes(
 
   // ── Admin: Invite Code Management ──────────────────────────────────────────
   // Gated to the owner account by email — uses normal JWT auth.
-  const OWNER_EMAIL = process.env.OWNER_EMAIL ?? "phenlabs@protonmail.com";
+  const OWNER_EMAIL = process.env.OWNER_EMAIL ?? "owengidusko@gmail.com";
 
   const requireOwner = (req: AuthRequest, res: any, next: any) => {
     if (!req.user || req.user.email !== OWNER_EMAIL) {
