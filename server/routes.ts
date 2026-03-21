@@ -70,30 +70,29 @@ export async function registerRoutes(
   });
 
   // ── Admin: Invite Code Management ──────────────────────────────────────────
-  // Protected by ADMIN_SECRET header — not exposed to regular users.
+  // Gated to the owner account by email — uses normal JWT auth.
+  const OWNER_EMAIL = process.env.OWNER_EMAIL ?? "phenlabs@protonmail.com";
 
-  const requireAdmin = (req: any, res: any, next: any) => {
-    const secret = req.headers["x-admin-secret"];
-    if (!ADMIN_SECRET || secret !== ADMIN_SECRET) {
+  const requireOwner = (req: AuthRequest, res: any, next: any) => {
+    if (!req.user || req.user.email !== OWNER_EMAIL) {
       return res.status(403).json({ error: "Forbidden" });
     }
     next();
   };
 
-  app.get("/api/admin/invites", requireAdmin, async (_req, res) => {
+  app.get("/api/admin/invites", requireAuth as any, requireOwner as any, async (_req, res) => {
     const codes = await storage.listInviteCodes();
     res.json(codes);
   });
 
-  app.post("/api/admin/invites", requireAdmin, async (req, res) => {
+  app.post("/api/admin/invites", requireAuth as any, requireOwner as any, async (req: AuthRequest, res) => {
     try {
       const schema = z.object({
         label: z.string().optional(),
         maxUses: z.number().int().positive().optional().nullable(),
-        code: z.string().optional(), // custom code override
+        code: z.string().optional(),
       });
       const data = schema.parse(req.body);
-      // Auto-generate a random 8-char uppercase code if not provided
       const code = data.code
         ? data.code.trim().toUpperCase()
         : Math.random().toString(36).substring(2, 10).toUpperCase();
@@ -112,12 +111,12 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/admin/invites/:id/revoke", requireAdmin, async (req, res) => {
+  app.patch("/api/admin/invites/:id/revoke", requireAuth as any, requireOwner as any, async (req, res) => {
     await storage.revokeInviteCode(req.params.id);
     res.json({ ok: true });
   });
 
-  app.delete("/api/admin/invites/:id", requireAdmin, async (req, res) => {
+  app.delete("/api/admin/invites/:id", requireAuth as any, requireOwner as any, async (req, res) => {
     await storage.deleteInviteCode(req.params.id);
     res.json({ ok: true });
   });
