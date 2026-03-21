@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-const OWNER_EMAIL = "phenlabs@protonmail.com";
+const OWNER_EMAIL = "owengidusko@gmail.com";
 
 const BASE_NAV = [
   { href: "/",        label: "Dashboard", icon: LayoutDashboard },
