@@ -18,6 +18,7 @@ const loginSchema = z.object({
 const registerSchema = loginSchema.extend({
   password: z.string().min(8, "Password must be at least 8 characters"),
   displayName: z.string().optional(),
+  inviteCode: z.string().min(1, "Invite code is required"),
 });
 
 type RegisterForm = z.infer<typeof registerSchema>;
@@ -46,13 +47,13 @@ export default function LoginPage() {
 
   const form = useForm<RegisterForm>({
     resolver: zodResolver(isRegister ? registerSchema : loginSchema),
-    defaultValues: { email: "", password: "", displayName: "" },
+    defaultValues: { email: "", password: "", displayName: "", inviteCode: "" },
   });
 
   const onSubmit = async (data: RegisterForm) => {
     try {
       const resp = await (isRegister
-        ? api.register(data.email, data.password, data.displayName)
+        ? api.register(data.email, data.password, data.displayName, data.inviteCode)
         : api.login(data.email, data.password));
       const json = await resp.json();
       login(json.token, json.user);
@@ -96,15 +97,36 @@ export default function LoginPage() {
 
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
             {isRegister && (
-              <div className="space-y-1.5">
-                <Label htmlFor="displayName">Name</Label>
-                <Input
-                  id="displayName"
-                  placeholder="Your name"
-                  data-testid="input-display-name"
-                  {...form.register("displayName")}
-                />
-              </div>
+              <>
+                <div className="space-y-1.5">
+                  <Label htmlFor="displayName">Name</Label>
+                  <Input
+                    id="displayName"
+                    placeholder="Your name"
+                    data-testid="input-display-name"
+                    {...form.register("displayName")}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="inviteCode">Invite code</Label>
+                  <Input
+                    id="inviteCode"
+                    placeholder="XXXXXXXX"
+                    autoCapitalize="characters"
+                    autoComplete="off"
+                    data-testid="input-invite-code"
+                    {...form.register("inviteCode", {
+                      onChange: (e) => {
+                        e.target.value = e.target.value.toUpperCase();
+                      },
+                    })}
+                  />
+                  {form.formState.errors.inviteCode && (
+                    <p className="text-xs text-destructive">{form.formState.errors.inviteCode.message}</p>
+                  )}
+                  <p className="text-xs text-muted-foreground">Access is invite-only. Contact the owner to request a code.</p>
+                </div>
+              </>
             )}
             <div className="space-y-1.5">
               <Label htmlFor="email">Email</Label>
