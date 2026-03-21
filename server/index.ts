@@ -5,6 +5,7 @@ import { serveStatic } from "./static.js";
 import { createServer } from "http";
 import { startScheduler } from "./scheduler.js";
 import { storage } from "./storage.js";
+import { pool } from "./db.js";
 
 const app = express();
 const httpServer = createServer(app);
@@ -47,6 +48,26 @@ app.use(
 
 // Seed dining locations on startup
 storage.seedDiningLocations().catch(console.error);
+
+// Run any pending schema migrations on startup
+(async () => {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS invite_codes (
+        id        VARCHAR(36) PRIMARY KEY DEFAULT gen_random_uuid(),
+        code      TEXT        NOT NULL UNIQUE,
+        label     TEXT,
+        max_uses  INTEGER,
+        used_count INTEGER     NOT NULL DEFAULT 0,
+        active    BOOLEAN     NOT NULL DEFAULT TRUE,
+        created_at TIMESTAMPTZ DEFAULT now()
+      )
+    `);
+    console.log("[db] invite_codes table ready");
+  } catch (err: any) {
+    console.error("[db] Migration error:", err.message);
+  }
+})();
 
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
