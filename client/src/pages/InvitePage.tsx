@@ -1,6 +1,6 @@
 /**
  * Invite Management — owner only.
- * Only visible/accessible when logged in as phenlabs@protonmail.com.
+ * Only visible/accessible when logged in as owengidusko@gmail.com.
  * Allows generating per-person invite codes and revoking/deleting them.
  */
 import { useState } from "react";
@@ -14,7 +14,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Copy, Plus, Trash2, Ban, Check, RefreshCw, Users } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 
-const OWNER_EMAIL = "phenlabs@protonmail.com";
+const OWNER_EMAIL = "owengidusko@gmail.com";
 
 interface InviteCode {
   id: string;
