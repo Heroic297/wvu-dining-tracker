@@ -21,6 +21,7 @@ import { randomUUID } from "crypto";
 import crypto from "crypto";
 
 const CRON_SECRET = process.env.CRON_SECRET ?? "cron-secret";
+const ADMIN_SECRET = process.env.ADMIN_SECRET ?? "";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -34,8 +35,15 @@ export async function registerRoutes(
         email: z.string().email(),
         password: z.string().min(8),
         displayName: z.string().optional(),
+        inviteCode: z.string().min(1, "Invite code is required"),
       });
-      const { email, password, displayName } = schema.parse(req.body);
+      const { email, password, displayName, inviteCode } = schema.parse(req.body);
+
+      // Validate invite code before doing anything else
+      const valid = await storage.consumeInviteCode(inviteCode.trim().toUpperCase());
+      if (!valid) {
+        return res.status(403).json({ error: "Invalid or expired invite code" });
+      }
 
       const existing = await storage.getUserByEmail(email);
       if (existing) {
@@ -59,6 +67,59 @@ export async function registerRoutes(
       console.error("[auth/register]", err);
       res.status(500).json({ error: "Registration failed" });
     }
+  });
+
+  // ── Admin: Invite Code Management ──────────────────────────────────────────
+  // Protected by ADMIN_SECRET header — not exposed to regular users.
+
+  const requireAdmin = (req: any, res: any, next: any) => {
+    const secret = req.headers["x-admin-secret"];
+    if (!ADMIN_SECRET || secret !== ADMIN_SECRET) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+    next();
+  };
+
+  app.get("/api/admin/invites", requireAdmin, async (_req, res) => {
+    const codes = await storage.listInviteCodes();
+    res.json(codes);
+  });
+
+  app.post("/api/admin/invites", requireAdmin, async (req, res) => {
+    try {
+      const schema = z.object({
+        label: z.string().optional(),
+        maxUses: z.number().int().positive().optional().nullable(),
+        code: z.string().optional(), // custom code override
+      });
+      const data = schema.parse(req.body);
+      // Auto-generate a random 8-char uppercase code if not provided
+      const code = data.code
+        ? data.code.trim().toUpperCase()
+        : Math.random().toString(36).substring(2, 10).toUpperCase();
+      const invite = await storage.createInviteCode({
+        code,
+        label: data.label,
+        maxUses: data.maxUses ?? null,
+        active: true,
+      });
+      res.status(201).json(invite);
+    } catch (err: any) {
+      if (err.name === "ZodError") {
+        return res.status(400).json({ error: err.errors[0].message });
+      }
+      res.status(500).json({ error: "Failed to create invite" });
+    }
+  });
+
+  app.patch("/api/admin/invites/:id/revoke", requireAdmin, async (req, res) => {
+    await storage.revokeInviteCode(req.params.id);
+    res.json({ ok: true });
+  });
+
+  app.delete("/api/admin/invites/:id", requireAdmin, async (req, res) => {
+    await storage.deleteInviteCode(req.params.id);
+    res.json({ ok: true });
   });
 
   app.post("/api/auth/login", async (req, res) => {
