@@ -15,6 +15,7 @@ import {
   userMeals,
   userMealItems,
   weightLog,
+  inviteCodes,
   type User,
   type InsertUser,
   type WearableToken,
@@ -35,6 +36,8 @@ import {
   type InsertUserMealItem,
   type WeightLog,
   type InsertWeightLog,
+  type InviteCode,
+  type InsertInviteCode,
 } from "../shared/schema.js";
 
 export interface IStorage {
@@ -94,6 +97,14 @@ export interface IStorage {
   getWeightLog(userId: string, date: string): Promise<WeightLog | undefined>;
   getWeightLogs(userId: string, limit?: number): Promise<WeightLog[]>;
   upsertWeightLog(entry: InsertWeightLog): Promise<WeightLog>;
+
+  // Invite Codes
+  getInviteCode(code: string): Promise<InviteCode | undefined>;
+  listInviteCodes(): Promise<InviteCode[]>;
+  createInviteCode(data: InsertInviteCode): Promise<InviteCode>;
+  consumeInviteCode(code: string): Promise<boolean>;
+  revokeInviteCode(id: string): Promise<void>;
+  deleteInviteCode(id: string): Promise<void>;
 }
 
 export class PgStorage implements IStorage {
@@ -494,6 +505,63 @@ export class PgStorage implements IStorage {
       })
       .returning();
     return row;
+  }
+
+  // ── Invite Codes ───────────────────────────────────────────────────────────
+
+  async getInviteCode(code: string) {
+    const [row] = await db
+      .select()
+      .from(inviteCodes)
+      .where(eq(inviteCodes.code, code));
+    return row;
+  }
+
+  async listInviteCodes() {
+    return db
+      .select()
+      .from(inviteCodes)
+      .orderBy(desc(inviteCodes.createdAt));
+  }
+
+  async createInviteCode(data: InsertInviteCode) {
+    const [row] = await db
+      .insert(inviteCodes)
+      .values(data)
+      .returning();
+    return row;
+  }
+
+  /**
+   * Validate and consume one use of an invite code.
+   * Returns true if the code was valid and has been consumed.
+   */
+  async consumeInviteCode(code: string): Promise<boolean> {
+    const [row] = await db
+      .select()
+      .from(inviteCodes)
+      .where(eq(inviteCodes.code, code));
+
+    if (!row || !row.active) return false;
+    if (row.maxUses !== null && row.usedCount >= row.maxUses) return false;
+
+    await db
+      .update(inviteCodes)
+      .set({ usedCount: row.usedCount + 1 })
+      .where(eq(inviteCodes.id, row.id));
+
+    return true;
+  }
+
+  async revokeInviteCode(id: string) {
+    await db
+      .update(inviteCodes)
+      .set({ active: false })
+      .where(eq(inviteCodes.id, id));
+  }
+
+  async deleteInviteCode(id: string) {
+    await db.delete(inviteCodes).where(eq(inviteCodes.id, id));
   }
 }
 
