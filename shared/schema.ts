@@ -357,6 +357,31 @@ export const insertWeightLogSchema = createInsertSchema(weightLog).omit({
 export type InsertWeightLog = z.infer<typeof insertWeightLogSchema>;
 export type WeightLog = typeof weightLog.$inferSelect;
 
+// ─── Invite Codes ────────────────────────────────────────────────────────────
+
+export const inviteCodes = pgTable("invite_codes", {
+  id: varchar("id", { length: 36 })
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  code: text("code").notNull().unique(),
+  /** Friendly label for the owner to identify who they gave this to */
+  label: text("label"),
+  /** How many times it can be used (null = unlimited) */
+  maxUses: integer("max_uses"),
+  usedCount: integer("used_count").notNull().default(0),
+  /** Set to false to instantly revoke without deleting */
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at").default(sql`now()`),
+});
+
+export const insertInviteCodeSchema = createInsertSchema(inviteCodes).omit({
+  id: true,
+  usedCount: true,
+  createdAt: true,
+});
+export type InsertInviteCode = z.infer<typeof insertInviteCodeSchema>;
+export type InviteCode = typeof inviteCodes.$inferSelect;
+
 // ─── Sessions (express-session via pg) ───────────────────────────────────────
 
 export const sessions = pgTable("session", {
