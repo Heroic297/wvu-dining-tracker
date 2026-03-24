@@ -550,14 +550,11 @@ export async function registerRoutes(
 
         const data = schema.parse(req.body);
 
-        // Scale macros by servings
+        // Macros are already pre-scaled by the client before sending.
+        // servings is stored as metadata only — do NOT multiply again here.
         const scaledItem = {
           userMealId: req.params.mealId as string,
           ...data,
-          calories: data.calories * data.servings,
-          proteinG: data.proteinG * data.servings,
-          carbsG: data.carbsG * data.servings,
-          fatG: data.fatG * data.servings,
         };
 
         const item = await storage.createUserMealItem(scaledItem);
