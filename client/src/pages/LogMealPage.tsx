@@ -207,6 +207,7 @@ export default function LogMealPage() {
       const qty = quantity;
       await api.addMealItem(meal.id, {
         diningItemId: item.id,
+        customName: item.name,   // ensures the name displays correctly in the meal log
         calories: Math.round((item.calories ?? 0) * qty),
         proteinG: Math.round((item.proteinG ?? 0) * qty * 10) / 10,
         carbsG:   Math.round((item.carbsG   ?? 0) * qty * 10) / 10,
