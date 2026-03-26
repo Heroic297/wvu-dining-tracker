@@ -262,12 +262,16 @@ export async function scrapeLocationDate(
       }
     }
 
-    // Create menu row
+    // Upsert menu row — returns existing row if already present
     const menu = await storage.createDiningMenu({
       locationId: dbLocation.id,
       date: dateStr,
       mealType,
     });
+
+    // Clear any previously saved items for this menu to prevent duplicates
+    // (createDiningMenu uses onConflictDoUpdate so the same menu ID is reused)
+    await storage.deleteDiningItemsByMenu(menu.id);
 
     const diningItems: InsertDiningItem[] = recipes.map((recipe) => {
       const ntrs = recipe.ntrs ?? [];
