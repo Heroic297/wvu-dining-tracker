@@ -44,6 +44,7 @@ export default function SettingsPage() {
   const [trainingDays, setTrainingDays] = useState<number[]>(user?.trainingDays as number[] ?? [1, 3, 5]);
   const [meetDate, setMeetDate] = useState(user?.meetDate ?? "");
   const [enableWaterCut, setEnableWaterCut] = useState(user?.enableWaterCut ?? false);
+  const [enableWaterTracking, setEnableWaterTracking] = useState(user?.enableWaterTracking ?? false);
 
   // Wearable status
   const [syncing, setSyncing] = useState<string | null>(null);
@@ -62,7 +63,7 @@ export default function SettingsPage() {
       const heightCm = (parseInt(heightFt) * 12 + parseInt(heightIn)) * 2.54;
       const payload: Record<string, any> = {
         sex, dateOfBirth: dob, heightCm, activityLevel, goalType,
-        burnMode, trainingDays, enableWaterCut,
+        burnMode, trainingDays, enableWaterCut, enableWaterTracking,
         // targetDate and targetWeightKg must be omitted (not null) when empty
         // — the server schema does not accept null for these fields
         ...(targetWeightLbs ? { targetWeightKg: lbsToKg(parseFloat(targetWeightLbs)) } : {}),
@@ -270,6 +271,18 @@ export default function SettingsPage() {
                 data-testid="switch-watercut"
               />
               <Label htmlFor="watercut" className="cursor-pointer">Enable 7-day water cut plan</Label>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <Switch
+                id="watertracking" checked={enableWaterTracking}
+                onCheckedChange={setEnableWaterTracking}
+                data-testid="switch-water-tracking"
+              />
+              <div>
+                <Label htmlFor="watertracking" className="cursor-pointer">Enable water intake tracking</Label>
+                <p className="text-xs text-muted-foreground mt-0.5">Shows a water tracker on the dashboard. Uses peak week targets when active, otherwise estimates based on your body weight and sex.</p>
+              </div>
             </div>
           </>
         )}
