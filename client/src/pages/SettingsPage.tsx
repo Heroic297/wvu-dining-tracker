@@ -49,13 +49,17 @@ export default function SettingsPage() {
   const [waterBottles, setWaterBottles] = useState<Array<{id:string;name:string;mlSize:number}>>((user as any)?.waterBottles ?? []);
   const [newBottleName, setNewBottleName] = useState("");
   const [newBottleSize, setNewBottleSize] = useState("");
-  const [newBottleUnit, setNewBottleUnit] = useState<"ml"|"oz"|"L">("oz");
+  const [newBottleUnit, setNewBottleUnit] = useState<"ml"|"oz"|"L"|"gal">("oz");
 
-  // Conversion: user input -> ml
-  const toMl = (val: number, unit: string) => {
-    if (unit === "oz") return Math.round(val * 29.5735);
-    if (unit === "L")  return Math.round(val * 1000);
-    return Math.round(val); // ml
+  // Conversion constants — everything stored as ml internally
+  const ML_TO: Record<string, number> = { ml: 1, oz: 1/29.5735, L: 1/1000, gal: 1/3785.41 };
+  const FROM_ML: Record<string, number> = { ml: 1, oz: 29.5735, L: 0.001, gal: 3785.41 };
+  const toMl = (val: number, unit: string) => Math.round(val * (FROM_ML[unit] ?? 1));
+  // Display a ml value in the user's preferred unit
+  const fmtBottle = (ml: number) => {
+    const factor = ML_TO[waterUnit] ?? 1;
+    const val = +(ml * factor).toFixed(waterUnit === "ml" ? 0 : 2);
+    return `${val} ${waterUnit}`;
   };
 
   const addBottle = () => {
@@ -337,7 +341,7 @@ export default function SettingsPage() {
                     <div key={b.id} className="flex items-center justify-between bg-secondary rounded-lg px-3 py-2">
                       <span className="text-sm font-medium">{b.name}</span>
                       <div className="flex items-center gap-2">
-                        <span className="text-xs text-muted-foreground">{b.mlSize} ml</span>
+                        <span className="text-xs text-muted-foreground">{fmtBottle(b.mlSize)}</span>
                         <button onClick={() => removeBottle(b.id)} className="text-muted-foreground hover:text-destructive transition-colors">
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
@@ -374,6 +378,7 @@ export default function SettingsPage() {
                           <SelectItem value="oz">oz</SelectItem>
                           <SelectItem value="ml">ml</SelectItem>
                           <SelectItem value="L">L</SelectItem>
+                          <SelectItem value="gal">gal</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
