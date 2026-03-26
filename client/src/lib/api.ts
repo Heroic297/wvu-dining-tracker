@@ -64,6 +64,11 @@ export const api = {
   logWeight: (data: Record<string, any>) =>
     apiRequest("POST", "/api/weight", data),
 
+  // Water
+  getWater: (date: string) => apiRequest("GET", `/api/water?date=${date}`),
+  logWater: (date: string, mlLogged: number) =>
+    apiRequest("POST", "/api/water", { date, mlLogged }),
+
   // Wearables
   getWearableStatus: () => apiRequest("GET", "/api/wearables/status"),
   getFitbitAuthUrl: () => apiRequest("GET", "/api/wearables/fitbit/connect"),
