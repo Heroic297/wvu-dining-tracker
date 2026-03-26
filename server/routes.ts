@@ -198,6 +198,13 @@ export async function registerRoutes(
         trainingDays: z.array(z.number().int().min(0).max(6)).optional(),
         meetDate: z.string().optional().nullable(),
         enableWaterCut: z.boolean().optional(),
+        enableWaterTracking: z.boolean().optional(),
+        waterBottles: z.array(z.object({
+          id: z.string(),
+          name: z.string(),
+          mlSize: z.number().positive(),
+        })).optional(),
+        waterUnit: z.enum(["ml", "oz", "L", "gal"]).optional(),
         onboardingComplete: z.boolean().optional(),
       });
       const data = updateSchema.parse(req.body);
@@ -959,6 +966,8 @@ export async function registerRoutes(
           waterMl: waterLog?.mlLogged ?? 0,
           waterTargetMl,
           enableWaterTracking: user.enableWaterTracking ?? false,
+          waterBottles: user.waterBottles ?? [],
+          waterUnit: user.waterUnit ?? "oz",
         });
       } catch (err) {
         console.error("[dashboard]", err);
