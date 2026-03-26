@@ -1,10 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { fmt1, todayStr, formatDate, kgToLbs } from "@/lib/api";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
-import { PlusCircle, Flame, TrendingUp, UtensilsCrossed } from "lucide-react";
+import { PlusCircle, Flame, TrendingUp, UtensilsCrossed, Trophy, Droplets, Plus, Minus } from "lucide-react";
+import { useMutation } from "@tanstack/react-query";
+import { api } from "@/lib/api";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 
 // ── Macro token colours (CSS vars resolved at runtime) ─────────────────────
@@ -114,6 +116,19 @@ export default function DashboardPage() {
   const targets = data?.targets;
   const meals   = data?.meals   ?? [];
   const recentActivity = data?.activities ?? [];
+  const peakWeekToday   = data?.peakWeekToday ?? null;
+  const waterMl         = data?.waterMl ?? 0;
+  const waterTargetMl   = data?.waterTargetMl ?? null;
+  const enableWaterTracking = data?.enableWaterTracking ?? false;
+
+  const waterMutation = useMutation({
+    mutationFn: async (delta: number) => {
+      const newVal = Math.max(0, waterMl + delta);
+      const res = await api.logWater(today, newVal);
+      return res.json();
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] }),
+  });
 
   const weightChartData = (weightData ?? [])
     .slice(0, 7)
@@ -157,6 +172,103 @@ export default function DashboardPage() {
           </Button>
         </Link>
       </div>
+
+      {/* Peak week card */}
+      {peakWeekToday && (
+        <div className={`rounded-2xl border p-4 space-y-3 ${
+          peakWeekToday.isKeyDay
+            ? "border-primary/60 bg-primary/5"
+            : "border-border bg-card"
+        }`}>
+          {/* Header */}
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Trophy className="w-4 h-4 text-primary" />
+              <span className="text-xs font-bold uppercase tracking-widest text-primary">Peak Week · Today</span>
+            </div>
+            <span className="text-xs font-semibold bg-secondary px-2.5 py-1 rounded-full">
+              {peakWeekToday.daysOut === 0 ? "Meet day" : `${peakWeekToday.daysOut} days out`}
+            </span>
+          </div>
+
+          {/* Phase */}
+          <div>
+            <p className="text-lg font-bold leading-tight">{peakWeekToday.phase}</p>
+            <p className="text-xs text-muted-foreground mt-0.5">{peakWeekToday.label}</p>
+          </div>
+
+          {/* Focus */}
+          <div className="bg-background/60 rounded-xl px-3 py-2">
+            <p className="text-sm text-foreground">{peakWeekToday.focus}</p>
+          </div>
+
+          {/* Macro targets */}
+          <div className="grid grid-cols-5 gap-2">
+            {[
+              { label: "Calories", value: `${peakWeekToday.calories}`, unit: "kcal", color: HEX.calories },
+              { label: "Protein",  value: `${peakWeekToday.proteinG}`, unit: "g",    color: HEX.protein },
+              { label: "Carbs",    value: `${peakWeekToday.carbsG}`,   unit: "g",    color: HEX.carbs },
+              { label: "Fat",      value: `${peakWeekToday.fatG}`,     unit: "g",    color: HEX.fat },
+              { label: "Sodium",   value: `${(peakWeekToday.sodiumMg/1000).toFixed(1)}`, unit: "g Na", color: "#60a5fa" },
+            ].map(({ label, value, unit, color }) => (
+              <div key={label} className="bg-secondary rounded-xl p-2 text-center">
+                <p className="text-sm font-bold" style={{ color }}>{value}<span className="text-xs font-normal text-muted-foreground ml-0.5">{unit}</span></p>
+                <p className="text-[10px] text-muted-foreground mt-0.5">{label}</p>
+              </div>
+            ))}
+          </div>
+
+          {/* Water */}
+          <div className="flex items-center gap-2.5 bg-blue-500/10 border border-blue-500/20 rounded-xl px-3 py-2.5">
+            <Droplets className="w-4 h-4 text-blue-400 flex-shrink-0" />
+            <div>
+              <p className="text-sm font-semibold text-blue-400">Water today: {peakWeekToday.waterL}</p>
+              <p className="text-xs text-muted-foreground">Stay consistent throughout the day</p>
+            </div>
+          </div>
+
+          {/* Guidance bullets */}
+          {peakWeekToday.guidance?.length > 0 && (
+            <div className="space-y-1.5">
+              <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground flex items-center gap-1.5">
+                <Flame className="w-3 h-3" /> Today's focus
+              </p>
+              {peakWeekToday.guidance.map((g: string, i: number) => (
+                <div key={i} className="flex items-start gap-2 text-sm">
+                  <span className="text-primary mt-0.5 flex-shrink-0">•</span>
+                  <span>{g}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Eat / Avoid */}
+          {(peakWeekToday.foods?.length > 0 || peakWeekToday.avoid?.length > 0) && (
+            <div className="grid grid-cols-2 gap-3">
+              {peakWeekToday.foods?.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold text-emerald-400 mb-1 flex items-center gap-1">
+                    <span>🍎</span> Eat
+                  </p>
+                  {peakWeekToday.foods.map((f: string, i: number) => (
+                    <p key={i} className="text-xs text-muted-foreground">• {f}</p>
+                  ))}
+                </div>
+              )}
+              {peakWeekToday.avoid?.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold text-destructive mb-1 flex items-center gap-1">
+                    <span>🚫</span> Avoid
+                  </p>
+                  {peakWeekToday.avoid.map((f: string, i: number) => (
+                    <p key={i} className="text-xs text-muted-foreground">• {f}</p>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Calorie ring + macros */}
       <div className="bg-card border border-border rounded-2xl p-5">
@@ -215,6 +327,57 @@ export default function DashboardPage() {
           <StatCard label="Protein goal" value={`${targets.proteinG}g`} sub={`${fmt1(totals.protein)}g logged`} accent={HEX.protein} />
           <StatCard label="Carb goal"    value={`${targets.carbsG}g`}   sub={`${fmt1(totals.carbs)}g logged`}   accent={HEX.carbs} />
           <StatCard label="Fat goal"     value={`${targets.fatG}g`}     sub={`${fmt1(totals.fat)}g logged`}     accent={HEX.fat} />
+        </div>
+      )}
+
+      {/* Water tracker */}
+      {enableWaterTracking && waterTargetMl !== null && (
+        <div className="bg-card border border-border rounded-2xl p-4">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <Droplets className="w-4 h-4 text-blue-400" />
+              <h2 className="text-sm font-semibold">Water intake</h2>
+            </div>
+            <span className="text-xs text-muted-foreground">
+              {(waterMl / 1000).toFixed(2).replace(/\.?0+$/, '')}L / {(waterTargetMl / 1000).toFixed(1)}L
+            </span>
+          </div>
+
+          {/* Progress bar */}
+          <div className="h-2.5 bg-secondary rounded-full overflow-hidden mb-3">
+            <div
+              className="h-full rounded-full transition-all duration-500"
+              style={{
+                width: `${Math.min(100, (waterMl / waterTargetMl) * 100)}%`,
+                background: waterMl >= waterTargetMl ? "#22c55e" : "#60a5fa",
+              }}
+            />
+          </div>
+
+          {/* Quick add buttons */}
+          <div className="flex items-center gap-2 flex-wrap">
+            {[150, 250, 350, 500].map((ml) => (
+              <button
+                key={ml}
+                onClick={() => waterMutation.mutate(ml)}
+                disabled={waterMutation.isPending}
+                className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-secondary hover:bg-secondary/80 border border-border text-xs font-medium transition-colors"
+              >
+                <Plus className="w-3 h-3" />{ml}ml
+              </button>
+            ))}
+            <button
+              onClick={() => waterMutation.mutate(-250)}
+              disabled={waterMutation.isPending || waterMl === 0}
+              className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-secondary hover:bg-secondary/80 border border-border text-xs font-medium transition-colors text-muted-foreground ml-auto"
+            >
+              <Minus className="w-3 h-3" />250ml
+            </button>
+          </div>
+
+          {waterMl >= waterTargetMl && (
+            <p className="text-xs text-emerald-400 font-medium mt-2 text-center">Daily water goal reached 🎉</p>
+          )}
         </div>
       )}
 
