@@ -15,6 +15,7 @@ import {
   userMeals,
   userMealItems,
   weightLog,
+  waterLogs,
   inviteCodes,
   type User,
   type InsertUser,
@@ -36,6 +37,8 @@ import {
   type InsertUserMealItem,
   type WeightLog,
   type InsertWeightLog,
+  type WaterLog,
+  type InsertWaterLog,
   type InviteCode,
   type InsertInviteCode,
 } from "../shared/schema.js";
@@ -98,6 +101,10 @@ export interface IStorage {
   getWeightLog(userId: string, date: string): Promise<WeightLog | undefined>;
   getWeightLogs(userId: string, limit?: number): Promise<WeightLog[]>;
   upsertWeightLog(entry: InsertWeightLog): Promise<WeightLog>;
+
+  // Water Logs
+  getWaterLog(userId: string, date: string): Promise<WaterLog | undefined>;
+  upsertWaterLog(userId: string, date: string, mlLogged: number): Promise<WaterLog>;
 
   // Invite Codes
   getInviteCode(code: string): Promise<InviteCode | undefined>;
@@ -507,6 +514,28 @@ export class PgStorage implements IStorage {
           notes: entry.notes,
           loggedAt: sql`now()`,
         },
+      })
+      .returning();
+    return row;
+  }
+
+  // ── Water Logs ───────────────────────────────────────────────────────────
+
+  async getWaterLog(userId: string, date: string) {
+    const [row] = await db
+      .select()
+      .from(waterLogs)
+      .where(and(eq(waterLogs.userId, userId), eq(waterLogs.date, date)));
+    return row;
+  }
+
+  async upsertWaterLog(userId: string, date: string, mlLogged: number) {
+    const [row] = await db
+      .insert(waterLogs)
+      .values({ userId, date, mlLogged })
+      .onConflictDoUpdate({
+        target: [waterLogs.userId, waterLogs.date],
+        set: { mlLogged, updatedAt: sql`now()` },
       })
       .returning();
     return row;
