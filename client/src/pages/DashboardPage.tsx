@@ -254,8 +254,8 @@ export default function DashboardPage() {
             <h2 className="text-sm font-semibold">Weight trend</h2>
             <TrendingUp className="w-4 h-4 text-muted-foreground" />
           </div>
-          <ResponsiveContainer width="100%" height={110}>
-            <AreaChart data={weightChartData} margin={{ left: -8 }}>
+          <ResponsiveContainer width="100%" height={120}>
+            <AreaChart data={weightChartData} margin={{ left: 0, right: 8 }}>
               <defs>
                 <linearGradient id="wGrad" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="0%"   stopColor={HEX.calories} stopOpacity={0.25} />
@@ -266,6 +266,14 @@ export default function DashboardPage() {
                 dataKey="date"
                 tick={{ fontSize: 10, fill: "hsl(220 8% 50%)" }}
                 axisLine={false} tickLine={false}
+              />
+              <YAxis
+                domain={yDomain}
+                tick={{ fontSize: 10, fill: "hsl(220 8% 50%)" }}
+                axisLine={false} tickLine={false}
+                tickCount={4}
+                tickFormatter={(v: number) => `${v}`}
+                width={36}
               />
               <Tooltip
                 contentStyle={{
@@ -279,7 +287,7 @@ export default function DashboardPage() {
               <Area
                 type="monotone" dataKey="lbs"
                 stroke={HEX.calories} fill="url(#wGrad)"
-                strokeWidth={2} dot={false}
+                strokeWidth={2} dot={{ r: 3, fill: HEX.calories, strokeWidth: 0 }}
               />
             </AreaChart>
           </ResponsiveContainer>
