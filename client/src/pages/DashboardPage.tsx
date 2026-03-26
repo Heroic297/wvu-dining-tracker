@@ -228,9 +228,10 @@ export default function DashboardPage() {
           {/* Guidance bullets */}
           {peakWeekToday.guidance?.length > 0 && (
             <div className="space-y-1.5">
-              <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground flex items-center gap-1.5">
-                <Flame className="w-3 h-3" /> Today's focus
-              </p>
+              <div className="flex items-center gap-1.5">
+                <Flame className="w-3 h-3 text-muted-foreground" />
+                <span className="text-xs font-bold uppercase tracking-widest text-muted-foreground">Today's focus</span>
+              </div>
               {peakWeekToday.guidance.map((g: string, i: number) => (
                 <div key={i} className="flex items-start gap-2 text-sm">
                   <span className="text-primary mt-0.5 flex-shrink-0">•</span>
@@ -245,21 +246,21 @@ export default function DashboardPage() {
             <div className="grid grid-cols-2 gap-3">
               {peakWeekToday.foods?.length > 0 && (
                 <div>
-                  <p className="text-xs font-semibold text-emerald-400 mb-1 flex items-center gap-1">
-                    <span>🍎</span> Eat
-                  </p>
+                  <div className="flex items-center gap-1 mb-1">
+                    <span className="text-xs font-semibold text-emerald-400">Eat</span>
+                  </div>
                   {peakWeekToday.foods.map((f: string, i: number) => (
-                    <p key={i} className="text-xs text-muted-foreground">• {f}</p>
+                    <div key={i} className="text-xs text-muted-foreground">• {f}</div>
                   ))}
                 </div>
               )}
               {peakWeekToday.avoid?.length > 0 && (
                 <div>
-                  <p className="text-xs font-semibold text-destructive mb-1 flex items-center gap-1">
-                    <span>🚫</span> Avoid
-                  </p>
+                  <div className="flex items-center gap-1 mb-1">
+                    <span className="text-xs font-semibold text-destructive">Avoid</span>
+                  </div>
                   {peakWeekToday.avoid.map((f: string, i: number) => (
-                    <p key={i} className="text-xs text-muted-foreground">• {f}</p>
+                    <div key={i} className="text-xs text-muted-foreground">• {f}</div>
                   ))}
                 </div>
               )}
