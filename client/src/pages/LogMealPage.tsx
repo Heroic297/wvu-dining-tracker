@@ -725,6 +725,7 @@ export default function LogMealPage() {
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-xs text-muted-foreground">
                     {searchResult.source === "ai_estimated" ? "AI estimated"
+                      : searchResult.source === "usda_branded" ? "USDA Branded Foods"
                       : searchResult.source === "usda" ? "USDA database"
                       : "Manual"}
                   </span>
