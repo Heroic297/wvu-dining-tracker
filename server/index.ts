@@ -76,6 +76,12 @@ storage.seedDiningLocations().catch(console.error);
     await pool.query(`
       ALTER TABLE users ADD COLUMN IF NOT EXISTS enable_water_tracking BOOLEAN NOT NULL DEFAULT FALSE
     `);
+    await pool.query(`
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS water_bottles JSONB
+    `);
+    await pool.query(`
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS water_unit TEXT NOT NULL DEFAULT 'oz'
+    `);
     console.log("[db] migrations complete");
   } catch (err: any) {
     console.error("[db] Migration error:", err.message);
