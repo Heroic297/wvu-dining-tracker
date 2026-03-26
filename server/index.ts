@@ -63,7 +63,20 @@ storage.seedDiningLocations().catch(console.error);
         created_at TIMESTAMPTZ DEFAULT now()
       )
     `);
-    console.log("[db] invite_codes table ready");
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS water_logs (
+        id          VARCHAR(36) PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id     VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        date        DATE        NOT NULL,
+        ml_logged   INTEGER     NOT NULL DEFAULT 0,
+        updated_at  TIMESTAMPTZ DEFAULT now(),
+        UNIQUE(user_id, date)
+      )
+    `);
+    await pool.query(`
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS enable_water_tracking BOOLEAN NOT NULL DEFAULT FALSE
+    `);
+    console.log("[db] migrations complete");
   } catch (err: any) {
     console.error("[db] Migration error:", err.message);
   }
