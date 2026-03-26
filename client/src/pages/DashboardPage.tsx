@@ -116,12 +116,22 @@ export default function DashboardPage() {
   const recentActivity = data?.activities ?? [];
 
   const weightChartData = (weightData ?? [])
-    .slice(0, 14)
+    .slice(0, 7)
     .reverse()
     .map((w: any) => ({
       date: w.date.slice(5),
       lbs:  +kgToLbs(w.weightKg).toFixed(1),
     }));
+
+  // Auto-window Y axis — zoom in tight on actual variation
+  const weightVals = weightChartData.map((d: any) => d.lbs as number);
+  const weightMin = weightVals.length ? Math.min(...weightVals) : 150;
+  const weightMax = weightVals.length ? Math.max(...weightVals) : 160;
+  const weightPad = Math.max(0.5, (weightMax - weightMin) * 0.4);
+  const yDomain: [number, number] = [
+    +((weightMin - weightPad).toFixed(1)),
+    +((weightMax + weightPad).toFixed(1)),
+  ];
 
   const calPct   = targets ? Math.min(100, (totals.calories / targets.calories) * 100) : 0;
   const calRemain = targets ? Math.round(targets.calories - totals.calories) : null;
