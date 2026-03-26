@@ -87,6 +87,10 @@ export const users = pgTable("users", {
   meetDate: date("meet_date"),
   enableWaterCut: boolean("enable_water_cut").default(false),
   enableWaterTracking: boolean("enable_water_tracking").default(false),
+  /** Saved water bottle presets [{id, name, mlSize}] */
+  waterBottles: jsonb("water_bottles").$type<Array<{id: string; name: string; mlSize: number}>>(),
+  /** Preferred display unit for water */
+  waterUnit: text("water_unit").$type<"ml" | "oz" | "L" | "gal">().default("oz"),
   // Onboarding
   onboardingComplete: boolean("onboarding_complete").default(false),
   createdAt: timestamp("created_at").default(sql`now()`),
