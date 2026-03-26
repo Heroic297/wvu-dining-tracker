@@ -106,6 +106,15 @@ export default function DashboardPage() {
   const waterMl         = data?.waterMl ?? 0;
   const waterTargetMl   = data?.waterTargetMl ?? null;
   const enableWaterTracking = data?.enableWaterTracking ?? false;
+  const waterBottles    = (data?.waterBottles ?? []) as Array<{id: string; name: string; mlSize: number}>;
+  const waterUnit       = (data?.waterUnit ?? "oz") as "ml" | "oz" | "L" | "gal";
+
+  // Unit conversion helpers
+  const ML_TO: Record<string, number> = { ml: 1, oz: 1/29.5735, L: 1/1000, gal: 1/3785.41 };
+  const UNIT_LABEL: Record<string, string> = { ml: "ml", oz: "oz", L: "L", gal: "gal" };
+  const toUnit = (ml: number) => +(ml * ML_TO[waterUnit]).toFixed(waterUnit === "ml" ? 0 : 2);
+  const fromUnit = (val: number) => Math.round(val / ML_TO[waterUnit]);
+  const fmtWater = (ml: number) => `${toUnit(ml)} ${UNIT_LABEL[waterUnit]}`;
 
   // ALL hooks must be declared before any early returns
   const waterMutation = useMutation({
@@ -332,53 +341,92 @@ export default function DashboardPage() {
       )}
 
       {/* Water tracker */}
-      {enableWaterTracking && waterTargetMl !== null && (
-        <div className="bg-card border border-border rounded-2xl p-4">
-          <div className="flex items-center justify-between mb-3">
+      {enableWaterTracking && (
+        <div className="bg-card border border-border rounded-2xl p-4 space-y-3">
+          {/* Header */}
+          <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Droplets className="w-4 h-4 text-blue-400" />
               <h2 className="text-sm font-semibold">Water intake</h2>
             </div>
-            <span className="text-xs text-muted-foreground">
-              {(waterMl / 1000).toFixed(2).replace(/\.?0+$/, '')}L / {(waterTargetMl / 1000).toFixed(1)}L
+            <span className="text-xs font-medium text-blue-400">
+              {fmtWater(waterMl)}{waterTargetMl ? ` / ${fmtWater(waterTargetMl)}` : ""}
             </span>
           </div>
 
           {/* Progress bar */}
-          <div className="h-2.5 bg-secondary rounded-full overflow-hidden mb-3">
-            <div
-              className="h-full rounded-full transition-all duration-500"
-              style={{
-                width: `${Math.min(100, (waterMl / waterTargetMl) * 100)}%`,
-                background: waterMl >= waterTargetMl ? "#22c55e" : "#60a5fa",
-              }}
-            />
-          </div>
-
-          {/* Quick add buttons */}
-          <div className="flex items-center gap-2 flex-wrap">
-            {[150, 250, 350, 500].map((ml) => (
-              <button
-                key={ml}
-                onClick={() => waterMutation.mutate(ml)}
-                disabled={waterMutation.isPending}
-                className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-secondary hover:bg-secondary/80 border border-border text-xs font-medium transition-colors"
-              >
-                <Plus className="w-3 h-3" />{ml}ml
-              </button>
-            ))}
-            <button
-              onClick={() => waterMutation.mutate(-250)}
-              disabled={waterMutation.isPending || waterMl === 0}
-              className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-secondary hover:bg-secondary/80 border border-border text-xs font-medium transition-colors text-muted-foreground ml-auto"
-            >
-              <Minus className="w-3 h-3" />250ml
-            </button>
-          </div>
-
-          {waterMl >= waterTargetMl && (
-            <p className="text-xs text-emerald-400 font-medium mt-2 text-center">Daily water goal reached 🎉</p>
+          {waterTargetMl && (
+            <div className="h-2 bg-secondary rounded-full overflow-hidden">
+              <div
+                className="h-full rounded-full transition-all duration-500"
+                style={{
+                  width: `${Math.min(100, (waterMl / waterTargetMl) * 100)}%`,
+                  background: waterMl >= waterTargetMl ? "#22c55e" : "#60a5fa",
+                }}
+              />
+            </div>
           )}
+
+          {/* Bottle-based logging */}
+          {waterBottles.length > 0 ? (
+            <div className="space-y-2">
+              {waterBottles.map((bottle) => (
+                <div key={bottle.id} className="bg-secondary rounded-xl p-2.5">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-medium">{bottle.name}</span>
+                    <span className="text-xs text-muted-foreground">{fmtWater(bottle.mlSize)} total</span>
+                  </div>
+                  <div className="flex gap-1.5 flex-wrap">
+                    {(["1/4", "1/2", "3/4", "1"] as const).map((frac) => {
+                      const fracMap: Record<string, number> = {"1/4": 0.25, "1/2": 0.5, "3/4": 0.75, "1": 1};
+                      const addMl = Math.round(bottle.mlSize * fracMap[frac]);
+                      return (
+                        <button
+                          key={frac}
+                          onClick={() => waterMutation.mutate(addMl)}
+                          disabled={waterMutation.isPending}
+                          className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-background border border-border hover:border-blue-400/60 text-xs font-medium transition-colors"
+                        >
+                          <Plus className="w-3 h-3" />{frac} <span className="text-muted-foreground ml-0.5">({fmtWater(addMl)})</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            // Fallback quick-add when no bottles saved
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">No bottles saved — add some in Settings for fraction logging. Quick-add:</p>
+              <div className="flex items-center gap-2 flex-wrap">
+                {([240, 355, 500, 750] as const).map((ml) => (
+                  <button
+                    key={ml}
+                    onClick={() => waterMutation.mutate(ml)}
+                    disabled={waterMutation.isPending}
+                    className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-secondary hover:bg-secondary/80 border border-border text-xs font-medium transition-colors"
+                  >
+                    <Plus className="w-3 h-3" />{fmtWater(ml)}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Undo row */}
+          <div className="flex items-center justify-between pt-1">
+            <button
+              onClick={() => waterMutation.mutate(-237)}
+              disabled={waterMutation.isPending || waterMl === 0}
+              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-destructive transition-colors"
+            >
+              <Minus className="w-3 h-3" /> Undo 8oz
+            </button>
+            {waterTargetMl && waterMl >= waterTargetMl && (
+              <span className="text-xs text-emerald-400 font-medium">Goal reached!</span>
+            )}
+          </div>
         </div>
       )}
 
