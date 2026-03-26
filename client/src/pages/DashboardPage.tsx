@@ -1,12 +1,10 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { Link } from "wouter";
-import { fmt1, todayStr, formatDate, kgToLbs } from "@/lib/api";
+import { fmt1, todayStr, formatDate, kgToLbs, api } from "@/lib/api";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { PlusCircle, Flame, TrendingUp, UtensilsCrossed, Trophy, Droplets, Plus, Minus } from "lucide-react";
-import { useMutation } from "@tanstack/react-query";
-import { api } from "@/lib/api";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 
 // ── Macro token colours (CSS vars resolved at runtime) ─────────────────────
