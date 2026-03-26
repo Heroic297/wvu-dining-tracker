@@ -279,17 +279,48 @@ async function fetchUsdaById(fdcId: number): Promise<UsdaCandidate | null> {
 function extractNutrientsFromCandidate(food: UsdaCandidate): {
   calories: number; proteinG: number; carbsG: number; fatG: number; servingSize: string;
 } {
-  const nutrients = food.foodNutrients ?? [];
-  const calories = getUsdaNutrient(nutrients, "208");
-  const proteinG = getUsdaNutrient(nutrients, "203");
-  const carbsG   = getUsdaNutrient(nutrients, "205");
-  const fatG     = getUsdaNutrient(nutrients, "204");
+  const label = (food as any).labelNutrients;
 
-  let servingSize = "100g (USDA standard)";
-  if (food.servingSize && food.servingSizeUnit) {
-    servingSize = `${food.servingSize}${food.servingSizeUnit}`;
+  // Prefer labelNutrients — these are exact per-serving values from the product label
+  if (label?.calories?.value != null) {
+    const servingSizeStr = food.servingSize
+      ? `${food.servingSize} ${food.servingSizeUnit ?? ""}`.trim()
+      : "1 serving";
+    return {
+      calories: Math.round(label.calories.value),
+      proteinG: Math.round((label.protein?.value ?? 0) * 10) / 10,
+      carbsG:   Math.round((label.carbohydrates?.value ?? 0) * 10) / 10,
+      fatG:     Math.round((label.fat?.value ?? 0) * 10) / 10,
+      servingSize: servingSizeStr,
+    };
   }
-  return { calories, proteinG, carbsG, fatG, servingSize };
+
+  // Fallback: foodNutrients are per 100g/ml — scale by serving size
+  const nutrients = food.foodNutrients ?? [];
+  const per100cal = getUsdaNutrient(nutrients, "208");
+  const per100pro = getUsdaNutrient(nutrients, "203");
+  const per100carb = getUsdaNutrient(nutrients, "205");
+  const per100fat  = getUsdaNutrient(nutrients, "204");
+
+  // Parse serving size number for scaling (e.g. "414 MLT" → 414, "340 ml" → 340)
+  let servingNum = 100; // default: assume per-100g values are the serving
+  let servingSizeStr = "100g (USDA standard)";
+  if (food.servingSize) {
+    const sizeNum = parseFloat(String(food.servingSize));
+    if (!isNaN(sizeNum) && sizeNum > 0) {
+      servingNum = sizeNum;
+      servingSizeStr = `${sizeNum} ${food.servingSizeUnit ?? "g"}`.trim();
+    }
+  }
+
+  const scale = servingNum / 100;
+  return {
+    calories: Math.round(per100cal * scale),
+    proteinG: Math.round(per100pro  * scale * 10) / 10,
+    carbsG:   Math.round(per100carb * scale * 10) / 10,
+    fatG:     Math.round(per100fat  * scale * 10) / 10,
+    servingSize: servingSizeStr,
+  };
 }
 
 // ─── AI-assisted USDA candidate selection ────────────────────────────────────
