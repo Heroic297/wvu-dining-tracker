@@ -141,9 +141,15 @@ export default function LogMealPage() {
   const [manualCarbs, setManualCarbs] = useState("");
   const [manualFat, setManualFat] = useState("");
 
-  // Global quantity (for single items and dining hall items)
+  // Global quantity (for custom food single-item entry)
   const [quantity, setQuantity] = useState<number>(1);
   const [customQty, setCustomQty] = useState("");
+
+  // Per-menu-item quantity — keyed by item.id
+  const [menuItemQtys, setMenuItemQtys] = useState<Record<string, number>>({});
+  const [menuItemCustomQtys, setMenuItemCustomQtys] = useState<Record<string, string>>({});
+  const getMenuQty = (id: string) => menuItemQtys[id] ?? 1;
+  const getMenuCustomQty = (id: string) => menuItemCustomQtys[id] ?? "";
 
   // Per-component state for multi-item breakdown results
   // qty: multiplier per component, customQty: raw input string, selected: whether to include
@@ -204,10 +210,10 @@ export default function LogMealPage() {
   const addItem = async (item: any) => {
     try {
       const meal = await ensureMeal();
-      const qty = quantity;
+      const qty = getMenuQty(item.id);
       await api.addMealItem(meal.id, {
         diningItemId: item.id,
-        customName: item.name,   // ensures the name displays correctly in the meal log
+        customName: item.name,
         calories: Math.round((item.calories ?? 0) * qty),
         proteinG: Math.round((item.proteinG ?? 0) * qty * 10) / 10,
         carbsG:   Math.round((item.carbsG   ?? 0) * qty * 10) / 10,
@@ -215,6 +221,9 @@ export default function LogMealPage() {
         servings: qty,
         source: "wvu",
       });
+      // Reset this item's qty back to 1 after adding
+      setMenuItemQtys((prev) => { const n = { ...prev }; delete n[item.id]; return n; });
+      setMenuItemCustomQtys((prev) => { const n = { ...prev }; delete n[item.id]; return n; });
       await refetchMeals();
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] });
       toast({ title: `${qty === 1 ? item.name : `${item.name} ×${qty}`} added` });
@@ -456,53 +465,7 @@ export default function LogMealPage() {
           </div>
         )}
 
-        {/* Global quantity bar — shown only for non-multi-breakdown */}
-        {!isMultiBreakdown && (
-          <div className="bg-card border border-border rounded-xl px-4 py-3">
-            <div className="flex items-center gap-3 flex-wrap">
-              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide shrink-0">Portion</span>
-              <div className="flex gap-1.5 flex-wrap">
-                {QTY_PRESETS.map((q) => (
-                  <button
-                    key={q}
-                    type="button"
-                    data-testid={`button-qty-${q}`}
-                    onClick={() => { setQuantity(q); setCustomQty(""); }}
-                    className={`px-3 py-1 rounded-lg text-sm font-medium border transition-colors ${
-                      quantity === q && !customQty
-                        ? "bg-primary text-primary-foreground border-primary"
-                        : "bg-secondary text-secondary-foreground border-border hover:border-primary"
-                    }`}
-                  >
-                    {q === 1 ? "1×" : `${q}×`}
-                  </button>
-                ))}
-                <div className="flex items-center gap-1">
-                  <input
-                    type="number"
-                    min="0.1"
-                    step="0.1"
-                    placeholder="Custom"
-                    value={customQty}
-                    data-testid="input-qty-custom"
-                    onChange={(e) => {
-                      setCustomQty(e.target.value);
-                      const v = parseFloat(e.target.value);
-                      if (!isNaN(v) && v > 0) setQuantity(v);
-                    }}
-                    className={`w-20 h-8 rounded-lg border text-sm text-center font-medium bg-background px-2 outline-none transition-colors ${
-                      customQty ? "border-primary text-primary" : "border-border text-muted-foreground"
-                    } focus:border-primary`}
-                  />
-                  <span className="text-xs text-muted-foreground">×</span>
-                </div>
-              </div>
-              {quantity !== 1 && (
-                <span className="text-xs text-primary font-medium ml-auto">{quantity}× serving</span>
-              )}
-            </div>
-          </div>
-        )}
+        {/* Quantity bar moved into custom food section below */}
 
         {/* Dining hall menu */}
         {activeSlug && (
@@ -521,39 +484,86 @@ export default function LogMealPage() {
               </div>
             ) : (
               <div className="space-y-2">
-                {menuItems.map((item: any) => (
-                  <div
-                    key={item.id}
-                    data-testid={`menu-item-${item.id}`}
-                    className="bg-card border border-border rounded-xl p-3 flex items-center justify-between hover:border-primary/50 transition-colors"
-                  >
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">{item.name}</p>
-                      <div className="flex items-center gap-2 mt-0.5">
-                        <span className="text-xs text-muted-foreground">
-                          {quantity !== 1 && item.calories != null
-                            ? <><span className="line-through opacity-50">{item.calories}</span>{" "}<span className="text-primary font-medium">{Math.round(item.calories * quantity)}</span> kcal</>
-                            : <>{item.calories ?? "?"} kcal</>
-                          }
-                        </span>
-                        {item.proteinG != null && <span className="text-xs macro-protein">P:{fmt1(item.proteinG * quantity)}g</span>}
-                        {item.carbsG  != null && <span className="text-xs macro-carbs">C:{fmt1(item.carbsG  * quantity)}g</span>}
-                        {item.fatG    != null && <span className="text-xs macro-fat">F:{fmt1(item.fatG    * quantity)}g</span>}
-                        {item.nutritionSource === "ai_estimated" && (
-                          <Badge variant="outline" className="text-xs h-4 px-1">AI</Badge>
-                        )}
+                {menuItems.map((item: any) => {
+                  const iqty = getMenuQty(item.id);
+                  const icq  = getMenuCustomQty(item.id);
+                  return (
+                    <div
+                      key={item.id}
+                      data-testid={`menu-item-${item.id}`}
+                      className="bg-card border border-border rounded-xl p-3 space-y-2 hover:border-primary/50 transition-colors"
+                    >
+                      {/* Name + macros row */}
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium truncate">{item.name}</p>
+                          <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                            <span className="text-xs text-muted-foreground">
+                              {iqty !== 1 && item.calories != null
+                                ? <><span className="line-through opacity-50">{item.calories}</span>{" "}<span className="text-primary font-medium">{Math.round(item.calories * iqty)}</span> kcal</>
+                                : <>{item.calories ?? "?"} kcal</>
+                              }
+                            </span>
+                            {item.proteinG != null && <span className="text-xs macro-protein">P:{fmt1(item.proteinG * iqty)}g</span>}
+                            {item.carbsG  != null && <span className="text-xs macro-carbs">C:{fmt1(item.carbsG  * iqty)}g</span>}
+                            {item.fatG    != null && <span className="text-xs macro-fat">F:{fmt1(item.fatG    * iqty)}g</span>}
+                            {item.nutritionSource === "ai_estimated" && (
+                              <Badge variant="outline" className="text-xs h-4 px-1">AI</Badge>
+                            )}
+                          </div>
+                        </div>
+                        <Button
+                          size="sm" variant="ghost"
+                          onClick={() => addItem(item)}
+                          data-testid={`button-add-item-${item.id}`}
+                          className="ml-1 h-8 w-8 p-0 flex-shrink-0"
+                        >
+                          <Plus className="w-4 h-4" />
+                        </Button>
+                      </div>
+
+                      {/* Per-item quantity selector */}
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-xs text-muted-foreground mr-0.5">Qty:</span>
+                        {QTY_PRESETS.map((q) => (
+                          <button
+                            key={q}
+                            type="button"
+                            onClick={() => {
+                              setMenuItemQtys((prev) => ({ ...prev, [item.id]: q }));
+                              setMenuItemCustomQtys((prev) => ({ ...prev, [item.id]: "" }));
+                            }}
+                            className={`px-2 py-0.5 rounded text-xs font-medium border transition-colors ${
+                              iqty === q && !icq
+                                ? "bg-primary text-primary-foreground border-primary"
+                                : "bg-secondary text-secondary-foreground border-border hover:border-primary/60"
+                            }`}
+                          >
+                            {q === 1 ? "1×" : `${q}×`}
+                          </button>
+                        ))}
+                        <input
+                          type="number"
+                          min="0.1"
+                          step="0.1"
+                          placeholder="Custom"
+                          value={icq}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setMenuItemCustomQtys((prev) => ({ ...prev, [item.id]: val }));
+                            const v = parseFloat(val);
+                            if (!isNaN(v) && v > 0)
+                              setMenuItemQtys((prev) => ({ ...prev, [item.id]: v }));
+                          }}
+                          className={`w-16 h-6 rounded border text-xs text-center bg-background px-1 outline-none transition-colors ${
+                            icq ? "border-primary" : "border-border"
+                          } focus:border-primary`}
+                        />
+                        <span className="text-xs text-muted-foreground">×</span>
                       </div>
                     </div>
-                    <Button
-                      size="sm" variant="ghost"
-                      onClick={() => addItem(item)}
-                      data-testid={`button-add-item-${item.id}`}
-                      className="ml-2 h-8 w-8 p-0"
-                    >
-                      <Plus className="w-4 h-4" />
-                    </Button>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -563,6 +573,52 @@ export default function LogMealPage() {
         <div>
           <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">Add custom food</h2>
           <div className="bg-card border border-border rounded-xl p-4 space-y-3">
+
+            {/* Portion selector for custom food */}
+            {!isMultiBreakdown && (
+              <div className="flex items-center gap-3 flex-wrap pb-1">
+                <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide shrink-0">Portion</span>
+                <div className="flex gap-1.5 flex-wrap">
+                  {QTY_PRESETS.map((q) => (
+                    <button
+                      key={q}
+                      type="button"
+                      data-testid={`button-qty-${q}`}
+                      onClick={() => { setQuantity(q); setCustomQty(""); }}
+                      className={`px-3 py-1 rounded-lg text-sm font-medium border transition-colors ${
+                        quantity === q && !customQty
+                          ? "bg-primary text-primary-foreground border-primary"
+                          : "bg-secondary text-secondary-foreground border-border hover:border-primary"
+                      }`}
+                    >
+                      {q === 1 ? "1×" : `${q}×`}
+                    </button>
+                  ))}
+                  <div className="flex items-center gap-1">
+                    <input
+                      type="number"
+                      min="0.1"
+                      step="0.1"
+                      placeholder="Custom"
+                      value={customQty}
+                      data-testid="input-qty-custom"
+                      onChange={(e) => {
+                        setCustomQty(e.target.value);
+                        const v = parseFloat(e.target.value);
+                        if (!isNaN(v) && v > 0) setQuantity(v);
+                      }}
+                      className={`w-20 h-8 rounded-lg border text-sm text-center font-medium bg-background px-2 outline-none transition-colors ${
+                        customQty ? "border-primary text-primary" : "border-border text-muted-foreground"
+                      } focus:border-primary`}
+                    />
+                    <span className="text-xs text-muted-foreground">×</span>
+                  </div>
+                </div>
+                {quantity !== 1 && (
+                  <span className="text-xs text-primary font-medium ml-auto">{quantity}× serving</span>
+                )}
+              </div>
+            )}
 
             {/* Search row */}
             <div className="flex gap-2">
