@@ -97,6 +97,26 @@ export default function DashboardPage() {
     },
   });
 
+  // Derived data — use nullish coalescing so these are safe before data loads
+  const totals  = data?.totals  ?? { calories: 0, protein: 0, carbs: 0, fat: 0 };
+  const targets = data?.targets;
+  const meals   = data?.meals   ?? [];
+  const recentActivity = data?.activities ?? [];
+  const peakWeekToday   = data?.peakWeekToday ?? null;
+  const waterMl         = data?.waterMl ?? 0;
+  const waterTargetMl   = data?.waterTargetMl ?? null;
+  const enableWaterTracking = data?.enableWaterTracking ?? false;
+
+  // ALL hooks must be declared before any early returns
+  const waterMutation = useMutation({
+    mutationFn: async (delta: number) => {
+      const newVal = Math.max(0, waterMl + delta);
+      const res = await api.logWater(today, newVal);
+      return res.json();
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] }),
+  });
+
   if (isLoading) {
     return (
       <div className="p-4 md:p-6 space-y-5 max-w-3xl">
@@ -109,24 +129,6 @@ export default function DashboardPage() {
       </div>
     );
   }
-
-  const totals  = data?.totals  ?? { calories: 0, protein: 0, carbs: 0, fat: 0 };
-  const targets = data?.targets;
-  const meals   = data?.meals   ?? [];
-  const recentActivity = data?.activities ?? [];
-  const peakWeekToday   = data?.peakWeekToday ?? null;
-  const waterMl         = data?.waterMl ?? 0;
-  const waterTargetMl   = data?.waterTargetMl ?? null;
-  const enableWaterTracking = data?.enableWaterTracking ?? false;
-
-  const waterMutation = useMutation({
-    mutationFn: async (delta: number) => {
-      const newVal = Math.max(0, waterMl + delta);
-      const res = await api.logWater(today, newVal);
-      return res.json();
-    },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] }),
-  });
 
   const weightChartData = (weightData ?? [])
     .slice(0, 7)
