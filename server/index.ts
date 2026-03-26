@@ -82,6 +82,13 @@ storage.seedDiningLocations().catch(console.error);
     await pool.query(`
       ALTER TABLE users ADD COLUMN IF NOT EXISTS water_unit TEXT NOT NULL DEFAULT 'oz'
     `);
+    // Add usda_branded to nutrition_source enum if not already present
+    await pool.query(`
+      DO $$ BEGIN
+        ALTER TYPE nutrition_source ADD VALUE IF NOT EXISTS 'usda_branded';
+      EXCEPTION WHEN others THEN NULL;
+      END $$;
+    `);
     console.log("[db] migrations complete");
   } catch (err: any) {
     console.error("[db] Migration error:", err.message);
