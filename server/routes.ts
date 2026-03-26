@@ -305,7 +305,27 @@ export async function registerRoutes(
           return res.json({ menu: null, items: [], message: "No menu available for this selection" });
         }
 
-        const items = await storage.getDiningItems(menu.id);
+        let items = await storage.getDiningItems(menu.id);
+
+        // Deduplicate items by name in case of prior double-scrape bug.
+        // If duplicates exist, clean them from the DB so future reads are clean.
+        const seen = new Set<string>();
+        const unique = items.filter((item) => {
+          if (seen.has(item.name)) return false;
+          seen.add(item.name);
+          return true;
+        });
+        if (unique.length < items.length) {
+          console.log(`[routes] Deduplicating ${items.length - unique.length} duplicate items for menu ${menu.id}`);
+          // Keep only unique items — delete all and reinsert the deduplicated set
+          const uniqueInsert = unique.map(({ id: _id, ...rest }) => rest);
+          await storage.deleteDiningItemsByMenu(menu.id);
+          if (uniqueInsert.length > 0) {
+            await storage.createDiningItemsBulk(uniqueInsert as any);
+          }
+          items = await storage.getDiningItems(menu.id);
+        }
+
         res.json({ menu, items, location });
       } catch (err: any) {
         if (err.name === "ZodError") {
