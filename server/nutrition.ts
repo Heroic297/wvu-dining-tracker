@@ -148,12 +148,12 @@ const MULTI_SEPARATORS = /\band\b|,|&|\bwith\b|\bplus\b|\+/i;
 /** Brand name signals — suggests a packaged/branded product */
 const BRANDED_SIGNALS = [
   // Protein/supplement brands
-  /\b(core power|fairlife|premier protein|dymatize|optimum nutrition|on gold standard|iso\s*100|myprotein|ghost|reign|celsius|monster|red bull|gatorade|powerade|body armor|vitamin water)\b/i,
-  // Packaged food brands
-  /\b(kind bar|rxbar|quest|clif|larabar|nature valley|granola bar|protein bar|protein shake|muscle milk|ensure|boost|orgain|garden of life|vega|naked juice|odwalla)\b/i,
-  /\b(elite|advanced|isolate|whey|casein|mass gainer|pre.?workout|bcaa|creatine)\b/i,
-  // Generic branded signals
-  /\b(original|flavor|vanilla|chocolate|strawberry|cookies.?(and|&|n).?cream)\s+(flavor|protein|shake|bar|powder)/i,
+  /\b(core power|fairlife|premier protein|dymatize|optimum nutrition|on gold standard|iso\s*100|myprotein|ghost|reign|celsius|monster|red bull|gatorade|powerade|body armor|vitamin water|muscle milk|ensure|boost|orgain|garden of life|vega|naked juice|odwalla|rxbar|quest|clif|larabar|kind bar|rxbar|nature valley|rxbar|built bar|one bar|pure protein|power crunch|think thin|thinkThin|atkins)\b/i,
+  // Product type signals that imply branded
+  /\b(protein shake|protein bar|protein powder|protein drink|meal replacement|energy drink|sports drink|nutrition shake|granola bar|energy bar|whey protein|casein protein|mass gainer|pre.?workout|bcaa|creatine|collagen peptide)\b/i,
+  /\b(elite|isolate|hydrolyzed|zero sugar|sugar free)\s+(protein|shake|bar|powder|drink)/i,
+  // Brand + flavor pattern
+  /\b(vanilla|chocolate|strawberry|cookies.?(and|&|n).?cream|peanut butter|birthday cake|cinnamon|caramel)\s+(protein|shake|bar|powder|drink|flavor)/i,
 ];
 
 function isBrandedProductQuery(q: string): boolean {
@@ -402,6 +402,36 @@ Your outputs are used for elite athletic nutrition tracking. Accuracy is critica
   "servingSize": "<specific size>",
   "confidence": "<'high'|'medium'|'low'>"
 }`;
+
+  if (parsed.isBrandedProduct && !parsed.chain) {
+    return `${baseIdentity}
+
+TASK: Return the EXACT nutritional data for this specific branded product AS SOLD (the full package/bottle/container as a consumer would buy and consume it in one sitting, unless clearly portioned).
+
+CRITICAL RULES:
+- Return macros for the ENTIRE CONTAINER/BOTTLE, not per 100g, not per cup, not per half-serving
+- Core Power / Fairlife protein shakes are single-serve bottles — return the full bottle macros
+- Protein bars are single bars — return full bar macros
+- If a product is clearly multi-serving (e.g. a tub of protein powder), return per-scoop (1 serving)
+- Use the ACTUAL LABEL values. Do not estimate or extrapolate.
+- Core Power Elite 42g: 230 kcal, 42g protein, 9g carbs, 3.5g fat (full 14oz bottle)
+- Premier Protein shake: 160 kcal, 30g protein, 5g carbs, 3g fat (full 11oz bottle)
+- Quest bar: ~200 kcal, 21g protein, varies by flavor
+- If you are not certain of the exact label values, set confidence to "low"
+
+${jsonRule}
+
+Return:
+{
+  "calories": <integer, full package/single serve>,
+  "proteinG": <number, 1 decimal>,
+  "carbsG": <number, 1 decimal>,
+  "fatG": <number, 1 decimal>,
+  "servingSize": "<describe as '1 bottle (414ml)' or '1 bar (60g)' etc>",
+  "confidence": "<'high'|'medium'|'low'>",
+  "breakdown": []
+}`;
+  }
 
   if (parsed.chain) {
     return `${baseIdentity}
