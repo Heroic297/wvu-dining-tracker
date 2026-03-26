@@ -86,6 +86,7 @@ export const users = pgTable("users", {
   // Meet
   meetDate: date("meet_date"),
   enableWaterCut: boolean("enable_water_cut").default(false),
+  enableWaterTracking: boolean("enable_water_tracking").default(false),
   // Onboarding
   onboardingComplete: boolean("onboarding_complete").default(false),
   createdAt: timestamp("created_at").default(sql`now()`),
@@ -356,6 +357,32 @@ export const insertWeightLogSchema = createInsertSchema(weightLog).omit({
 });
 export type InsertWeightLog = z.infer<typeof insertWeightLogSchema>;
 export type WeightLog = typeof weightLog.$inferSelect;
+
+// ─── Water Logs ────────────────────────────────────────────────────────────
+
+export const waterLogs = pgTable(
+  "water_logs",
+  {
+    id: varchar("id", { length: 36 })
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    userId: varchar("user_id", { length: 36 })
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    date: date("date").notNull(),
+    /** Total ml consumed so far today */
+    mlLogged: integer("ml_logged").notNull().default(0),
+    updatedAt: timestamp("updated_at").default(sql`now()`),
+  },
+  (t) => [uniqueIndex("water_logs_user_date").on(t.userId, t.date)]
+);
+
+export const insertWaterLogSchema = createInsertSchema(waterLogs).omit({
+  id: true,
+  updatedAt: true,
+});
+export type InsertWaterLog = z.infer<typeof insertWaterLogSchema>;
+export type WaterLog = typeof waterLogs.$inferSelect;
 
 // ─── Invite Codes ────────────────────────────────────────────────────────────
 
