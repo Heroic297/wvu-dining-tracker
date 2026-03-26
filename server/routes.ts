@@ -676,6 +676,35 @@ export async function registerRoutes(
     }
   );
 
+  // ── Water Tracking ───────────────────────────────────────────────────────
+
+  app.get("/api/water", requireAuth as any, async (req: AuthRequest, res) => {
+    try {
+      const date = (req.query.date as string) ?? todayString();
+      const log = await storage.getWaterLog(req.user!.id, date);
+      res.json({ mlLogged: log?.mlLogged ?? 0, date });
+    } catch (err) {
+      res.status(500).json({ error: "Failed to get water log" });
+    }
+  });
+
+  app.post("/api/water", requireAuth as any, async (req: AuthRequest, res) => {
+    try {
+      const schema = z.object({
+        date: z.string(),
+        mlLogged: z.number().min(0),
+      });
+      const { date, mlLogged } = schema.parse(req.body);
+      const log = await storage.upsertWaterLog(req.user!.id, date, mlLogged);
+      res.json(log);
+    } catch (err: any) {
+      if (err.name === "ZodError") {
+        return res.status(400).json({ error: err.errors[0].message });
+      }
+      res.status(500).json({ error: "Failed to log water" });
+    }
+  });
+
   // ── Wearables ─────────────────────────────────────────────────────────────
 
   // Fitbit OAuth2
@@ -894,6 +923,31 @@ export async function registerRoutes(
         // Recent activity (7 days)
         const recentActivity = await storage.getRecentActivity(user.id, 7);
 
+        // Peak week — today's plan if within 14 days of meet
+        let peakWeekToday = null;
+        if (user.meetDate) {
+          const plan = generatePeakWeekPlan(user, user.meetDate);
+          peakWeekToday = plan.find((d) => d.isToday) ?? null;
+        }
+
+        // Water log for today
+        const waterLog = await storage.getWaterLog(user.id, date);
+
+        // Recommended water target (ml)
+        // Peak week overrides general recommendation
+        let waterTargetMl: number | null = null;
+        if (user.enableWaterTracking) {
+          if (peakWeekToday) {
+            // Parse peak week waterL string like "3–4 L" — use midpoint
+            const match = peakWeekToday.waterL.match(/([\d.]+)/);
+            waterTargetMl = match ? Math.round(parseFloat(match[1]) * 1000) : 3000;
+          } else if (user.weightKg && user.heightCm && user.sex) {
+            // General: ~35ml/kg bodyweight, adjusted for sex
+            const base = user.weightKg * 35;
+            waterTargetMl = Math.round(user.sex === "male" ? base * 1.1 : base);
+          }
+        }
+
         res.json({
           date,
           meals: mealsWithItems,
@@ -901,6 +955,10 @@ export async function registerRoutes(
           targets,
           activities: recentActivity,
           recentWeights,
+          peakWeekToday,
+          waterMl: waterLog?.mlLogged ?? 0,
+          waterTargetMl,
+          enableWaterTracking: user.enableWaterTracking ?? false,
         });
       } catch (err) {
         console.error("[dashboard]", err);
