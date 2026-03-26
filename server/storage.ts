@@ -73,6 +73,7 @@ export interface IStorage {
   getDiningItems(menuId: string): Promise<DiningItem[]>;
   createDiningItem(item: InsertDiningItem): Promise<DiningItem>;
   createDiningItemsBulk(items: InsertDiningItem[]): Promise<DiningItem[]>;
+  deleteDiningItemsByMenu(menuId: string): Promise<void>;
 
   // Nutrition Cache
   getNutritionCache(normalizedKey: string): Promise<NutritionCache | undefined>;
@@ -329,6 +330,10 @@ export class PgStorage implements IStorage {
   async createDiningItemsBulk(items: InsertDiningItem[]) {
     if (items.length === 0) return [];
     return db.insert(diningItems).values(items).returning();
+  }
+
+  async deleteDiningItemsByMenu(menuId: string) {
+    await db.delete(diningItems).where(eq(diningItems.menuId, menuId));
   }
 
   // ── Nutrition Cache ────────────────────────────────────────────────────────
