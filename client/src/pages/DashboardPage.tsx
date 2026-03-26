@@ -5,7 +5,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { PlusCircle, Flame, TrendingUp, UtensilsCrossed } from "lucide-react";
-import { AreaChart, Area, XAxis, Tooltip, ResponsiveContainer } from "recharts";
+import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 
 // ── Macro token colours (CSS vars resolved at runtime) ─────────────────────
 const TOKEN = {
