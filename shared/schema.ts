@@ -51,6 +51,7 @@ export const wearableSourceEnum = pgEnum("wearable_source", [
 export const nutritionSourceEnum = pgEnum("nutrition_source", [
   "wvu",
   "usda",
+  "usda_branded",
   "ai_estimated",
   "manual_exact",
 ]);
