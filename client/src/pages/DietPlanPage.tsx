@@ -38,6 +38,12 @@ const PHASE_STYLES: Record<
     badge: "bg-slate-500/20 text-slate-400",
     dot: "bg-slate-400",
   },
+  "Gut cut": {
+    border: "border-orange-500/40",
+    bg: "bg-orange-500/5",
+    badge: "bg-orange-500/20 text-orange-400",
+    dot: "bg-orange-400",
+  },
   Transition: {
     border: "border-yellow-500/40",
     bg: "bg-yellow-500/5",
@@ -623,6 +629,7 @@ export default function DietPlanPage() {
           <div className="flex flex-wrap gap-2">
             {[
               { label: "Normal prep", color: "bg-slate-400" },
+              { label: "Gut cut", color: "bg-orange-400" },
               { label: "Transition", color: "bg-yellow-400" },
               { label: "Depletion", color: "bg-amber-400" },
               { label: "Water load", color: "bg-blue-400" },
