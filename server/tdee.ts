@@ -559,11 +559,13 @@ export function generatePeakWeekPlan(
 
     } else if (i === 7) {
       // ── DAY 7: TRANSITION ────────────────────────────────────────────────────
+      // Mirror normal daily targets — consistent baseline entering peak week
       label = "7 days out";
       phase = "Transition";
-      carbsG = Math.round(weightKg * 2.5);
-      fatG = Math.round(weightKg * 1.0);
-      calories = (proteinG * 4) + (carbsG * 4) + (fatG * 9);
+      const normalTargets7 = computeDailyTargets(user, undefined, undefined);
+      calories = normalTargets7?.calories ?? Math.round(bmr * 1.4);
+      carbsG = normalTargets7?.carbsG ?? Math.round(weightKg * 2.5);
+      fatG = normalTargets7?.fatG ?? Math.round(weightKg * 1.0);
       sodiumMg = 2500;
       waterL = "4–5 L";
       waterTargetL = 4.5;
@@ -583,11 +585,16 @@ export function generatePeakWeekPlan(
 
     } else {
       // ── DAYS 8–14: NORMAL DEFICIT PHASE ─────────────────────────────────────
+      // Use the user's actual TDEE-based daily target rather than a fixed formula.
+      // This ensures the peak week display matches the Daily Targets section exactly.
       label = `${i} days out`;
       phase = "Normal prep";
-      carbsG = Math.round(weightKg * 3.5);
-      fatG = Math.round(weightKg * 1.0);
-      calories = (proteinG * 4) + (carbsG * 4) + (fatG * 9);
+      const tdee = calcTDEE(bmr, user.activityLevel ?? "moderately_active");
+      const normalTargets = computeDailyTargets(user, undefined, undefined);
+      // Fall back to macro formula only if profile incomplete
+      calories = normalTargets?.calories ?? Math.round(tdee * 0.9);
+      carbsG = normalTargets?.carbsG ?? Math.round(weightKg * 3.5);
+      fatG = normalTargets?.fatG ?? Math.round(weightKg * 1.0);
       sodiumMg = 2500;
       waterL = "3–4 L";
       waterTargetL = 3.5;
