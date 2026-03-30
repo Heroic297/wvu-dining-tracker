@@ -335,7 +335,10 @@ export default function DietPlanPage() {
   const currentLbs = latestWeight ? r1(kgToLbs(latestWeight)) : null;
   const targetLbs = user?.targetWeightKg ? r1(kgToLbs(user.targetWeightKg)) : null;
 
-  const waterCutEnabled = !!user?.enableWaterCut;
+  // Only show water cut buffer in progress if the user has the toggle on AND
+  // the automatic analysis confirms a water cut is actually needed at their cut%.
+  // If the analysis says Tier 0-1 (gut cut only), suppress the water cut UI.
+  const waterCutEnabled = !!user?.enableWaterCut && (waterCutAnalysis?.needsWaterCut ?? true);
   const bufferLbs = currentLbs ? r1(currentLbs * 0.01) : 0;
   const dietTargetLbs =
     targetLbs !== null && waterCutEnabled ? r1(targetLbs + bufferLbs) : targetLbs;
@@ -565,9 +568,16 @@ export default function DietPlanPage() {
 
       {/* ── DAILY TARGETS ──────────────────────────────────────────────────── */}
       <div className="bg-card border border-border rounded-xl p-4">
-        <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3 flex items-center gap-2">
-          <Target className="w-4 h-4" /> Daily targets
-        </h2>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-2">
+            <Target className="w-4 h-4" /> Daily targets
+          </h2>
+          {targets.isTrainingDay !== undefined && (
+            <span className="text-xs text-muted-foreground">
+              {targets.isTrainingDay ? "+150 kcal (training day)" : "−100 kcal (rest day)"}
+            </span>
+          )}
+        </div>
         <div className="space-y-3">
           <div className="flex justify-between items-center">
             <span className="text-sm">Calories</span>
