@@ -530,7 +530,7 @@ export default function DietPlanPage() {
           <div className="flex items-center justify-between">
             <p className="text-sm font-semibold flex items-center gap-2">
               <Waves className="w-4 h-4 text-blue-400" />
-              Water cut analysis
+              Weight class analysis
             </p>
             <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
               waterCutAnalysis.cutCategory === "unsafe" ? "bg-destructive/20 text-destructive"
@@ -538,10 +538,12 @@ export default function DietPlanPage() {
               : waterCutAnalysis.cutCategory === "moderate" ? "bg-blue-500/20 text-blue-400"
               : "bg-emerald-500/20 text-emerald-400"
             }`}>
-              {waterCutAnalysis.cutCategory === "unsafe" ? "Unsafe"
-                : waterCutAnalysis.cutCategory === "aggressive" ? "Aggressive"
-                : waterCutAnalysis.cutCategory === "moderate" ? "Moderate"
-                : "Minimal"}
+              {waterCutAnalysis.tier === 0 ? "At weight"
+                : waterCutAnalysis.tier === 1 ? "Gut cut only"
+                : waterCutAnalysis.tier === 2 ? "Water + gut cut"
+                : waterCutAnalysis.tier === 3 ? "Full protocol"
+                : waterCutAnalysis.tier === 4 ? "Aggressive"
+                : "Unsafe"}
             </span>
           </div>
           <div className="grid grid-cols-3 gap-2 text-center">
