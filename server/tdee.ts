@@ -333,6 +333,14 @@ export function generatePeakWeekPlan(
   // Get user's normal daily targets for Normal Prep days
   const normalTargets = computeDailyTargets(user, undefined, undefined);
 
+  // Personalised baseline water target: 38ml/kg for males, 32ml/kg for females
+  // Athletic adjustment: +10% for training days, rounded to nearest 0.1L
+  // This replaces the hardcoded "3–4 L" which was calibrated for ~80kg athletes
+  const baseWaterL = Math.round(weightKg * (user.sex === "female" ? 32 : 38) / 100) / 10;
+  // Format as a range: target ±0.3L
+  const normalWaterL = `${(baseWaterL - 0.2).toFixed(1)}–${(baseWaterL + 0.3).toFixed(1)} L`;
+  const normalWaterTargetL = baseWaterL;
+
   const days: PeakWeekDay[] = [];
 
   for (let i = 14; i >= 0; i--) {
@@ -355,7 +363,7 @@ export function generatePeakWeekPlan(
       carbsG = Math.round(weightKg * 4);   // 4g/kg: enough glycogen without GI distress
       fatG = Math.round(weightKg * 0.8);   // moderate fat — normal, not ultra-low
       calories = (proteinG * 4) + (carbsG * 4) + (fatG * 9);
-      sodiumMg = 2500; waterL = "3–4 L"; waterTargetL = 3.5;
+      sodiumMg = 2500; waterL = normalWaterL; waterTargetL = normalWaterTargetL;
       guidance = [
         "Pre-meet meal 2–3 hours before opening: white rice, lean protein, banana. Keep it familiar — never eat anything new on meet day.",
         "Between attempts: sip 150–250ml electrolyte drink (Pedialyte, Liquid IV). Small sips only — do NOT chug water between flights.",
@@ -426,7 +434,7 @@ export function generatePeakWeekPlan(
         calories = normalGutLoad?.calories ?? Math.round(bmr * 1.4);
         carbsG = normalGutLoad?.carbsG ?? Math.round(weightKg * 3.0);
         fatG = normalGutLoad?.fatG ?? Math.round(weightKg * 1.0);
-        sodiumMg = 2500; waterL = "3–4 L"; waterTargetL = 3.5;
+        sodiumMg = 2500; waterL = normalWaterL; waterTargetL = normalWaterTargetL;
         focus = i === 3
           ? tier === 0
             ? "Gut cut starts — switch to low-residue foods, same calories"
@@ -443,7 +451,7 @@ export function generatePeakWeekPlan(
           : [
               "Continue day 2 of gut cut. Same foods as yesterday: protein shakes, almonds, white rice, zero-fiber carbs.",
               "GI clearing is progressing. You may notice the scale moving without any strength loss — that's gut residue exiting, not muscle.",
-              "Hydrate normally (3–4 L). You want full hydration heading into meet day.",
+              `Hydrate normally (${normalWaterL}). You want to be well-hydrated at lift time.`,
               "Sodium normal. Keep eating salted almonds rather than unsalted.",
               "Lay out your kit tonight: singlet, belt, wraps, attempt card, post-weigh-in food.",
             ];
@@ -458,8 +466,8 @@ export function generatePeakWeekPlan(
         calories = (proteinG * 4) + (carbsG * 4) + (fatG * 9);
         // Sodium moderate-high: co-transports glucose into muscle via SGLT mechanism
         sodiumMg = i === 3 ? 3000 : 2500;
-        waterL = tier >= 2 ? (i === 3 ? "3–4 L" : "2–3 L") : "3–4 L";
-        waterTargetL = tier >= 2 ? (i === 3 ? 3.5 : 2.5) : 3.5;
+        waterL = tier >= 2 ? (i === 3 ? "3–4 L" : "2–3 L") : normalWaterL;
+        waterTargetL = tier >= 2 ? (i === 3 ? 3.5 : 2.5) : normalWaterTargetL;
         focus = i === 3
           ? `Carb load starts — ${carbsG}g carbs today (${carbPerKg}g/kg). Sodium stays moderate-high.`
           : `Final carb load day — ${carbsG}g carbs today. Muscles should feel full.`;
@@ -509,7 +517,7 @@ export function generatePeakWeekPlan(
         carbsG = normalDay4?.carbsG ?? Math.round(weightKg * 3.0);
         fatG = normalDay4?.fatG ?? Math.round(weightKg * 1.0);
         phase = "Transition";
-        sodiumMg = 2000; waterL = "3–4 L"; waterTargetL = 3.5;
+        sodiumMg = 2000; waterL = normalWaterL; waterTargetL = normalWaterTargetL;
         focus = "Active rest — prepare mentally, eat clean, carb load starts tomorrow";
         guidance = [
           "Rest day. No training. Save all energy for the platform.",
@@ -568,7 +576,7 @@ export function generatePeakWeekPlan(
         carbsG = normalGut56?.carbsG ?? Math.round(weightKg * 3.5);
         fatG = normalGut56?.fatG ?? Math.round(weightKg * 1.0);
         phase = "Normal prep";
-        sodiumMg = 2500; waterL = "3–4 L"; waterTargetL = 3.5;
+        sodiumMg = 2500; waterL = normalWaterL; waterTargetL = normalWaterTargetL;
         focus = i === 6
           ? "Normal eating — gut cut begins in 3 days, nothing to restrict yet"
           : "Continue normal eating — gut cut starts tomorrow";
@@ -590,7 +598,7 @@ export function generatePeakWeekPlan(
       calories = normal7?.calories ?? Math.round(bmr * 1.4);
       carbsG = normal7?.carbsG ?? Math.round(weightKg * 2.5);
       fatG = normal7?.fatG ?? Math.round(weightKg * 1.0);
-      sodiumMg = 2500; waterL = "4–5 L"; waterTargetL = 4.5;
+      sodiumMg = 2500; waterL = `${(normalWaterTargetL + 0.8).toFixed(1)}–${(normalWaterTargetL + 1.3).toFixed(1)} L`; waterTargetL = normalWaterTargetL + 1.0;
       focus = "Final heavy session — begin peak week mindset";
       guidance = [
         "Complete your last heavy training session today or tomorrow at the latest. After this, training tapers.",
@@ -611,7 +619,7 @@ export function generatePeakWeekPlan(
       calories = normal?.calories ?? Math.round(bmr * 1.4);
       carbsG = normal?.carbsG ?? Math.round(weightKg * 3.5);
       fatG = normal?.fatG ?? Math.round(weightKg * 1.0);
-      sodiumMg = 2500; waterL = "3–4 L"; waterTargetL = 3.5;
+      sodiumMg = 2500; waterL = normalWaterL; waterTargetL = normalWaterTargetL;
       focus = "Stay consistent — hit your macros, sleep 8 hours, reduce junk";
       guidance = [
         "Continue your normal deficit. Don't panic and crash diet — it's counterproductive this close to a meet.",
