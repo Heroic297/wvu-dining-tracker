@@ -8,7 +8,7 @@ import { storage } from "./storage.js";
 import { requireAuth, optionalAuth, hashPassword, verifyPassword, signToken, type AuthRequest } from "./auth.js";
 import { scrapeLocationDate, scrapeAllLocations, todayString } from "./scraper.js";
 import { lookupNutrition } from "./nutrition.js";
-import { computeDailyTargets, generateWaterCutPlan, generatePeakWeekPlan } from "./tdee.js";
+import { computeDailyTargets, generateWaterCutPlan, generatePeakWeekPlan, analyzeWaterCut, calcDailyWaterMl } from "./tdee.js";
 import {
   getFitbitAuthUrl,
   exchangeFitbitCode,
@@ -244,6 +244,15 @@ export async function registerRoutes(
         });
       }
 
+      // Most recent weight log for dynamic plan adjustments
+      const recentWeightLogs = await storage.getWeightLogs(user.id, 1);
+      const recentWeightKg = recentWeightLogs[0]?.weightKg ?? user.weightKg;
+
+      // Water cut analysis
+      const waterCutAnalysis = user.meetDate
+        ? analyzeWaterCut(user, recentWeightKg)
+        : null;
+
       // Water cut plan if within 7 days of meet
       let waterCutPlan = null;
       if (user.enableWaterCut && user.meetDate) {
@@ -253,11 +262,11 @@ export async function registerRoutes(
       // Peak week plan if within 14 days of meet
       let peakWeekPlan = null;
       if (user.meetDate) {
-        const plan = generatePeakWeekPlan(user, user.meetDate);
+        const plan = generatePeakWeekPlan(user, user.meetDate, recentWeightKg ?? undefined);
         if (plan.length > 0) peakWeekPlan = plan;
       }
 
-      res.json({ targets, waterCutPlan, peakWeekPlan });
+      res.json({ targets, waterCutPlan, peakWeekPlan, waterCutAnalysis });
     } catch (err) {
       console.error("[targets]", err);
       res.status(500).json({ error: "Failed to compute targets" });
@@ -931,27 +940,33 @@ export async function registerRoutes(
         const recentActivity = await storage.getRecentActivity(user.id, 7);
 
         // Peak week — today's plan if within 14 days of meet
+        // Pass most recent weight for dynamic protocol adjustments
+        const mostRecentWeight = recentWeights[0]?.weightKg ?? user.weightKg;
         let peakWeekToday = null;
         if (user.meetDate) {
-          const plan = generatePeakWeekPlan(user, user.meetDate);
+          const plan = generatePeakWeekPlan(user, user.meetDate, mostRecentWeight ?? undefined);
           peakWeekToday = plan.find((d) => d.isToday) ?? null;
         }
+
+        // Water cut analysis — uses most recent weight
+        const waterCutAnalysis = user.meetDate
+          ? analyzeWaterCut(user, mostRecentWeight)
+          : null;
 
         // Water log for today
         const waterLog = await storage.getWaterLog(user.id, date);
 
-        // Recommended water target (ml)
-        // Peak week overrides general recommendation
+        // Water target — available to ALL users with enableWaterTracking
+        // Peak week uses waterTargetL from the day's plan (evidence-based per protocol)
+        // General users use the weight/sex/age-based formula
         let waterTargetMl: number | null = null;
         if (user.enableWaterTracking) {
-          if (peakWeekToday) {
-            // Parse peak week waterL string like "3–4 L" — use midpoint
-            const match = peakWeekToday.waterL.match(/([\d.]+)/);
-            waterTargetMl = match ? Math.round(parseFloat(match[1]) * 1000) : 3000;
-          } else if (user.weightKg && user.heightCm && user.sex) {
-            // General: ~35ml/kg bodyweight, adjusted for sex
-            const base = user.weightKg * 35;
-            waterTargetMl = Math.round(user.sex === "male" ? base * 1.1 : base);
+          if (peakWeekToday?.waterTargetL) {
+            // Use the numeric target from the peak week plan directly
+            waterTargetMl = Math.round(peakWeekToday.waterTargetL * 1000);
+          } else {
+            // General recommendation based on weight, sex, age
+            waterTargetMl = calcDailyWaterMl(user);
           }
         }
 
@@ -963,6 +978,7 @@ export async function registerRoutes(
           activities: recentActivity,
           recentWeights,
           peakWeekToday,
+          waterCutAnalysis,
           waterMl: waterLog?.mlLogged ?? 0,
           waterTargetMl,
           enableWaterTracking: user.enableWaterTracking ?? false,
