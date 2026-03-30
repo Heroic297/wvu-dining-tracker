@@ -351,9 +351,10 @@ export function generatePeakWeekPlan(
     if (i === 0) {
       label = "Meet day"; phase = "Competition"; isKeyDay = true;
       focus = "Execute your plan — fuel between attempts, stay hydrated";
-      calories = Math.round(bmr * 1.5);
-      carbsG = Math.round(weightKg * 4);
-      fatG = Math.round(calories * 0.12 / 9);
+      // Macros drive calories — compute calories FROM macros, not independently
+      carbsG = Math.round(weightKg * 4);   // 4g/kg: enough glycogen without GI distress
+      fatG = Math.round(weightKg * 0.8);   // moderate fat — normal, not ultra-low
+      calories = (proteinG * 4) + (carbsG * 4) + (fatG * 9);
       sodiumMg = 2500; waterL = "3–4 L"; waterTargetL = 3.5;
       guidance = [
         "Pre-meet meal 2–3 hours before opening: white rice, lean protein, banana. Keep it familiar — never eat anything new on meet day.",
@@ -370,9 +371,12 @@ export function generatePeakWeekPlan(
     // ── DAY 1 (day before meet) ────────────────────────────────────────────────
     } else if (i === 1) {
       label = "1 day out"; phase = "Final prep"; isKeyDay = true;
-      calories = Math.round(bmr * 1.2);
-      carbsG = Math.round(weightKg * 5);
-      fatG = Math.round(calories * 0.08 / 9);
+      // Macros drive calories for consistency
+      carbsG = Math.round(weightKg * 5);   // high carbs: top off glycogen
+      // Fat: very low for Tier 2+ (water cut = want minimal digestive load)
+      //      normal for Tier 0-1 (no cut = no restriction needed)
+      fatG = tier >= 2 ? Math.round(weightKg * 0.4) : Math.round(weightKg * 0.9);
+      calories = (proteinG * 4) + (carbsG * 4) + (fatG * 9);
       sodiumMg = tier >= 2 ? 1200 : 2000;
       const stopWaterHours = tier >= 3 ? 12 : (tier >= 2 ? 10 : 0);
       waterL = tier >= 2 ? `< 1 L (stop ${stopWaterHours}h before weigh-in)` : "2–3 L";
@@ -483,7 +487,7 @@ export function generatePeakWeekPlan(
         carbsG = useDepletion ? Math.round(weightKg * 0.8) : Math.round(weightKg * 1.5);
         fatG = Math.round(weightKg * 0.7);
         calories = (proteinG * 4) + (carbsG * 4) + (fatG * 9);
-        phase = "Water load";
+        phase = "Transition"; // Cut day — not a load day
         sodiumMg = 600;
         waterL = "2–3 L (tapering)"; waterTargetL = 2.5;
         focus = "Cut both water AND sodium abruptly — kidneys still excreting at peak rate";
@@ -533,8 +537,10 @@ export function generatePeakWeekPlan(
         phase = useDepletion ? "Depletion" : "Water load";
         // HIGH sodium with HIGH water — primes both ADH and aldosterone
         sodiumMg = 3500;
-        waterL = i === 6 ? "5–6 L" : "6–7 L";
-        waterTargetL = i === 6 ? 5.5 : 6.5;
+        // Research standard: 100ml/kg bodyweight on loading days
+        const loadL = Math.round(weightKg * 0.1 * 10) / 10;
+        waterL = i === 6 ? `${loadL} L (100ml/kg)` : `${loadL} L (100ml/kg — peak load)`;
+        waterTargetL = loadL;
         focus = i === 6
           ? `Begin water + sodium loading simultaneously — drink ${waterL} with ${sodiumMg}mg sodium`
           : `Peak loading day — ${waterL} water + ${sodiumMg}mg sodium`;
