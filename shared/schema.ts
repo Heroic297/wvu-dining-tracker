@@ -52,6 +52,7 @@ export const nutritionSourceEnum = pgEnum("nutrition_source", [
   "wvu",
   "usda",
   "usda_branded",
+  "open_food_facts",
   "ai_estimated",
   "manual_exact",
 ]);
