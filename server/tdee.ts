@@ -1,16 +1,25 @@
 /**
- * TDEE / BMR calculations and diet planning logic.
+ * TDEE / BMR calculations and meet-prep planning logic.
  *
- * BMR: Mifflin-St Jeor equation (most validated for general population)
- * TDEE: BMR × activity multiplier
- * Macro splits: evidence-based powerlifting-oriented defaults
- *   - Protein: 1.8–2.2 g/kg bodyweight
- *   - Fat: 25–30% of calories
- *   - Carbs: remainder
+ * BMR: Mifflin-St Jeor equation
+ * Water cut protocol: evidence-based from powerliftingtowin.com, NIH PMC 2025, RP Strength
+ *
+ * Key science for water/sodium protocol:
+ *  - Water loading + SODIUM LOADING together prime excretion hormones (ADH + aldosterone)
+ *  - Sodium loading on water load day is CORRECT — not low sodium
+ *  - Both are cut simultaneously 1-2 days before weigh-in
+ *  - Glycogen depletion releases 3-4g water per gram glycogen = 2-4kg additional loss
+ *  - 2-hour weigh-in: avoid heavy glycogen depletion (not enough time to reload)
+ *  - 24-hour weigh-in: full depletion + reload is appropriate
+ *
+ * Water cut thresholds (% of bodyweight to cut):
+ *  ≤3%: Water/sodium manipulation only (safest, minimal performance impact)
+ *  ≤6%: Add glycogen depletion + water/sodium
+ *  ≤8%: Full protocol (glycogen + water + sodium + food residue)
+ *  >8%: Advise against — focus on long-term diet instead
  */
 import type { User } from "../shared/schema.js";
 
-/** Activity level multipliers */
 const ACTIVITY_MULTIPLIERS: Record<string, number> = {
   sedentary: 1.2,
   lightly_active: 1.375,
@@ -19,7 +28,6 @@ const ACTIVITY_MULTIPLIERS: Record<string, number> = {
   extra_active: 1.9,
 };
 
-/** Calculate age in years from date of birth string */
 function calcAge(dateOfBirth: string): number {
   const dob = new Date(dateOfBirth);
   const now = new Date();
@@ -29,7 +37,6 @@ function calcAge(dateOfBirth: string): number {
   return age;
 }
 
-/** Mifflin-St Jeor BMR */
 export function calcBMR(
   weightKg: number,
   heightCm: number,
@@ -40,11 +47,12 @@ export function calcBMR(
   return sex === "male" ? base + 5 : base - 161;
 }
 
-/** TDEE = BMR × activity multiplier */
 export function calcTDEE(bmr: number, activityLevel: string): number {
   const mult = ACTIVITY_MULTIPLIERS[activityLevel] ?? 1.55;
   return Math.round(bmr * mult);
 }
+
+// ── Interfaces ─────────────────────────────────────────────────────────────────
 
 export interface DailyTargets {
   calories: number;
@@ -53,26 +61,27 @@ export interface DailyTargets {
   fatG: number;
   tdee: number;
   bmr: number;
-  deficit: number; // negative = deficit, positive = surplus
+  deficit: number;
   isTrainingDay?: boolean;
 }
 
 export interface PeakWeekDay {
-  daysOut: number;         // days until meet (14 down to 0 = meet day)
-  label: string;           // e.g. "14 days out", "Meet day"
-  phase: string;           // e.g. "Normal training", "Depletion", "Carb load", "Meet day"
+  daysOut: number;
+  label: string;
+  phase: string;
   isToday: boolean;
   calories: number;
   proteinG: number;
   carbsG: number;
   fatG: number;
-  sodiumMg: number;        // target sodium in mg
-  waterL: string;          // e.g. "4–5 L"
-  focus: string;           // one-line priority for the day
-  guidance: string[];      // 3-5 bullet points of actionable advice
-  foods: string[];         // specific food suggestions
-  avoid: string[];         // foods/behaviours to avoid
-  isKeyDay: boolean;       // highlight in UI (water load, carb load, weigh-in)
+  sodiumMg: number;
+  waterL: string;
+  waterTargetL: number;     // numeric target in litres for water tracker
+  focus: string;
+  guidance: string[];
+  foods: string[];
+  avoid: string[];
+  isKeyDay: boolean;
 }
 
 export interface MeetPlan {
@@ -83,12 +92,21 @@ export interface MeetPlan {
   notes: string;
 }
 
-/**
- * Compute macro targets for a given day.
- * @param user - user profile
- * @param burnCalories - optional wearable-derived burn; overrides TDEE if provided
- * @param date - YYYY-MM-DD of the day being planned
- */
+/** Result of automatic water cut analysis */
+export interface WaterCutAnalysis {
+  currentWeightKg: number;
+  targetWeightKg: number;
+  cutKg: number;
+  cutPct: number;           // % of bodyweight
+  needsWaterCut: boolean;
+  cutCategory: "none" | "minimal" | "moderate" | "aggressive" | "unsafe";
+  useGlycogenDepletion: boolean;
+  weeksToMeet: number;
+  recommendation: string;
+}
+
+// ── computeDailyTargets ────────────────────────────────────────────────────────
+
 export function computeDailyTargets(
   user: User,
   burnCalories?: number,
@@ -106,18 +124,14 @@ export function computeDailyTargets(
     user.sex as "male" | "female"
   );
   const tdee = calcTDEE(bmr, user.activityLevel ?? "moderately_active");
-
-  // Use wearable burn if available; otherwise TDEE
   const dailyBurn = burnCalories ?? tdee;
 
-  // Determine if it's a training day
   let isTrainingDay = false;
   if (date && user.trainingDays) {
-    const dow = new Date(date).getDay(); // 0=Sun
+    const dow = new Date(date).getDay();
     isTrainingDay = (user.trainingDays as number[]).includes(dow);
   }
 
-  // Calculate required deficit/surplus
   let targetCalories = dailyBurn;
 
   if (user.goalType && user.targetWeightKg && user.targetDate) {
@@ -127,9 +141,6 @@ export function computeDailyTargets(
         (new Date(user.targetDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24)
       )
     );
-    // When water cut is enabled for a loss goal, reserve the final 1% of bodyweight
-    // for the water cut — so the daily calorie deficit only targets down to
-    // (targetWeightKg + 1% current bodyweight), not all the way to the weigh-in weight.
     const isLossGoal =
       user.goalType === "weight_loss" || user.goalType === "powerlifting_loss";
     const dietTargetKg =
@@ -137,27 +148,18 @@ export function computeDailyTargets(
         ? user.targetWeightKg + user.weightKg * 0.01
         : user.targetWeightKg;
     const kgToChange = dietTargetKg - user.weightKg;
-    // 1 kg fat ≈ 7700 kcal
     const dailyAdjust = (kgToChange * 7700) / daysLeft;
 
-    if (user.goalType === "weight_loss" || user.goalType === "powerlifting_loss") {
-      // Cap daily deficit at -1000 kcal for safety
-      targetCalories = Math.max(
-        dailyBurn + Math.max(dailyAdjust, -1000),
-        1200
-      );
+    if (isLossGoal) {
+      targetCalories = Math.max(dailyBurn + Math.max(dailyAdjust, -1000), 1200);
     } else if (user.goalType === "weight_gain" || user.goalType === "powerlifting_gain") {
-      // Cap daily surplus at +700 kcal
       targetCalories = dailyBurn + Math.min(dailyAdjust, 700);
     }
   }
 
-  // Powerlifting: adjust for training vs rest days
   if (
-    (user.goalType === "powerlifting_loss" ||
-      user.goalType === "powerlifting_gain") &&
-    user.trainingDays &&
-    date
+    (user.goalType === "powerlifting_loss" || user.goalType === "powerlifting_gain") &&
+    user.trainingDays && date
   ) {
     const adjustment = isTrainingDay ? 150 : -100;
     targetCalories += adjustment;
@@ -165,16 +167,10 @@ export function computeDailyTargets(
 
   targetCalories = Math.round(targetCalories);
 
-  // Macros
-  // Protein: 2.0 g/kg bodyweight (powerlifting standard)
   const proteinG = Math.round(user.weightKg * 2.0);
   const proteinCal = proteinG * 4;
-
-  // Fat: 28% of total calories
   const fatCal = Math.round(targetCalories * 0.28);
   const fatG = Math.round(fatCal / 9);
-
-  // Carbs: remainder
   const carbsCal = Math.max(0, targetCalories - proteinCal - fatCal);
   const carbsG = Math.round(carbsCal / 4);
 
@@ -190,10 +186,86 @@ export function computeDailyTargets(
   };
 }
 
+// ── Water cut analysis ─────────────────────────────────────────────────────────
+
 /**
- * Generate 7-day water cut plan for powerlifting meets.
- * Returns an array of 7 objects, index 0 = 7 days out, index 6 = meet day.
+ * Automatically determines if a water cut is needed and what protocol to use.
+ * Uses the athlete's most recent logged weight if available.
  */
+export function analyzeWaterCut(
+  user: User,
+  recentWeightKg?: number
+): WaterCutAnalysis | null {
+  if (!user.targetWeightKg || !user.meetDate) return null;
+
+  const currentWeightKg = recentWeightKg ?? user.weightKg ?? 0;
+  if (!currentWeightKg) return null;
+
+  const cutKg = currentWeightKg - user.targetWeightKg;
+  const cutPct = (cutKg / currentWeightKg) * 100;
+
+  const meetDate = new Date(user.meetDate + "T12:00:00");
+  const weeksToMeet = Math.max(0, (meetDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24 * 7));
+
+  let cutCategory: WaterCutAnalysis["cutCategory"];
+  let needsWaterCut = true;
+  let useGlycogenDepletion = false;
+  let recommendation = "";
+
+  if (cutKg <= 0) {
+    cutCategory = "none";
+    needsWaterCut = false;
+    recommendation = `You're already at or below your target weight class (${user.targetWeightKg}kg). Focus on staying fueled and performing your best.`;
+  } else if (cutPct <= 3) {
+    cutCategory = "minimal";
+    useGlycogenDepletion = false;
+    recommendation = `A ${cutPct.toFixed(1)}% cut (${cutKg.toFixed(1)}kg) is minimal and manageable. Water and sodium manipulation alone (no glycogen depletion) will get you there with minimal performance impact.`;
+  } else if (cutPct <= 6) {
+    cutCategory = "moderate";
+    useGlycogenDepletion = true;
+    recommendation = `A ${cutPct.toFixed(1)}% cut (${cutKg.toFixed(1)}kg) is moderate. This requires glycogen depletion + water/sodium manipulation. With a 24-hour weigh-in you'll have time to reload fully.`;
+  } else if (cutPct <= 8) {
+    cutCategory = "aggressive";
+    useGlycogenDepletion = true;
+    recommendation = `A ${cutPct.toFixed(1)}% cut (${cutKg.toFixed(1)}kg) is aggressive. This is at the upper limit of what's safe for performance. Full protocol required. Strongly consider competing at a higher weight class instead.`;
+  } else {
+    cutCategory = "unsafe";
+    needsWaterCut = false;
+    recommendation = `A ${cutPct.toFixed(1)}% cut (${cutKg.toFixed(1)}kg) is unsafe and will significantly impair performance. Focus on long-term diet to reach your target weight class — you need more time on the scale to make this work safely.`;
+  }
+
+  return {
+    currentWeightKg,
+    targetWeightKg: user.targetWeightKg,
+    cutKg,
+    cutPct,
+    needsWaterCut,
+    cutCategory,
+    useGlycogenDepletion,
+    weeksToMeet,
+    recommendation,
+  };
+}
+
+// ── Daily water target calculation ─────────────────────────────────────────────
+
+/**
+ * Calculate the recommended daily water intake in ml for non-peak-week users.
+ * Based on: EFSA recommendations (~35ml/kg for adults), adjusted for sex and age.
+ * Men: 38ml/kg | Women: 32ml/kg | Reduce 5% per decade after age 50
+ */
+export function calcDailyWaterMl(user: User): number {
+  if (!user.weightKg) return 3000;
+  const sex = user.sex ?? "male";
+  const age = user.dateOfBirth ? calcAge(user.dateOfBirth) : 30;
+  const baseMlPerKg = sex === "male" ? 38 : 32;
+  const ageReduction = age > 50 ? Math.min(0.20, ((age - 50) / 10) * 0.05) : 0;
+  const mlPerKg = baseMlPerKg * (1 - ageReduction);
+  return Math.round(user.weightKg * mlPerKg / 100) * 100; // round to nearest 100ml
+}
+
+// ── generateWaterCutPlan ───────────────────────────────────────────────────────
+
 export function generateWaterCutPlan(
   user: User,
   meetDate: string
@@ -208,12 +280,7 @@ export function generateWaterCutPlan(
 
   const weightKg = user.weightKg ?? 80;
   const bmr = user.heightCm && user.dateOfBirth && user.sex
-    ? calcBMR(
-        weightKg,
-        user.heightCm,
-        calcAge(user.dateOfBirth),
-        user.sex as "male" | "female"
-      )
+    ? calcBMR(weightKg, user.heightCm, calcAge(user.dateOfBirth), user.sex as "male" | "female")
     : 1800;
 
   const plans: MeetPlan[] = [];
@@ -225,103 +292,90 @@ export function generateWaterCutPlan(
     let notes: string;
 
     if (i === 7) {
-      // 7 days out: normal intake, high water
       targetCalories = Math.round(bmr * 1.4);
       carbsG = Math.round((targetCalories * 0.45) / 4);
       waterIntake = "4–5 L";
-      notes =
-        "Normal training week. Load up on water to begin adaptation. No dietary restrictions yet.";
+      notes = "Normal training week. Begin hydrating consistently. No dietary restrictions yet.";
     } else if (i >= 5) {
-      // 5-6 days: slight reduction
       targetCalories = Math.round(bmr * 1.2);
       carbsG = Math.round((targetCalories * 0.35) / 4);
-      waterIntake = "3–4 L";
-      notes =
-        "Begin reducing sodium and processed foods. Keep protein high. Slightly reduce carbs.";
+      waterIntake = i === 6 ? "5–6 L (begin water load)" : "6–7 L (water + sodium load)";
+      notes = i === 6
+        ? "Begin water loading. Increase sodium intake to 3,000–4,000mg today to prime aldosterone response."
+        : "Continue high water + sodium loading. Both water AND sodium high today — this maximises the excretion response when you cut both on day 3.";
     } else if (i >= 3) {
-      // 3-4 days: carb reduction, water loading
-      targetCalories = Math.round(bmr * 1.1);
-      carbsG = Math.round((targetCalories * 0.2) / 4);
-      waterIntake = i === 4 ? "5–6 L (water load)" : "3–4 L";
-      notes =
-        i === 4
-          ? "WATER LOADING DAY — drink maximum water to prime kidney excretion. Low carbs, no excess sodium."
-          : "Continue low carb, moderate protein. Begin tapering water intake.";
+      targetCalories = Math.round(bmr * 1.0);
+      carbsG = i === 4 ? Math.round(weightKg * 1.5) : 30;
+      waterIntake = i === 4 ? "3–4 L (begin taper)" : "1–2 L";
+      notes = i === 4
+        ? "Begin cutting water AND sodium simultaneously. Drop both abruptly — your body is still in high-excretion mode from loading days."
+        : "Very low water and sodium. Low carb. Light, easy-to-digest foods only.";
     } else if (i === 2) {
-      // 2 days out
-      targetCalories = Math.round(bmr * 0.9);
-      carbsG = 30;
-      waterIntake = "2–3 L";
-      notes =
-        "Reduce water significantly. Very low carb. Avoid sodium. Light foods only.";
-    } else {
-      // 1 day out (final cut day)
-      targetCalories = Math.round(bmr * 0.75);
+      targetCalories = Math.round(bmr * 0.85);
       carbsG = 20;
       waterIntake = "< 1 L (sip only)";
-      notes =
-        "Minimal food and water. Weigh in as early as possible. After weigh-in: rehydrate immediately with electrolytes + carbs.";
+      notes = "Minimal water and food. Weigh yourself frequently. Stop all water 10–12 hours before weigh-in time.";
+    } else {
+      targetCalories = Math.round(bmr * 0.75);
+      carbsG = 0;
+      waterIntake = "0 until after weigh-in";
+      notes = "Nothing until weigh-in. Post weigh-in: 500ml electrolyte drink immediately, then 100–150g carbs every 2 hours.";
     }
 
-    plans.push({
-      daysOut: i,
-      targetCalories,
-      waterIntake,
-      carbsG,
-      notes,
-    });
+    plans.push({ daysOut: i, targetCalories, waterIntake, carbsG, notes });
   }
 
   return plans;
 }
 
+// ── generatePeakWeekPlan ───────────────────────────────────────────────────────
+
 /**
- * Generate a 14-day peak week protocol.
+ * Evidence-based 14-day peak week protocol for powerlifting.
  *
- * Science basis:
- *   Days 14–8: Normal training + slight taper. Maintain deficit but don’t add stress.
- *   Days 7–5:  Depletion phase. Low carb (<100g/day) to empty glycogen stores so
- *              the subsequent carb load fills them more completely (supercompensation).
- *   Day 4:     Water loading. Drink 6–7 L to prime kidneys for excretion later.
- *   Days 3–2:  Carb load. 6–8 g/kg bodyweight carbohydrates. Low fat, low fiber.
- *              Sodium moderate-high to drive glycogen into muscle cells with water.
- *   Day 1:     Rest + top-off carbs. Light meals, no new foods. Early bedtime.
- *   Meet day:  Weigh-in protocol + rehydration/refueling plan.
+ * CORRECTED from previous version:
+ *  - Water load day: HIGH sodium (3,000–4,000mg) + high water — this is correct.
+ *    Water + sodium are loaded TOGETHER, then cut TOGETHER abruptly.
+ *    Low sodium on water load day was incorrect and blunted the hormonal response.
+ *  - Glycogen depletion is now gated by cutCategory (≤3% cut skips it entirely)
+ *  - Daily weigh-ins feed into a real-time cutPct calculation
  *
- * Returns days from 14 down to 0 (meet day), each marked with isToday.
+ * Sources: powerliftingtowin.com, RP Strength, NIH PMC 2025, Ideal Nutrition dietitian guide
  */
 export function generatePeakWeekPlan(
   user: User,
-  meetDate: string
+  meetDate: string,
+  recentWeightKg?: number   // most recent weigh-in — used for dynamic adjustments
 ): PeakWeekDay[] {
   const target = new Date(meetDate + "T12:00:00");
   const now = new Date();
-  // Use Eastern time for date comparisons so the day rolls over at midnight EST
   const todayStr = new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/New_York",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
+    year: "numeric", month: "2-digit", day: "2-digit",
   }).format(now);
 
   const daysToMeet = Math.round(
     (target.getTime() - now.setHours(12, 0, 0, 0)) / (1000 * 60 * 60 * 24)
   );
 
-  // Only generate when within 14 days of the meet
   if (daysToMeet > 14 || daysToMeet < 0) return [];
 
-  const weightKg = user.weightKg ?? 80;
+  const weightKg = recentWeightKg ?? user.weightKg ?? 80;
   const bmr = user.heightCm && user.dateOfBirth && user.sex
     ? calcBMR(weightKg, user.heightCm, calcAge(user.dateOfBirth), user.sex as "male" | "female")
     : 1800;
 
-  // Protein stays high throughout: 2.2 g/kg (muscle preservation under deficit)
+  // Protein stays high: 2.2g/kg throughout (muscle preservation)
   const proteinG = Math.round(weightKg * 2.2);
+
+  // Analyse cut to determine protocol intensity
+  const analysis = analyzeWaterCut(user, recentWeightKg);
+  const useGlycogen = analysis?.useGlycogenDepletion ?? (user.enableWaterCut ?? false);
+  const cutKg = analysis?.cutKg ?? 0;
+  const cutPct = analysis?.cutPct ?? 0;
 
   const days: PeakWeekDay[] = [];
 
-  // Build days 14 down to 0
   for (let i = 14; i >= 0; i--) {
     const dayDate = new Date(target);
     dayDate.setDate(dayDate.getDate() - i);
@@ -335,6 +389,7 @@ export function generatePeakWeekPlan(
     let fatG: number;
     let sodiumMg: number;
     let waterL: string;
+    let waterTargetL: number;
     let guidance: string[];
     let foods: string[];
     let avoid: string[];
@@ -346,131 +401,182 @@ export function generatePeakWeekPlan(
       label = "Meet day";
       phase = "Competition";
       focus = "Execute your plan — fuel between attempts, stay hydrated";
-      calories = Math.round(bmr * 1.6);
-      carbsG = Math.round(weightKg * 4);   // ~4 g/kg on meet day
+      calories = Math.round(bmr * 1.5);
+      carbsG = Math.round(weightKg * 4);
       fatG = Math.round(calories * 0.15 / 9);
       sodiumMg = 2500;
       waterL = "3–4 L";
+      waterTargetL = 3.5;
       isKeyDay = true;
       guidance = [
-        "Eat a familiar pre-meet meal 2–3 hours before opening attempts: white rice, lean protein, banana.",
-        "Between attempts sip water + electrolytes (Pedialyte, Liquid IV, or similar).",
-        "After each flight eat 30–50g fast carbs: rice cakes, dates, gummy bears.",
-        "Avoid anything high in fiber or fat on meet day — gastric distress kills attempts.",
-        "If you did a water cut: immediately after weigh-in drink 500 mL electrolyte solution, then eat 100–150g carbs in the next 2 hours.",
+        "Pre-meet meal 2–3 hours before opening: white rice, lean protein, banana. Keep it familiar.",
+        "Between attempts: sip 200–300ml electrolyte drink (Pedialyte, Liquid IV). Do NOT chug water.",
+        "After each flight: 30–50g fast carbs — rice cakes, dates, gummy bears, white bread with honey.",
+        "Avoid anything high in fiber or fat — GI distress ruins attempts.",
+        cutKg > 0
+          ? `Post weigh-in rehydration: drink 500ml electrolyte solution immediately, then eat 100–150g carbs every 2 hours until attempts. You have ${Math.round(daysToMeet * 0)} hours — prioritise carbs over water.`
+          : "You didn't cut weight — you have a massive advantage. Stay fuelled and trust your prep.",
       ];
-      foods = ["White rice", "White bread / rice cakes", "Banana / dates", "Lean chicken or turkey", "Gatorade / Pedialyte", "Honey packets"];
-      avoid = ["High-fiber vegetables", "Fatty meats", "New foods", "Alcohol", "Excess caffeine"];
+      foods = ["White rice", "Rice cakes + honey", "Banana / dates", "Lean chicken or turkey", "Pedialyte / Liquid IV", "Gummy bears / gels"];
+      avoid = ["High-fiber vegetables", "Fatty meats", "New foods you haven't eaten before", "Alcohol", "Excess caffeine"];
 
     } else if (i === 1) {
       // ── DAY BEFORE MEET ──────────────────────────────────────────────────────
-      label = "Meet day −1";
+      label = "1 day out";
       phase = "Final prep";
-      focus = "Rest, top-off glycogen, early bedtime";
-      calories = Math.round(bmr * 1.3);
-      carbsG = Math.round(weightKg * 5);   // top off glycogen
-      fatG = Math.round(calories * 0.12 / 9);
-      sodiumMg = 2000;
-      waterL = user.enableWaterCut ? "< 1 L (sip only)" : "2–3 L";
+      focus = user.enableWaterCut
+        ? cutPct > 3 ? "Final water cut — stop fluids 10–12 hours before weigh-in" : "Stop water 10–12 hours before weigh-in, rest and carb top-off"
+        : "Rest, top-off glycogen, early bedtime";
+      calories = Math.round(bmr * 1.2);
+      carbsG = Math.round(weightKg * 5);
+      fatG = Math.round(calories * 0.10 / 9);
+      sodiumMg = 1500; // LOW sodium now — both sodium and water are cut together
+      waterL = user.enableWaterCut ? "< 1 L (stop 10–12h before weigh-in)" : "2–3 L";
+      waterTargetL = user.enableWaterCut ? 0.8 : 2.5;
       isKeyDay = true;
       guidance = [
-        "Eat 4–5 small carb-dense meals throughout the day — no single large meal.",
-        "Stick exclusively to foods you have eaten many times before. Zero experiment risk.",
-        "Lay out your kit, singlet, belt, and food for tomorrow.",
+        "Eat 4–6 small carb-dense meals throughout the day — white rice, rice cakes, banana, white bread.",
+        "Sodium must be very low today (~1,500mg) — no added salt, no processed foods.",
         user.enableWaterCut
-          ? "Water cut: sip water only to take supplements. Weigh in at first opportunity tomorrow."
-          : "Keep water moderate — you should wake up feeling full and slightly heavy, that\'s normal.",
-        "Sleep 8+ hours. Set two alarms. Melatonin (0.5–1 mg) is fine if needed.",
+          ? `Stop all water intake 10–12 hours before your weigh-in time tomorrow. Set an alarm.`
+          : "Keep water moderate. Wake up feeling full and slightly heavy — that's glycogen and it's exactly what you want.",
+        "Lay out everything for tomorrow: singlet, belt, wraps, attempt spreadsheet, food for post weigh-in.",
+        "Sleep 8+ hours. Your body rebuilds overnight. Melatonin 0.5mg is fine if needed.",
       ];
-      foods = ["White rice", "Rice cakes with honey", "Banana", "White pasta", "Lean chicken breast", "Low-fat Greek yogurt"];
-      avoid = ["High-fat foods", "High-fiber vegetables", "Beans / legumes", "New foods", "Alcohol"];
+      foods = ["White rice", "Rice cakes + honey/jam", "Banana", "White pasta", "Lean chicken breast"];
+      avoid = ["Salt / sodium", "High-fat foods", "High-fiber vegetables", "Beans / legumes", "New foods", "Alcohol"];
 
     } else if (i <= 3) {
-      // ── CARB LOAD (days 2–3 out) ────────────────────────────────────────────
+      // ── CARB LOAD (days 2–3 out) ─────────────────────────────────────────────
       label = `${i} days out`;
       phase = "Carb load";
       isKeyDay = true;
-      const carbPerKg = i === 3 ? 6 : 7;  // ramp up: 6 g/kg on day 3, 7 g/kg on day 2
+      const carbPerKg = i === 3 ? 6 : 7;
       carbsG = Math.round(weightKg * carbPerKg);
-      fatG = Math.round(weightKg * 0.5);   // minimal fat to leave room for carbs
+      fatG = Math.round(weightKg * 0.5);
       calories = (proteinG * 4) + (carbsG * 4) + (fatG * 9);
-      sodiumMg = i === 3 ? 3000 : 2500;   // moderate-high sodium drives water into muscle
-      waterL = i === 3 ? "4–5 L" : "3–4 L";
+      // Sodium is moderate-high on carb load days — sodium drives glucose and water INTO muscle cells
+      sodiumMg = i === 3 ? 3000 : 2500;
+      waterL = i === 3 ? "3–4 L" : "2–3 L";
+      waterTargetL = i === 3 ? 3.5 : 2.5;
       focus = i === 3
-        ? `Carb load begins — target ${carbsG}g carbs today (${carbPerKg} g/kg)`
-        : `Continue carb load — ${carbsG}g carbs today (${carbPerKg} g/kg)`;
+        ? `Carb load begins — ${carbsG}g carbs today (${carbPerKg} g/kg). Sodium stays moderate.`
+        : `Continue carb load — ${carbsG}g carbs today. Keep sodium ~2,500mg.`;
       guidance = [
-        `Eat ${carbsG}g carbohydrates today spread across 5–6 meals — that\'s roughly ${Math.round(carbsG / 5)}g per meal.`,
-        "Choose LOW-FIBER, easily digestible carbs only: white rice, white bread, rice cakes, pasta, cream of rice, bananas.",
-        `Keep sodium at ~${sodiumMg}mg today — sodium helps shuttle glucose into muscle cells with water (a good kind of fullness).`,
-        "Fat must be very low (<${fatG}g) so your body can store maximum glycogen without gut distress.",
+        `Target ${carbsG}g carbohydrates spread across 5–6 meals — approximately ${Math.round(carbsG / 5)}g per meal.`,
+        "Choose LOW-FIBER easily-digested carbs only: white rice, white bread, rice cakes, cream of rice, bananas, white pasta.",
+        i === 3
+          ? `Sodium at ${sodiumMg}mg today — sodium helps shuttle glucose AND water into muscle cells, creating fullness and hardness. This is intentional.`
+          : `Sodium at ${sodiumMg}mg today — slightly lower as you approach weigh-in, but still not zero. Sodium is still helping glycogen storage.`,
+        "Fat must be very low (under 50g) — fat blunts glycogen synthesis and causes GI distress at these carb levels.",
         i === 2
-          ? "Your muscles should feel noticeably full and hard by tonight — this is supercompensation working."
-          : "You may feel flat after depletion — don\'t panic, the fullness comes by tomorrow.",
+          ? "Muscles should feel noticeably full and firm by tonight. That fullness is glycogen supercompensation — you are now stronger than you were a week ago."
+          : "You may feel flat after depletion days — don't panic. The fullness arrives tomorrow.",
       ];
-      foods = ["White rice (large portions)", "Rice cakes + honey/jam", "White pasta", "Cream of rice", "Banana / dried mango", "Low-fat Greek yogurt", "White bread + turkey"];
-      avoid = ["Oats / brown rice / quinoa (too much fiber)", "Broccoli / leafy greens", "High-fat cheese", "Nuts", "Alcohol"];
+      foods = ["White rice (large portions)", "Rice cakes + honey or jam", "White pasta", "Cream of rice", "Banana / dried mango", "Low-fat Greek yogurt", "White bread + turkey"];
+      avoid = ["Oats / brown rice / quinoa (high fiber)", "Broccoli / leafy greens", "Cheese / nuts", "High-fat sauces", "Alcohol"];
 
     } else if (i === 4) {
-      // ── WATER LOADING DAY ────────────────────────────────────────────────────
+      // ── WATER + SODIUM CUT DAY ───────────────────────────────────────────────
+      // This is where you STOP the loading, not continue it.
+      // Both water and sodium are dropped abruptly to maximise excretion.
       label = "4 days out";
-      phase = "Water load";
-      isKeyDay = true;
-      carbsG = Math.round(weightKg * 1.5);  // still low carb
-      fatG = Math.round(calories * 0.25 / 9);
-      calories = Math.round(bmr * 1.0);
-      fatG = Math.round((calories - proteinG * 4 - carbsG * 4) / 9);
-      if (fatG < 20) fatG = 20;
-      sodiumMg = 1500;  // low sodium while water loading
-      waterL = "6–7 L";
-      focus = "Drink 6–7 L water today to prime kidney excretion for the cut";
-      guidance = [
-        "Drink 6–7 litres of water today spread evenly — roughly 1 litre every 2 waking hours.",
-        "Keep sodium LOW today (~1500 mg) so high water intake doesn\'t raise sodium relative to volume.",
-        "This large water load signals your kidneys to increase excretion rate. When you stop drinking tomorrow, your kidneys keep excreting at this elevated rate — that\'s how you shed water quickly.",
-        "Continue low carb today to keep glycogen depleted for maximum carb load absorption on days 2–3.",
-        "Take electrolytes (potassium, magnesium) to avoid hyponatremia from large water volume.",
-      ];
-      foods = ["Lean protein (chicken, fish, egg whites)", "Green vegetables", "Unsalted rice cakes", "Cucumber / celery", "Electrolyte tablets (no sugar)"];
-      avoid = ["Salty foods", "Processed meats", "Restaurant food", "Pre-workout with high sodium"];
+      phase = user.enableWaterCut ? "Water + sodium cut begins" : "Pre-carb load rest";
+      isKeyDay = user.enableWaterCut;
+      carbsG = Math.round(weightKg * 1.0);
+      fatG = Math.round(weightKg * 0.7);
+      calories = (proteinG * 4) + (carbsG * 4) + (fatG * 9);
+      sodiumMg = user.enableWaterCut ? 800 : 2000;  // DROP sodium abruptly
+      waterL = user.enableWaterCut ? "2–3 L (tapering)" : "3–4 L";
+      waterTargetL = user.enableWaterCut ? 2.5 : 3.5;
+      focus = user.enableWaterCut
+        ? "CUT water + sodium abruptly today — your kidneys are still in high-excretion mode"
+        : "Active rest day — stay off your feet, eat clean, prepare mentally";
+      guidance = user.enableWaterCut
+        ? [
+            "STOP both water loading and sodium simultaneously today. Abrupt cessation is key — your kidneys will continue excreting at the accelerated rate from loading days.",
+            `Limit water to 2–3 L today, tapering down. Sodium under ${sodiumMg}mg — avoid all added salt and processed food.`,
+            "This is the day where the weight comes off. You may urinate frequently throughout the day.",
+            "Continue low carb to keep glycogen depleted for the carb load starting tomorrow.",
+            "Weigh yourself morning and evening to track progress. Log it in the app.",
+          ]
+        : [
+            "Rest day — no training. You're fully tapered. Save your energy.",
+            "Eat clean whole foods. Keep carbs moderate and fiber low to begin clearing GI residue.",
+            "Sodium stays moderate (~2,000mg) — no need to cut yet if you're not doing a water cut.",
+            "Hydrate well. You need water to store tomorrow's carbs effectively.",
+            "Mental preparation: review your openers, visualise your attempts, confirm your rack heights.",
+          ];
+      foods = user.enableWaterCut
+        ? ["Chicken breast (unsalted)", "Egg whites", "Fish (fresh, not canned)", "Cucumber", "Green vegetables (small amounts)"]
+        : ["Lean protein", "White rice (moderate)", "Vegetables", "Fruit"];
+      avoid = user.enableWaterCut
+        ? ["Any added salt", "Processed meats", "Canned foods", "Restaurant food", "Sports drinks with sodium"]
+        : ["Heavy training", "Salty processed foods", "Alcohol"];
 
     } else if (i <= 6) {
-      // ── DEPLETION (days 5–6 out) ─────────────────────────────────────────────
+      // ── WATER + SODIUM LOADING (days 5–6 out) ───────────────────────────────
+      // CORRECTED: Both water AND sodium are loaded together.
+      // High sodium with high water primes both ADH and aldosterone suppression.
       label = `${i} days out`;
-      phase = "Depletion";
-      carbsG = Math.round(weightKg * 0.8);  // ~0.8 g/kg — very low
+      phase = useGlycogen ? "Depletion + water/sodium load" : "Water/sodium load";
+      isKeyDay = user.enableWaterCut;
+      carbsG = useGlycogen ? Math.round(weightKg * 0.8) : Math.round(weightKg * 2.5);
       fatG = Math.round(weightKg * 0.8);
       calories = (proteinG * 4) + (carbsG * 4) + (fatG * 9);
-      sodiumMg = 2000;
-      waterL = "4–5 L";
-      focus = "Deplete glycogen stores — low carb, high protein, normal water";
-      guidance = [
-        `Keep carbs under ${carbsG}g today. The goal is to empty muscle glycogen so the carb load (days 3–2) fills it beyond normal capacity — this is glycogen supercompensation.`,
-        "Train normally if scheduled — training accelerates glycogen depletion and makes the load more effective.",
-        "Protein should be high (${proteinG}g) to preserve muscle during depletion.",
-        "Sodium should be moderate — around 2000 mg. No need to cut yet.",
-        "You may feel flat, low energy, and irritable — this is expected and temporary. Trust the process.",
-      ];
-      foods = ["Chicken breast", "Egg whites", "Fish", "Low-fat cottage cheese", "Green vegetables", "Unsalted rice cakes (small amount)"];
-      avoid = ["Rice", "Bread", "Pasta", "Fruit juice", "Sports drinks", "Any sugary food"];
+      // HIGH sodium on loading days — this is the correct protocol
+      sodiumMg = 3500;
+      waterL = i === 6 ? "5–6 L" : "6–7 L";
+      waterTargetL = i === 6 ? 5.5 : 6.5;
+      focus = i === 6
+        ? `Begin water + sodium loading — drink ${waterL} and eat ${sodiumMg}mg sodium today`
+        : `Peak water + sodium load — drink ${waterL} with ${sodiumMg}mg sodium`;
+      guidance = user.enableWaterCut
+        ? [
+            `Drink ${waterL} of water spread throughout the day — roughly ${Math.round((i === 6 ? 5.5 : 6.5) / 14 * 10) / 10} L per waking hour.`,
+            `SODIUM MUST BE HIGH TODAY (${sodiumMg}mg). This is intentional and correct. Sodium loading alongside water loading suppresses aldosterone, priming your kidneys to excrete both water and sodium rapidly when you cut them on day 4.`,
+            "Common mistake: athletes use low sodium on water load day. This is wrong — it reduces the hormonal response. Load both together, cut both together.",
+            useGlycogen
+              ? `Keep carbs very low (${carbsG}g) today to continue glycogen depletion. The combination of low glycogen + water/sodium priming maximises total weight loss at weigh-in.`
+              : "Carbs are moderate since you're not doing glycogen depletion. Focus on the water and sodium loading.",
+            "Take an electrolyte supplement with potassium and magnesium today — large water volumes can dilute electrolytes (hyponatremia risk is real at these volumes).",
+          ]
+        : [
+            `Drink ${waterL} to stay well-hydrated during the training taper.`,
+            "Sodium is normal — no manipulation needed.",
+            useGlycogen
+              ? `Keep carbs low (${carbsG}g) to begin glycogen tapering.`
+              : "Maintain normal carb intake.",
+            "Continue training per your normal schedule.",
+            "Focus on sleep quality and reducing life stress in the final week.",
+          ];
+      foods = useGlycogen
+        ? ["Chicken breast", "Egg whites", "Fish", "Low-fat cottage cheese", "Green vegetables", "Unsalted rice cakes (small)"]
+        : ["Lean proteins", "Rice", "Oats", "Vegetables", "Fruit"];
+      avoid = useGlycogen
+        ? ["Rice / bread / pasta / fruit juice", "Sports drinks", "Any sugary food or drink"]
+        : ["Alcohol", "Excess junk food"];
 
     } else if (i === 7) {
-      // ── DAY 7: LAST NORMAL DAY / TRANSITION ──────────────────────────────────
+      // ── DAY 7: TRANSITION ────────────────────────────────────────────────────
       label = "7 days out";
       phase = "Transition";
-      carbsG = Math.round(weightKg * 2.5);  // taper down from normal
+      carbsG = Math.round(weightKg * 2.5);
       fatG = Math.round(weightKg * 1.0);
       calories = (proteinG * 4) + (carbsG * 4) + (fatG * 9);
       sodiumMg = 2500;
       waterL = "4–5 L";
-      focus = "Last normal training day — begin transitioning mindset to meet prep";
+      waterTargetL = 4.5;
+      focus = "Last heavy training session — begin prep mindset";
       isKeyDay = true;
       guidance = [
-        "Complete your last heavy training session today or tomorrow at the latest.",
-        "Begin eating cleaner — whole foods only, minimize processed food and alcohol for the next 7 days.",
-        "Start tracking sodium intake. Average American eats 3,400 mg/day — bring it to ~2,500 mg today.",
-        "Hydrate well (4–5 L) today to begin the process of kidney adaptation.",
-        "Review your meet schedule: flight times, attempts, and warm-up timing. Planning now reduces stress later.",
+        "Complete your final heavy training session today or in the next 24 hours.",
+        "Begin eating clean — whole foods only, minimise processed food and alcohol for the next 7 days.",
+        analysis && cutKg > 0
+          ? `You need to drop ${cutKg.toFixed(1)}kg (${cutPct.toFixed(1)}% of bodyweight) to hit ${user.targetWeightKg}kg. ${analysis.recommendation}`
+          : "Review your weight class and confirm your game plan for the week.",
+        "Start tracking daily morning weight. Log it in the app every morning — this data drives your protocol adjustments.",
+        "Begin drinking 4–5 L of water daily to establish the baseline your loading phase will build from.",
       ];
       foods = ["Lean proteins", "Rice", "Oats", "Sweet potato", "Fruit", "Vegetables"];
       avoid = ["Alcohol", "Excess salt", "Junk food"];
@@ -484,13 +590,14 @@ export function generatePeakWeekPlan(
       calories = (proteinG * 4) + (carbsG * 4) + (fatG * 9);
       sodiumMg = 2500;
       waterL = "3–4 L";
+      waterTargetL = 3.5;
       focus = "Stay consistent — hit your macros, sleep 8 hours, reduce junk";
       guidance = [
-        "Continue your normal deficit — don't panic and crash diet this close to the meet.",
+        "Continue your normal deficit. Don't panic and crash diet this close to the meet.",
         "Focus on sleep quality. Growth hormone peaks during deep sleep and is critical for recovery.",
         "Keep training volume moderate — this is not the time for PRs in training.",
         "Begin winding down processed foods and alcohol to give your gut a clean slate before peak week.",
-        "Log everything in Macro so you have accurate data heading into peak week.",
+        "Log your weight every morning and every food entry in Macro. The data from these days informs your peak week protocol.",
       ];
       foods = ["Lean proteins", "Complex carbs", "Fruits and vegetables", "Whole grains"];
       avoid = ["Alcohol", "Excess junk food"];
@@ -507,6 +614,7 @@ export function generatePeakWeekPlan(
       fatG,
       sodiumMg,
       waterL,
+      waterTargetL,
       focus,
       guidance,
       foods,
