@@ -438,11 +438,14 @@ export function generatePeakWeekPlan(
     // ── WATER + SODIUM CUT (day 4) — Tier 2+ only ────────────────────────────
     } else if (i === 4) {
       label = "4 days out"; isKeyDay = tier >= 2;
-      carbsG = useDepletion ? Math.round(weightKg * 0.8) : Math.round(weightKg * 1.5);
-      fatG = Math.round(weightKg * 0.7);
-      calories = (proteinG * 4) + (carbsG * 4) + (fatG * 9);
+      // Macros set per-branch below
+      carbsG = 0; fatG = 0; calories = 0;
 
       if (tier >= 2 && useWaterSodium) {
+        // Water/sodium cut day: low carb to support depletion or moderate
+        carbsG = useDepletion ? Math.round(weightKg * 0.8) : Math.round(weightKg * 1.5);
+        fatG = Math.round(weightKg * 0.7);
+        calories = (proteinG * 4) + (carbsG * 4) + (fatG * 9);
         phase = "Water load";
         sodiumMg = 600;
         waterL = "2–3 L (tapering)"; waterTargetL = 2.5;
@@ -459,6 +462,11 @@ export function generatePeakWeekPlan(
         foods = ["Chicken breast (fresh, unsalted)", "Egg whites", "Fish (not canned)", "Cucumber", "Small amounts of green vegetables"];
         avoid = ["Any added salt", "Processed meats", "Canned/packaged food", "Restaurant food", "Sports drinks with sodium"];
       } else {
+        // Tier 0–1: rest day before carb load — normal calories
+        const normalDay4 = computeDailyTargets(user, undefined, undefined);
+        calories = normalDay4?.calories ?? Math.round(bmr * 1.4);
+        carbsG = normalDay4?.carbsG ?? Math.round(weightKg * 3.0);
+        fatG = normalDay4?.fatG ?? Math.round(weightKg * 1.0);
         phase = "Transition";
         sodiumMg = 2000; waterL = "3–4 L"; waterTargetL = 3.5;
         focus = "Active rest — prepare mentally, eat clean, carb load starts tomorrow";
@@ -476,12 +484,15 @@ export function generatePeakWeekPlan(
     // ── WATER + SODIUM LOADING (days 5–6) — Tier 2+ only ─────────────────────
     } else if (i <= 6) {
       label = `${i} days out`;
-      carbsG = useDepletion ? Math.round(weightKg * 0.8) : Math.round(weightKg * 2.5);
-      fatG = Math.round(weightKg * 0.8);
-      calories = (proteinG * 4) + (carbsG * 4) + (fatG * 9);
       isKeyDay = useWaterSodium;
+      // Macros set per-branch below — gut cut days use normal targets, loading days use protocol values
+      carbsG = 0; fatG = 0; calories = 0; // will be overwritten below
 
       if (useWaterSodium) {
+        // Loading days: macros set by protocol
+        carbsG = useDepletion ? Math.round(weightKg * 0.8) : Math.round(weightKg * 2.5);
+        fatG = Math.round(weightKg * 0.8);
+        calories = (proteinG * 4) + (carbsG * 4) + (fatG * 9);
         phase = useDepletion ? "Depletion" : "Water load";
         // HIGH sodium with HIGH water — primes both ADH and aldosterone
         sodiumMg = 3500;
@@ -506,7 +517,12 @@ export function generatePeakWeekPlan(
           ? ["Rice / bread / pasta (high carb)", "Sports drinks", "Sugary food or drink"]
           : ["Alcohol", "Excess junk food"];
       } else {
-        // Tier 0–1: normal hydration days
+        // Tier 0–1: gut cut days — SAME calories as normal, just different food sources
+        // The gut cut is a food SOURCE swap, not a calorie cut.
+        const normalGut = computeDailyTargets(user, undefined, undefined);
+        calories = normalGut?.calories ?? Math.round(bmr * 1.4);
+        carbsG = normalGut?.carbsG ?? Math.round(weightKg * 3.5);
+        fatG = normalGut?.fatG ?? Math.round(weightKg * 1.0);
         phase = "Gut cut";
         sodiumMg = 2500; waterL = "3–4 L"; waterTargetL = 3.5;
         focus = i === 6
