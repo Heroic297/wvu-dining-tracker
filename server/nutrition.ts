@@ -1,22 +1,22 @@
 /**
- * Nutrition lookup service — v3
+ * Nutrition lookup service — v4 (Option C)
  *
- * Pipeline (in order):
+ * Pipeline per query:
  *   1. Cache check (skip when forceAi)
- *   2. Text preprocessing — normalise, detect intent, classify query type
- *   3. Branded product search (USDA Branded Foods) — protein shakes, packaged foods, etc.
- *      → AI selects the best match from top candidates (avoids false positives)
- *   4. Whole food / ingredient search (USDA Foundation + SR Legacy)
- *      → AI selects best match from candidates
- *   5. Restaurant / chain lookup → AI with chain-specific published-data prompt
- *   6. Pure AI estimation fallback — generic foods, homemade meals, anything else
+ *   2. Classify the query
+ *   3. Route:
+ *      a. Multi-component meal → AI breakdown prompt
+ *      b. Restaurant / chain item → AI with chain-specific published-data prompt
+ *      c. Branded / packaged product → Open Food Facts text search → AI fallback
+ *      d. Raw whole ingredient (simple, no brand) → USDA Foundation/SR Legacy → AI fallback
+ *      e. Everything else → AI direct
+ *   4. Cache result
  *
- * The key insight: USDA has extensive branded + restaurant data but its text
- * search returns noisy results. We fetch the top N candidates and let the AI
- * pick the correct match rather than blindly taking result[0].
- *
- * AI model: llama-3.3-70b-versatile via Groq
- * Temperature: 0.05 — near-deterministic for reproducibility
+ * Why this works better than previous approaches:
+ * - Open Food Facts has 3M+ branded products with exact per-serving label data
+ * - USDA Foundation is only used for simple raw ingredients where it excels
+ * - AI handles restaurants, complex meals, and anything the databases miss
+ * - No more AI-assisted USDA candidate selection (slow, error-prone, rate-limited)
  */
 import Groq from "groq-sdk";
 import axios from "axios";
@@ -25,6 +25,7 @@ import type { InsertNutritionCache } from "../shared/schema.js";
 
 const USDA_API_KEY = process.env.USDA_API_KEY || "DEMO_KEY";
 const USDA_BASE = "https://api.nal.usda.gov/fdc/v1";
+const OFF_BASE = "https://world.openfoodfacts.org/cgi/search.pl";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -45,13 +46,13 @@ export interface NutritionResult {
   carbsG: number;
   fatG: number;
   servingSize: string;
-  source: "usda" | "usda_branded" | "ai_estimated" | "manual_exact";
+  source: "usda" | "usda_branded" | "open_food_facts" | "ai_estimated" | "manual_exact";
   confidence?: string;
   foodName: string;
   breakdown?: NutritionComponent[];
 }
 
-// ─── Known restaurant chains ──────────────────────────────────────────────────
+// ─── Restaurant chain patterns ────────────────────────────────────────────────
 
 const CHAIN_PATTERNS: Array<{ pattern: RegExp; name: string }> = [
   { pattern: /chick.fil.a/i,           name: "Chick-fil-A" },
@@ -77,7 +78,7 @@ const CHAIN_PATTERNS: Array<{ pattern: RegExp; name: string }> = [
   { pattern: /firehouse subs?/i,       name: "Firehouse Subs" },
   { pattern: /sheetz/i,                name: "Sheetz" },
   { pattern: /wawa/i,                  name: "Wawa" },
-  { pattern: /sonic\b/i,               name: "Sonic Drive-In" },
+  { pattern: /\bsonic\b/i,             name: "Sonic Drive-In" },
   { pattern: /dairy queen/i,           name: "Dairy Queen" },
   { pattern: /in.n.out/i,              name: "In-N-Out Burger" },
   { pattern: /whataburger/i,           name: "Whataburger" },
@@ -95,34 +96,57 @@ const CHAIN_PATTERNS: Array<{ pattern: RegExp; name: string }> = [
   { pattern: /buffalo wild wings/i,    name: "Buffalo Wild Wings" },
   { pattern: /b-?dubs/i,               name: "Buffalo Wild Wings" },
   { pattern: /qdoba/i,                 name: "Qdoba" },
-  { pattern: /moe'?s?/i,               name: "Moe's Southwest Grill" },
   { pattern: /sweetgreen/i,            name: "Sweetgreen" },
   { pattern: /dave'?s? hot chicken/i,  name: "Dave's Hot Chicken" },
-  { pattern: /raising cane/i,          name: "Raising Cane's" },
   { pattern: /portillo'?s?/i,          name: "Portillo's" },
   { pattern: /culver'?s?/i,            name: "Culver's" },
   { pattern: /steak 'n shake/i,        name: "Steak 'n Shake" },
   { pattern: /jack.in.the.box/i,       name: "Jack in the Box" },
-  { pattern: /carl'?s jr/i,            name: "Carl's Jr." },
+  { pattern: /carl'?s? jr/i,           name: "Carl's Jr." },
   { pattern: /del taco/i,              name: "Del Taco" },
   { pattern: /el pollo loco/i,         name: "El Pollo Loco" },
-  { pattern: /habit burger/i,          name: "The Habit Burger Grill" },
   { pattern: /smashburger/i,           name: "Smashburger" },
-  { pattern: /freddy'?s?/i,            name: "Freddy's Frozen Custard" },
+  { pattern: /freddy'?s?/i,            name: "Freddy's" },
+  { pattern: /moe'?s?\s+(southwest|grill)/i, name: "Moe's Southwest Grill" },
 ];
 
-// ─── Text preprocessing ───────────────────────────────────────────────────────
+// ─── Brand signals — routes to Open Food Facts ───────────────────────────────
 
-interface ParsedQuery {
-  raw: string;
-  normalised: string;
-  chain: string | null;
-  isBrandedProduct: boolean;
-  isMultiComponent: boolean;
-  hasExplicitQuantity: boolean;
-  components: string[];
-  cleanedQuery: string;
+const BRANDED_SIGNALS = [
+  // Known supplement/protein brands
+  /\b(fairlife|core power|premier protein|dymatize|optimum nutrition|on gold standard|iso\s*100|myprotein|ghost protein|reign|celsius|body armor|muscle milk|ensure|boost|orgain|garden of life|vega protein|rxbar|quest bar|clif bar|larabar|kind bar|built bar|one bar|pure protein|power crunch|thinkThin|atkins bar|met.rx|cytosport|cytogainer|labrada|bsn syntha|eas lean|kirkland protein)\b/i,
+  // Product type signals that imply a packaged product
+  /\b(protein shake|protein bar|protein powder|protein drink|meal replacement|nutrition shake|energy bar|granola bar|protein cookie|protein ice cream|halo top|enlightened ice cream)\b/i,
+  // Multi-word brand+product patterns
+  /\b(greek yogurt|skyr|cottage cheese|string cheese|babybel|laughing cow)\b/i,
+];
+
+function isBrandedProduct(q: string): boolean {
+  return BRANDED_SIGNALS.some((p) => p.test(q));
 }
+
+// ─── Simple whole-food signals — routes to USDA Foundation ───────────────────
+// Only route to USDA when the query is a simple raw ingredient with no brand,
+// preparation method, or portion specification beyond weight.
+
+const WHOLE_FOOD_PATTERNS = [
+  /^(raw |cooked |fresh |frozen )?(chicken|beef|pork|turkey|salmon|tuna|tilapia|shrimp|cod|halibut|sardine|egg|eggs)\b/i,
+  /^(raw |cooked |dry )?(white rice|brown rice|oats?|oatmeal|quinoa|lentils?|black beans?|chickpeas?)\b/i,
+  /^(raw |fresh )?(broccoli|spinach|kale|romaine|arugula|cabbage|cauliflower|sweet potato|potato|banana|apple|orange|avocado|blueberries?|strawberries?|almonds?|walnuts?|cashews?)\b/i,
+  /^(whole |skim |2% |fat.?free )?milk\b/i,
+  /^(extra virgin |virgin )?olive oil\b/i,
+  /^(salted |unsalted )?butter\b/i,
+];
+
+function isSimpleWholeFoodQuery(q: string): boolean {
+  const normalised = q.toLowerCase().trim();
+  // Must NOT have brand name, restaurant name, or complex modifiers
+  if (isBrandedProduct(normalised)) return false;
+  if (CHAIN_PATTERNS.some(({ pattern }) => pattern.test(normalised))) return false;
+  return WHOLE_FOOD_PATTERNS.some((p) => p.test(normalised));
+}
+
+// ─── Text preprocessing ───────────────────────────────────────────────────────
 
 const UNIT_NORMALISE: Array<[RegExp, string]> = [
   [/\b(oz|ounce|ounces)\b/gi, "oz"],
@@ -133,36 +157,12 @@ const UNIT_NORMALISE: Array<[RegExp, string]> = [
   [/\b(tbsp|tablespoon|tablespoons)\b/gi, "tbsp"],
   [/\b(tsp|teaspoon|teaspoons)\b/gi, "tsp"],
   [/\b(cups?)\b/gi, "cup"],
-  [/\b(slice|slices|piece|pieces|pc|pcs)\b/gi, "piece"],
-];
-
-const SIZE_NORMALISE: Array<[RegExp, string]> = [
-  [/\b(sm|small)\b/gi, "small"],
-  [/\b(med|medium|regular|reg)\b/gi, "medium"],
-  [/\b(lg|large)\b/gi, "large"],
-  [/\b(xl|extra.large)\b/gi, "extra large"],
 ];
 
 const MULTI_SEPARATORS = /\band\b|,|&|\bwith\b|\bplus\b|\+/i;
 
-/** Brand name signals — suggests a packaged/branded product */
-const BRANDED_SIGNALS = [
-  // Protein/supplement brands
-  /\b(core power|fairlife|premier protein|dymatize|optimum nutrition|on gold standard|iso\s*100|myprotein|ghost|reign|celsius|monster|red bull|gatorade|powerade|body armor|vitamin water|muscle milk|ensure|boost|orgain|garden of life|vega|naked juice|odwalla|rxbar|quest|clif|larabar|kind bar|rxbar|nature valley|rxbar|built bar|one bar|pure protein|power crunch|think thin|thinkThin|atkins)\b/i,
-  // Product type signals that imply branded
-  /\b(protein shake|protein bar|protein powder|protein drink|meal replacement|energy drink|sports drink|nutrition shake|granola bar|energy bar|whey protein|casein protein|mass gainer|pre.?workout|bcaa|creatine|collagen peptide)\b/i,
-  /\b(elite|isolate|hydrolyzed|zero sugar|sugar free)\s+(protein|shake|bar|powder|drink)/i,
-  // Brand + flavor pattern
-  /\b(vanilla|chocolate|strawberry|cookies.?(and|&|n).?cream|peanut butter|birthday cake|cinnamon|caramel)\s+(protein|shake|bar|powder|drink|flavor)/i,
-];
-
-function isBrandedProductQuery(q: string): boolean {
-  return BRANDED_SIGNALS.some((p) => p.test(q));
-}
-
 function hasQuantity(q: string): boolean {
-  return /\d+(\.\d+)?\s*(g|oz|ml|lb|lbs|kg|cup|tbsp|tsp|piece|slice|serving)\b/i.test(q) ||
-    /\b(a|one|two|three|four|five|half|quarter)\s+(cup|scoop|piece|slice|serving)\b/i.test(q);
+  return /\d+(\.\d+)?\s*(g|oz|ml|lb|lbs|kg|cup|tbsp|tsp|piece|slice|serving)\b/i.test(q);
 }
 
 function splitComponents(query: string): string[] {
@@ -172,12 +172,22 @@ function splitComponents(query: string): string[] {
     .filter((p) => p.length > 1);
 }
 
+interface ParsedQuery {
+  raw: string;
+  normalised: string;
+  cleanedQuery: string;
+  chain: string | null;
+  isBranded: boolean;
+  isWholeFoodSimple: boolean;
+  isMultiComponent: boolean;
+  hasExplicitQuantity: boolean;
+  components: string[];
+}
+
 export function preprocessQuery(raw: string): ParsedQuery {
   let cleaned = raw.trim();
   for (const [re, rep] of UNIT_NORMALISE) cleaned = cleaned.replace(re, rep);
-  for (const [re, rep] of SIZE_NORMALISE) cleaned = cleaned.replace(re, rep);
   cleaned = cleaned.replace(/\s+/g, " ").trim();
-
   const normalised = cleaned.toLowerCase();
 
   let chain: string | null = null;
@@ -185,280 +195,230 @@ export function preprocessQuery(raw: string): ParsedQuery {
     if (pattern.test(normalised)) { chain = name; break; }
   }
 
-  const isBrandedProduct = isBrandedProductQuery(normalised);
+  const isBranded = isBrandedProduct(normalised);
+  const isWholeFoodSimple = isSimpleWholeFoodQuery(normalised);
 
-  const isMultiComponent = MULTI_SEPARATORS.test(normalised) || (
-    normalised.split(/\s+/).length >= 3 &&
-    !hasQuantity(normalised) &&
-    !chain &&
-    !isBrandedProduct &&
-    !/(sauce|dressing|seasoned|grilled|baked|fried|crispy|spicy|smoked)/i.test(normalised)
-  );
-
+  const isMultiComponent = !chain && !isBranded && MULTI_SEPARATORS.test(normalised);
   const components = isMultiComponent ? splitComponents(cleaned) : [cleaned];
 
   return {
     raw: raw.trim(),
     normalised,
+    cleanedQuery: cleaned,
     chain,
-    isBrandedProduct,
+    isBranded,
+    isWholeFoodSimple,
     isMultiComponent,
     hasExplicitQuantity: hasQuantity(normalised),
     components,
-    cleanedQuery: cleaned,
   };
 }
 
-// ─── USDA helpers ─────────────────────────────────────────────────────────────
+// ─── Open Food Facts lookup ───────────────────────────────────────────────────
 
-function getUsdaNutrient(
-  nutrients: Array<{ nutrientNumber?: string; value?: number }>,
-  ...ids: string[]
-): number {
-  for (const id of ids) {
-    const found = nutrients.find((n) => n.nutrientNumber === id);
-    if (found?.value != null) return Math.round(found.value * 10) / 10;
+async function lookupOpenFoodFacts(query: string): Promise<NutritionResult | null> {
+  try {
+    const resp = await axios.get(OFF_BASE, {
+      params: {
+        search_terms: query,
+        json: 1,
+        page_size: 8,
+        fields: "product_name,brands,nutriments,serving_size,serving_quantity,quantity",
+        lc: "en",
+        cc: "us",
+      },
+      timeout: 8000,
+      headers: { "User-Agent": "MacroApp/1.0 (nutrition tracker; contact@macroapp.com)" },
+    });
+
+    const products: any[] = resp.data?.products ?? [];
+
+    // Filter: must have calories > 0 and prefer per-serving data
+    const valid = products.filter((p) => {
+      const n = p.nutriments ?? {};
+      return (
+        (n["energy-kcal_serving"] != null && n["energy-kcal_serving"] > 0) ||
+        (n["energy-kcal_100g"] != null && n["energy-kcal_100g"] > 0)
+      );
+    });
+
+    if (!valid.length) return null;
+
+    const p = valid[0];
+    const n = p.nutriments ?? {};
+
+    // Strongly prefer per-serving values — that's what users expect
+    const hasServingData = n["energy-kcal_serving"] != null && n["energy-kcal_serving"] > 0;
+
+    const calories = hasServingData ? n["energy-kcal_serving"] : n["energy-kcal_100g"];
+    const proteinG = hasServingData ? (n["proteins_serving"] ?? 0) : (n["proteins_100g"] ?? 0);
+    const carbsG   = hasServingData ? (n["carbohydrates_serving"] ?? 0) : (n["carbohydrates_100g"] ?? 0);
+    const fatG     = hasServingData ? (n["fat_serving"] ?? 0) : (n["fat_100g"] ?? 0);
+
+    const servingSize = hasServingData
+      ? (p.serving_size ?? "1 serving")
+      : "100g";
+
+    const brand = p.brands ? `${p.brands.split(",")[0].trim()} ` : "";
+    const foodName = `${brand}${p.product_name ?? query}`.trim();
+
+    console.log(`[nutrition] Open Food Facts match: ${foodName} (${calories} kcal${hasServingData ? "/serving" : "/100g"})`);
+
+    return {
+      calories: Math.round(calories),
+      proteinG: Math.round(proteinG * 10) / 10,
+      carbsG:   Math.round(carbsG   * 10) / 10,
+      fatG:     Math.round(fatG     * 10) / 10,
+      servingSize,
+      source: "open_food_facts",
+      confidence: "high",
+      foodName,
+    };
+  } catch (err: any) {
+    console.warn("[nutrition] Open Food Facts lookup failed:", err.message);
+    return null;
   }
-  return 0;
 }
 
-interface UsdaCandidate {
-  fdcId: number;
-  description: string;
-  brandOwner?: string;
-  brandName?: string;
-  ingredients?: string;
-  servingSize?: number;
-  servingSizeUnit?: string;
-  dataType: string;
-  foodNutrients: Array<{ nutrientNumber?: string; value?: number }>;
-}
+// ─── USDA Foundation lookup ───────────────────────────────────────────────────
 
-/**
- * Search USDA for candidates across specified data types.
- * Returns up to `limit` candidates for AI selection.
- */
-async function searchUsdaCandidates(
-  query: string,
-  dataTypes: string,
-  limit = 6
-): Promise<UsdaCandidate[]> {
+async function lookupUsda(foodName: string): Promise<NutritionResult | null> {
   try {
     const resp = await axios.get(`${USDA_BASE}/foods/search`, {
       params: {
-        query,
-        pageSize: limit,
-        dataType: dataTypes,
+        query: foodName,
+        pageSize: 5,
+        dataType: "Foundation,SR Legacy",
         api_key: USDA_API_KEY,
       },
       timeout: 8000,
     });
-    return resp.data?.foods ?? [];
-  } catch (err: any) {
-    console.warn(`[nutrition] USDA search failed (${dataTypes}):`, err.message);
-    return [];
-  }
-}
 
-/**
- * Fetch full details for a specific fdcId including per-serving nutrients.
- */
-async function fetchUsdaById(fdcId: number): Promise<UsdaCandidate | null> {
-  try {
-    const resp = await axios.get(`${USDA_BASE}/food/${fdcId}`, {
-      params: { api_key: USDA_API_KEY },
-      timeout: 8000,
+    const foods: any[] = resp.data?.foods ?? [];
+
+    // Filter out zero-calorie results and pick first valid one
+    const valid = foods.filter((f) => {
+      const cal = (f.foodNutrients ?? []).find(
+        (n: any) => n.nutrientNumber === "208" || n.nutrientId === 1008
+      );
+      return cal?.value > 0;
     });
-    return resp.data ?? null;
-  } catch (err: any) {
-    console.warn(`[nutrition] USDA fdcId lookup failed:`, err.message);
-    return null;
-  }
-}
 
-function extractNutrientsFromCandidate(food: UsdaCandidate): {
-  calories: number; proteinG: number; carbsG: number; fatG: number; servingSize: string;
-} {
-  const label = (food as any).labelNutrients;
+    if (!valid.length) return null;
 
-  // Prefer labelNutrients — these are exact per-serving values from the product label
-  if (label?.calories?.value != null) {
-    const servingSizeStr = food.servingSize
-      ? `${food.servingSize} ${food.servingSizeUnit ?? ""}`.trim()
-      : "1 serving";
-    return {
-      calories: Math.round(label.calories.value),
-      proteinG: Math.round((label.protein?.value ?? 0) * 10) / 10,
-      carbsG:   Math.round((label.carbohydrates?.value ?? 0) * 10) / 10,
-      fatG:     Math.round((label.fat?.value ?? 0) * 10) / 10,
-      servingSize: servingSizeStr,
+    const food = valid[0];
+    const getNutrient = (...ids: string[]) => {
+      for (const id of ids) {
+        const found = (food.foodNutrients ?? []).find(
+          (n: any) => n.nutrientNumber === id || String(n.nutrientId) === id
+        );
+        if (found?.value != null && found.value > 0) return Math.round(found.value * 10) / 10;
+      }
+      return 0;
     };
-  }
 
-  // Fallback: foodNutrients are per 100g/ml — scale by serving size
-  const nutrients = food.foodNutrients ?? [];
-  const per100cal = getUsdaNutrient(nutrients, "208");
-  const per100pro = getUsdaNutrient(nutrients, "203");
-  const per100carb = getUsdaNutrient(nutrients, "205");
-  const per100fat  = getUsdaNutrient(nutrients, "204");
+    const calories = getNutrient("208", "1008");
+    const proteinG = getNutrient("203", "1003");
+    const carbsG   = getNutrient("205", "1005");
+    const fatG     = getNutrient("204", "1004");
 
-  // Parse serving size number for scaling (e.g. "414 MLT" → 414, "340 ml" → 340)
-  let servingNum = 100; // default: assume per-100g values are the serving
-  let servingSizeStr = "100g (USDA standard)";
-  if (food.servingSize) {
-    const sizeNum = parseFloat(String(food.servingSize));
-    if (!isNaN(sizeNum) && sizeNum > 0) {
-      servingNum = sizeNum;
-      servingSizeStr = `${sizeNum} ${food.servingSizeUnit ?? "g"}`.trim();
-    }
-  }
+    if (!calories) return null;
 
-  const scale = servingNum / 100;
-  return {
-    calories: Math.round(per100cal * scale),
-    proteinG: Math.round(per100pro  * scale * 10) / 10,
-    carbsG:   Math.round(per100carb * scale * 10) / 10,
-    fatG:     Math.round(per100fat  * scale * 10) / 10,
-    servingSize: servingSizeStr,
-  };
-}
+    console.log(`[nutrition] USDA Foundation match: ${food.description} (${calories} kcal/100g)`);
 
-// ─── AI-assisted USDA candidate selection ────────────────────────────────────
-
-/**
- * Ask the AI to pick the best matching candidate from USDA results.
- * Returns the fdcId of the best match, or null if none are a good match.
- */
-async function aiSelectUsdaCandidate(
-  query: string,
-  candidates: UsdaCandidate[],
-  groq: Groq
-): Promise<number | null> {
-  if (candidates.length === 0) return null;
-
-  const candidateList = candidates.map((c, i) => {
-    const brand = c.brandOwner || c.brandName ? ` (${c.brandOwner ?? c.brandName})` : "";
-    const nutrients = extractNutrientsFromCandidate(c);
-    return `${i + 1}. [fdcId: ${c.fdcId}] ${c.description}${brand} — ${nutrients.calories} kcal, P:${nutrients.proteinG}g, C:${nutrients.carbsG}g, F:${nutrients.fatG}g per ${nutrients.servingSize}`;
-  }).join("\n");
-
-  const systemPrompt = `You are a nutrition database expert. A user searched for a food item and you must select the BEST matching result from the USDA database candidates.
-
-Rules:
-- Pick the candidate that EXACTLY matches what the user is looking for (correct brand, flavor, product line)
-- If none of the candidates are a close match, return null
-- Do NOT pick a similar-but-different product just to return something
-- For branded products: brand name AND product name must match
-- For restaurant items: the specific menu item must match
-- Return ONLY valid JSON: {"fdcId": <number>} or {"fdcId": null}`;
-
-  const userPrompt = `User searched for: "${query}"
-
-USDA candidates:
-${candidateList}
-
-Which fdcId best matches? Return {"fdcId": <number>} or {"fdcId": null} if none match well.`;
-
-  try {
-    const completion = await groq.chat.completions.create({
-      model: "llama-3.3-70b-versatile",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user",   content: userPrompt },
-      ],
-      temperature: 0.0,
-      max_tokens: 50,
-    });
-
-    const raw = completion.choices[0]?.message?.content?.trim() ?? "";
-    const match = raw.match(/\{[\s\S]*\}/);
-    if (!match) return null;
-    const parsed = JSON.parse(match[0]);
-    return typeof parsed.fdcId === "number" ? parsed.fdcId : null;
-  } catch {
+    return {
+      calories,
+      proteinG,
+      carbsG,
+      fatG,
+      servingSize: "100g (USDA standard)",
+      source: "usda",
+      confidence: "high",
+      foodName: food.description ?? foodName,
+    };
+  } catch (err: any) {
+    console.warn("[nutrition] USDA lookup failed:", err.message);
     return null;
   }
 }
 
-// ─── AI estimation (direct) ───────────────────────────────────────────────────
+// ─── AI estimation ────────────────────────────────────────────────────────────
 
 function buildSystemPrompt(parsed: ParsedQuery): string {
-  const baseIdentity = `You are a professional sports dietitian and precision nutrition analyst with encyclopedic knowledge of:
-- Official published nutritional data for every major US restaurant chain
-- USDA FoodData Central values for all whole foods and raw ingredients
-- Precise macro estimation for weighted portions using verified nutritional density values
-- Bodybuilding, powerlifting, and athletic nutrition standards
+  const base = `You are a professional sports dietitian with encyclopedic knowledge of:
+- Official published nutrition facts for every major US restaurant chain
+- USDA nutritional data for whole foods and raw ingredients
+- Exact label data for branded packaged foods and supplements
+- Bodybuilding and powerlifting nutrition standards
 
-Your outputs are used for elite athletic nutrition tracking. Accuracy is critical.`;
+Accuracy is critical — this data is used for athletic nutrition planning.`;
 
-  const jsonRule = `Return ONLY a single valid JSON object. No markdown, no code fences, no explanation.`;
+  const jsonOnly = `Return ONLY valid JSON. No markdown, no code fences, no explanation.`;
 
-  const componentSchema = `{
-  "item": "<food name with quantity>",
+  const singleSchema = `{
   "calories": <integer>,
   "proteinG": <number, 1 decimal>,
   "carbsG": <number, 1 decimal>,
   "fatG": <number, 1 decimal>,
   "servingSize": "<specific size>",
-  "confidence": "<'high'|'medium'|'low'>"
-}`;
-
-  if (parsed.isBrandedProduct && !parsed.chain) {
-    return `${baseIdentity}
-
-TASK: Return the EXACT nutritional data for this specific branded product AS SOLD (the full package/bottle/container as a consumer would buy and consume it in one sitting, unless clearly portioned).
-
-CRITICAL RULES:
-- Return macros for the ENTIRE CONTAINER/BOTTLE, not per 100g, not per cup, not per half-serving
-- Core Power / Fairlife protein shakes are single-serve bottles — return the full bottle macros
-- Protein bars are single bars — return full bar macros
-- If a product is clearly multi-serving (e.g. a tub of protein powder), return per-scoop (1 serving)
-- Use the ACTUAL LABEL values. Do not estimate or extrapolate.
-- Core Power Elite 42g: 230 kcal, 42g protein, 9g carbs, 3.5g fat (full 14oz bottle)
-- Premier Protein shake: 160 kcal, 30g protein, 5g carbs, 3g fat (full 11oz bottle)
-- Quest bar: ~200 kcal, 21g protein, varies by flavor
-- If you are not certain of the exact label values, set confidence to "low"
-
-${jsonRule}
-
-Return:
-{
-  "calories": <integer, full package/single serve>,
-  "proteinG": <number, 1 decimal>,
-  "carbsG": <number, 1 decimal>,
-  "fatG": <number, 1 decimal>,
-  "servingSize": "<describe as '1 bottle (414ml)' or '1 bar (60g)' etc>",
   "confidence": "<'high'|'medium'|'low'>",
   "breakdown": []
 }`;
-  }
 
+  const componentSchema = `{
+  "item": "<name>", "calories": <int>, "proteinG": <num>,
+  "carbsG": <num>, "fatG": <num>, "servingSize": "<size>", "confidence": "<level>"
+}`;
+
+  // Restaurant chain
   if (parsed.chain) {
-    return `${baseIdentity}
+    return `${base}
 
-TASK: Return exact nutritional data for a ${parsed.chain} menu item using their OFFICIAL PUBLISHED nutrition facts.
+TASK: Return exact macros for this ${parsed.chain} menu item using their OFFICIAL PUBLISHED nutrition facts.
+Use the exact values from ${parsed.chain}'s published nutrition information.
 
-${jsonRule}
+${jsonOnly}
 
-${parsed.isMultiComponent ? `Return total plus breakdown:
+${parsed.isMultiComponent
+  ? `Return total + breakdown:
 {
   "calories": <total>, "proteinG": <total>, "carbsG": <total>, "fatG": <total>,
-  "servingSize": "<description>", "confidence": "<level>",
+  "servingSize": "<description>", "confidence": "high",
   "breakdown": [${componentSchema}, ...]
-}` : `Return:
-{
-  "calories": <integer>, "proteinG": <number>, "carbsG": <number>, "fatG": <number>,
-  "servingSize": "<official serving size>", "confidence": "high", "breakdown": []
-}`}`;
+}`
+  : singleSchema}`;
   }
 
+  // Branded packaged product
+  if (parsed.isBranded) {
+    return `${base}
+
+TASK: Return the EXACT label nutrition facts for this specific branded product.
+
+CRITICAL RULES:
+- Return macros for the ENTIRE CONTAINER as sold (full bottle, full bar, full package)
+- Single-serve items (protein shakes, bars): return for the whole item, NOT per 100g
+- Multi-serve items (protein powder tubs, large boxes): return per 1 scoop/1 serving
+- Use the ACTUAL label values — do not estimate
+- Core Power Elite (any flavor): 230 kcal, 42g protein, 9g carbs, 3.5g fat per bottle
+- Premier Protein shake: 160 kcal, 30g protein, 5g carbs, 3g fat per bottle
+- RXBAR Chocolate Sea Salt: 210 kcal, 12g protein, 23g carbs, 9g fat per bar
+- Set confidence "low" if you are not certain of the exact label values
+
+${jsonOnly}
+
+${singleSchema}`;
+  }
+
+  // Multi-component meal
   if (parsed.isMultiComponent) {
-    return `${baseIdentity}
+    return `${base}
 
 TASK: Return combined total AND per-component breakdown for a multi-item meal.
-Use USDA values for whole foods. Assume standard adult athlete serving sizes if not specified.
+For each component, assume a standard adult athlete portion if no quantity given.
+Use USDA values for whole foods.
 
-${jsonRule}
+${jsonOnly}
 
 Return:
 {
@@ -468,33 +428,31 @@ Return:
 }`;
   }
 
+  // Explicit weight/volume
   if (parsed.hasExplicitQuantity) {
-    return `${baseIdentity}
+    return `${base}
 
-TASK: Calculate precise nutritional content for the exact weight/volume specified.
-Use USDA nutritional density values and scale precisely to the specified quantity.
+TASK: Calculate precise macros for the exact quantity specified.
+Use USDA nutritional density values scaled precisely to the amount given.
+Reference densities per 100g cooked: chicken breast 165kcal/31g P; salmon 208kcal/20g P;
+white rice 130kcal/2.7g P/28g C; broccoli 34kcal/2.8g P/7g C; egg (large whole) 78kcal/6g P.
 
-${jsonRule}
+${jsonOnly}
 
-Return:
-{
-  "calories": <integer>, "proteinG": <number>, "carbsG": <number>, "fatG": <number>,
-  "servingSize": "<exact quantity specified>", "confidence": "high", "breakdown": []
-}`;
+${singleSchema}`;
   }
 
-  return `${baseIdentity}
+  // Generic fallback
+  return `${base}
 
-TASK: Return nutritional content for one standard serving of the described food.
-Use USDA FoodData Central as primary reference. State the serving size explicitly.
+TASK: Return macros for one standard serving of the described food.
+- For whole foods: use USDA per-100g values, state "100g" as serving size
+- For ambiguous items: assume most common adult portion
+- State the serving size explicitly
 
-${jsonRule}
+${jsonOnly}
 
-Return:
-{
-  "calories": <integer>, "proteinG": <number>, "carbsG": <number>, "fatG": <number>,
-  "servingSize": "<specific serving size with grams>", "confidence": "<level>", "breakdown": []
-}`;
+${singleSchema}`;
 }
 
 interface RawAIResponse {
@@ -505,13 +463,8 @@ interface RawAIResponse {
   servingSize: string;
   confidence: string;
   breakdown?: Array<{
-    item: string;
-    calories: number;
-    proteinG: number;
-    carbsG: number;
-    fatG: number;
-    servingSize?: string;
-    confidence?: string;
+    item: string; calories: number; proteinG: number;
+    carbsG: number; fatG: number; servingSize?: string; confidence?: string;
   }>;
 }
 
@@ -520,13 +473,12 @@ async function estimateWithAI(parsed: ParsedQuery): Promise<NutritionResult | nu
   if (!apiKey) return null;
 
   const groq = new Groq({ apiKey });
-  const systemPrompt = buildSystemPrompt(parsed);
 
   try {
     const completion = await groq.chat.completions.create({
       model: "llama-3.3-70b-versatile",
       messages: [
-        { role: "system", content: systemPrompt },
+        { role: "system", content: buildSystemPrompt(parsed) },
         { role: "user",   content: `Nutrition for: "${parsed.cleanedQuery}"` },
       ],
       temperature: 0.05,
@@ -567,16 +519,12 @@ async function estimateWithAI(parsed: ParsedQuery): Promise<NutritionResult | nu
   }
 }
 
-// ─── Main pipeline ────────────────────────────────────────────────────────────
+// ─── Main entry point ─────────────────────────────────────────────────────────
 
 function normalizeKey(name: string): string {
   return name.toLowerCase().trim().replace(/\s+/g, " ");
 }
 
-/**
- * Full nutrition lookup pipeline:
- * Cache → Branded USDA (AI-selected) → Whole food USDA (AI-selected) → AI direct
- */
 export async function lookupNutrition(
   foodName: string,
   options: { forceAi?: boolean } = {}
@@ -584,7 +532,7 @@ export async function lookupNutrition(
   const parsed = preprocessQuery(foodName);
   const key = normalizeKey(parsed.cleanedQuery);
 
-  // 1. Cache (bypass when forceAi)
+  // 1. Cache check
   if (!options.forceAi) {
     const cached = await storage.getNutritionCache(key);
     if (cached) {
@@ -601,117 +549,47 @@ export async function lookupNutrition(
     }
   }
 
-  const apiKey = process.env.GROQ_API_KEY;
-  const groq = apiKey ? new Groq({ apiKey }) : null;
-
   let result: NutritionResult | null = null;
 
-  // For multi-component meals → go directly to AI with breakdown prompt
+  // 2a. Multi-component meal → AI breakdown
   if (parsed.isMultiComponent) {
+    console.log(`[nutrition] Route: multi-component AI → "${parsed.cleanedQuery}"`);
     result = await estimateWithAI(parsed);
   }
 
-  // For restaurant/chain items → AI with chain-specific prompt
+  // 2b. Restaurant chain → AI with chain prompt
   else if (parsed.chain) {
-    // Still try USDA Branded first — many chain items are in there with exact data
-    if (groq) {
-      const candidates = await searchUsdaCandidates(parsed.cleanedQuery, "Branded", 8);
-      const fdcId = await aiSelectUsdaCandidate(parsed.cleanedQuery, candidates, groq);
-      if (fdcId) {
-        const food = await fetchUsdaById(fdcId);
-        if (food) {
-          const { calories, proteinG, carbsG, fatG, servingSize } = extractNutrientsFromCandidate(food);
-          if (calories > 0) {
-            const brand = food.brandOwner || food.brandName || parsed.chain;
-            console.log(`[nutrition] USDA Branded match for chain item: ${food.description} (fdcId ${fdcId})`);
-            result = {
-              calories, proteinG, carbsG, fatG, servingSize,
-              source: "usda_branded",
-              confidence: "high",
-              foodName: food.description ?? parsed.cleanedQuery,
-            };
-          }
-        }
-      }
-    }
-    // Fall back to AI with chain prompt
-    if (!result) result = await estimateWithAI(parsed);
+    console.log(`[nutrition] Route: chain AI (${parsed.chain}) → "${parsed.cleanedQuery}"`);
+    result = await estimateWithAI(parsed);
   }
 
-  // For branded products → Branded USDA (AI-selected) → AI fallback
-  else if (parsed.isBrandedProduct && groq) {
-    const candidates = await searchUsdaCandidates(parsed.cleanedQuery, "Branded", 8);
-    const fdcId = await aiSelectUsdaCandidate(parsed.cleanedQuery, candidates, groq);
-    if (fdcId) {
-      const food = await fetchUsdaById(fdcId);
-      if (food) {
-        const { calories, proteinG, carbsG, fatG, servingSize } = extractNutrientsFromCandidate(food);
-        if (calories > 0) {
-          console.log(`[nutrition] USDA Branded match: ${food.description} (fdcId ${fdcId})`);
-          result = {
-            calories, proteinG, carbsG, fatG, servingSize,
-            source: "usda_branded",
-            confidence: "high",
-            foodName: food.description ?? parsed.cleanedQuery,
-          };
-        }
-      }
+  // 2c. Branded/packaged product → Open Food Facts → AI fallback
+  else if (parsed.isBranded) {
+    console.log(`[nutrition] Route: branded → Open Food Facts → "${parsed.cleanedQuery}"`);
+    result = await lookupOpenFoodFacts(parsed.cleanedQuery);
+    if (!result) {
+      console.log(`[nutrition] OFF miss, falling back to AI for "${parsed.cleanedQuery}"`);
+      result = await estimateWithAI(parsed);
     }
-    if (!result) result = await estimateWithAI(parsed);
   }
 
-  // For everything else: try Branded USDA first (many packaged foods),
-  // then whole-food USDA, then AI
+  // 2d. Simple whole food → USDA Foundation → AI fallback
+  else if (parsed.isWholeFoodSimple) {
+    console.log(`[nutrition] Route: whole food USDA → "${parsed.cleanedQuery}"`);
+    result = await lookupUsda(parsed.cleanedQuery);
+    if (!result) {
+      console.log(`[nutrition] USDA miss, falling back to AI for "${parsed.cleanedQuery}"`);
+      result = await estimateWithAI(parsed);
+    }
+  }
+
+  // 2e. Everything else → AI direct
   else {
-    // Step A: Branded search — catches protein bars, packaged snacks, etc.
-    if (groq) {
-      const brandedCandidates = await searchUsdaCandidates(parsed.cleanedQuery, "Branded", 6);
-      const fdcId = await aiSelectUsdaCandidate(parsed.cleanedQuery, brandedCandidates, groq);
-      if (fdcId) {
-        const food = await fetchUsdaById(fdcId);
-        if (food) {
-          const { calories, proteinG, carbsG, fatG, servingSize } = extractNutrientsFromCandidate(food);
-          if (calories > 0) {
-            console.log(`[nutrition] USDA Branded match: ${food.description} (fdcId ${fdcId})`);
-            result = {
-              calories, proteinG, carbsG, fatG, servingSize,
-              source: "usda_branded",
-              confidence: "high",
-              foodName: food.description ?? parsed.cleanedQuery,
-            };
-          }
-        }
-      }
-    }
-
-    // Step B: Whole food / ingredient USDA search
-    if (!result && groq) {
-      const wholeCandidates = await searchUsdaCandidates(
-        parsed.cleanedQuery, "Foundation,SR Legacy", 6
-      );
-      const fdcId = await aiSelectUsdaCandidate(parsed.cleanedQuery, wholeCandidates, groq);
-      if (fdcId) {
-        const food = await fetchUsdaById(fdcId);
-        if (food) {
-          const { calories, proteinG, carbsG, fatG, servingSize } = extractNutrientsFromCandidate(food);
-          if (calories > 0) {
-            console.log(`[nutrition] USDA whole-food match: ${food.description} (fdcId ${fdcId})`);
-            result = {
-              calories, proteinG, carbsG, fatG, servingSize,
-              source: "usda",
-              confidence: "high",
-              foodName: food.description ?? parsed.cleanedQuery,
-            };
-          }
-        }
-      }
-    }
-
-    // Step C: AI fallback
-    if (!result) result = await estimateWithAI(parsed);
+    console.log(`[nutrition] Route: AI direct → "${parsed.cleanedQuery}"`);
+    result = await estimateWithAI(parsed);
   }
 
-  // Cache result
+  // 3. Cache
   if (result) {
     const entry: InsertNutritionCache = {
       foodName: result.foodName,
