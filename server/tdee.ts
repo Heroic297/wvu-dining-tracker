@@ -443,7 +443,7 @@ export function generatePeakWeekPlan(
       calories = (proteinG * 4) + (carbsG * 4) + (fatG * 9);
 
       if (tier >= 2 && useWaterSodium) {
-        phase = "Water + sodium cut";
+        phase = "Water load";
         sodiumMg = 600;
         waterL = "2–3 L (tapering)"; waterTargetL = 2.5;
         focus = "Cut both water AND sodium abruptly — kidneys still excreting at peak rate";
@@ -459,7 +459,7 @@ export function generatePeakWeekPlan(
         foods = ["Chicken breast (fresh, unsalted)", "Egg whites", "Fish (not canned)", "Cucumber", "Small amounts of green vegetables"];
         avoid = ["Any added salt", "Processed meats", "Canned/packaged food", "Restaurant food", "Sports drinks with sodium"];
       } else {
-        phase = "Pre-carb load rest";
+        phase = "Transition";
         sodiumMg = 2000; waterL = "3–4 L"; waterTargetL = 3.5;
         focus = "Active rest — prepare mentally, eat clean, carb load starts tomorrow";
         guidance = [
@@ -482,7 +482,7 @@ export function generatePeakWeekPlan(
       isKeyDay = useWaterSodium;
 
       if (useWaterSodium) {
-        phase = useDepletion ? "Depletion + water/sodium load" : "Water/sodium load";
+        phase = useDepletion ? "Depletion" : "Water load";
         // HIGH sodium with HIGH water — primes both ADH and aldosterone
         sodiumMg = 3500;
         waterL = i === 6 ? "5–6 L" : "6–7 L";
@@ -507,7 +507,7 @@ export function generatePeakWeekPlan(
           : ["Alcohol", "Excess junk food"];
       } else {
         // Tier 0–1: normal hydration days
-        phase = i <= 5 ? "Taper" : "Normal prep";
+        phase = "Gut cut";
         sodiumMg = 2500; waterL = "3–4 L"; waterTargetL = 3.5;
         focus = i === 6
           ? (useGutCut ? "Begin gut cut protocol — switch to low-residue foods" : "Light taper — normal eating, good hydration")
