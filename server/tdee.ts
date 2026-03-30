@@ -466,8 +466,10 @@ export function generatePeakWeekPlan(
         calories = (proteinG * 4) + (carbsG * 4) + (fatG * 9);
         // Sodium moderate-high: co-transports glucose into muscle via SGLT mechanism
         sodiumMg = i === 3 ? 3000 : 2500;
-        waterL = tier >= 2 ? (i === 3 ? "3–4 L" : "2–3 L") : normalWaterL;
-        waterTargetL = tier >= 2 ? (i === 3 ? 3.5 : 2.5) : normalWaterTargetL;
+        // Carb load days: slightly reduced water (tapering toward cut) but still bodyweight-scaled
+        // Day 3: ~normalWaterL, Day 2: slightly less as cut approaches
+        waterL = tier >= 2 ? (i === 3 ? normalWaterL : `${(normalWaterTargetL - 0.5).toFixed(1)}–${normalWaterTargetL.toFixed(1)} L`) : normalWaterL;
+        waterTargetL = tier >= 2 ? (i === 3 ? normalWaterTargetL : normalWaterTargetL - 0.4) : normalWaterTargetL;
         focus = i === 3
           ? `Carb load starts — ${carbsG}g carbs today (${carbPerKg}g/kg). Sodium stays moderate-high.`
           : `Final carb load day — ${carbsG}g carbs today. Muscles should feel full.`;
