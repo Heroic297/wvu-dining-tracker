@@ -300,97 +300,87 @@ export default function SettingsPage() {
               <Label htmlFor="watercut" className="cursor-pointer">Enable 7-day water cut plan</Label>
             </div>
 
-            <div className="flex items-center gap-3">
-              <Switch
-                id="watertracking" checked={enableWaterTracking}
-                onCheckedChange={setEnableWaterTracking}
-                data-testid="switch-water-tracking"
-              />
-              <div>
-                <Label htmlFor="watertracking" className="cursor-pointer">Enable water intake tracking</Label>
-                <p className="text-xs text-muted-foreground mt-0.5">Shows a water tracker on the dashboard. Uses peak week targets when active, otherwise estimates based on your body weight and sex.</p>
-              </div>
-            </div>
-
-            {enableWaterTracking && (
-              <div className="space-y-3 pt-1">
-                {/* Unit preference */}
-                <div className="flex items-center gap-3">
-                  <Droplets className="w-4 h-4 text-blue-400 flex-shrink-0" />
-                  <Label className="text-xs flex-shrink-0">Display unit</Label>
-                  <Select value={waterUnit} onValueChange={(v) => setWaterUnit(v as any)}>
-                    <SelectTrigger className="h-8 w-24 text-xs">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="oz">oz</SelectItem>
-                      <SelectItem value="ml">ml</SelectItem>
-                      <SelectItem value="L">L</SelectItem>
-                      <SelectItem value="gal">gal</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                {/* Saved bottles */}
-                <div className="space-y-2">
-                  <p className="text-xs font-semibold text-muted-foreground">Water bottles</p>
-                  {waterBottles.length === 0 && (
-                    <p className="text-xs text-muted-foreground">No bottles saved yet.</p>
-                  )}
-                  {waterBottles.map((b) => (
-                    <div key={b.id} className="flex items-center justify-between bg-secondary rounded-lg px-3 py-2">
-                      <span className="text-sm font-medium">{b.name}</span>
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs text-muted-foreground">{fmtBottle(b.mlSize)}</span>
-                        <button onClick={() => removeBottle(b.id)} className="text-muted-foreground hover:text-destructive transition-colors">
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-
-                  {/* Add new bottle */}
-                  <div className="flex gap-2 items-end pt-1">
-                    <div className="flex-1 space-y-1">
-                      <Label className="text-xs">Name</Label>
-                      <Input
-                        placeholder="e.g. Hydroflask 32oz"
-                        value={newBottleName}
-                        onChange={(e) => setNewBottleName(e.target.value)}
-                        className="h-8 text-xs"
-                      />
-                    </div>
-                    <div className="w-20 space-y-1">
-                      <Label className="text-xs">Size</Label>
-                      <Input
-                        type="number" min="1"
-                        placeholder="32"
-                        value={newBottleSize}
-                        onChange={(e) => setNewBottleSize(e.target.value)}
-                        className="h-8 text-xs"
-                      />
-                    </div>
-                    <div className="w-20 space-y-1">
-                      <Label className="text-xs">Unit</Label>
-                      <Select value={newBottleUnit} onValueChange={(v) => setNewBottleUnit(v as any)}>
-                        <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="oz">oz</SelectItem>
-                          <SelectItem value="ml">ml</SelectItem>
-                          <SelectItem value="L">L</SelectItem>
-                          <SelectItem value="gal">gal</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <Button size="sm" variant="outline" className="h-8" onClick={addBottle}>
-                      <Plus className="w-3.5 h-3.5" />
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            )}
           </>
         )}
+
+        {/* Water tracking — available to ALL users */}
+        <div className="border-t border-border pt-3 space-y-3">
+          <div className="flex items-center gap-3">
+            <Switch
+              id="watertracking" checked={enableWaterTracking}
+              onCheckedChange={setEnableWaterTracking}
+              data-testid="switch-water-tracking"
+            />
+            <div>
+              <Label htmlFor="watertracking" className="cursor-pointer">Enable water intake tracking</Label>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Shows a daily water tracker on the dashboard.
+                {user?.meetDate ? " During peak week, targets follow your powerlifting protocol. Otherwise uses" : " Uses"} evidence-based targets based on your weight, sex, and age.
+              </p>
+            </div>
+          </div>
+
+          {enableWaterTracking && (
+            <div className="space-y-3 pl-1">
+              <div className="flex items-center gap-3">
+                <Droplets className="w-4 h-4 text-blue-400 flex-shrink-0" />
+                <Label className="text-xs flex-shrink-0">Display unit</Label>
+                <Select value={waterUnit} onValueChange={(v) => setWaterUnit(v as any)}>
+                  <SelectTrigger className="h-8 w-24 text-xs"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="oz">oz</SelectItem>
+                    <SelectItem value="ml">ml</SelectItem>
+                    <SelectItem value="L">L</SelectItem>
+                    <SelectItem value="gal">gal</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <p className="text-xs font-semibold text-muted-foreground">Water bottles</p>
+                {waterBottles.length === 0 && (
+                  <p className="text-xs text-muted-foreground">No bottles saved yet.</p>
+                )}
+                {waterBottles.map((b) => (
+                  <div key={b.id} className="flex items-center justify-between bg-secondary rounded-lg px-3 py-2">
+                    <span className="text-sm font-medium">{b.name}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-muted-foreground">{fmtBottle(b.mlSize)}</span>
+                      <button onClick={() => removeBottle(b.id)} className="text-muted-foreground hover:text-destructive transition-colors">
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                <div className="flex gap-2 items-end pt-1">
+                  <div className="flex-1 space-y-1">
+                    <Label className="text-xs">Name</Label>
+                    <Input placeholder="e.g. Hydroflask 32oz" value={newBottleName} onChange={(e) => setNewBottleName(e.target.value)} className="h-8 text-xs" />
+                  </div>
+                  <div className="w-20 space-y-1">
+                    <Label className="text-xs">Size</Label>
+                    <Input type="number" min="1" placeholder="32" value={newBottleSize} onChange={(e) => setNewBottleSize(e.target.value)} className="h-8 text-xs" />
+                  </div>
+                  <div className="w-20 space-y-1">
+                    <Label className="text-xs">Unit</Label>
+                    <Select value={newBottleUnit} onValueChange={(v) => setNewBottleUnit(v as any)}>
+                      <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="oz">oz</SelectItem>
+                        <SelectItem value="ml">ml</SelectItem>
+                        <SelectItem value="L">L</SelectItem>
+                        <SelectItem value="gal">gal</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <Button size="sm" variant="outline" className="h-8" onClick={addBottle}>
+                    <Plus className="w-3.5 h-3.5" />
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
       </section>
 
       {/* Wearables */}
