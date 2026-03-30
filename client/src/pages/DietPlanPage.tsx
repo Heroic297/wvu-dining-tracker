@@ -294,6 +294,7 @@ export default function DietPlanPage() {
   const targets = data?.targets;
   const waterCutPlan = data?.waterCutPlan;
   const peakWeekPlan: PeakWeekDay[] | null = data?.peakWeekPlan ?? null;
+  const waterCutAnalysis = data?.waterCutAnalysis ?? null;
   const latestWeight = weightLogs[0]?.weightKg ?? user?.weightKg;
 
   if (!targets) {
@@ -508,6 +509,53 @@ export default function DietPlanPage() {
           )}
         </div>
       )}
+
+      {/* Water cut analysis card */}
+      {waterCutAnalysis && waterCutAnalysis.cutKg > 0 && (
+        <div className={`rounded-xl border p-4 space-y-2 ${
+          waterCutAnalysis.cutCategory === "unsafe" ? "border-destructive/60 bg-destructive/5"
+          : waterCutAnalysis.cutCategory === "aggressive" ? "border-yellow-500/60 bg-yellow-500/5"
+          : waterCutAnalysis.cutCategory === "moderate" ? "border-blue-500/40 bg-blue-500/5"
+          : "border-border bg-card"
+        }`}>
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-semibold flex items-center gap-2">
+              <Waves className="w-4 h-4 text-blue-400" />
+              Water cut analysis
+            </p>
+            <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+              waterCutAnalysis.cutCategory === "unsafe" ? "bg-destructive/20 text-destructive"
+              : waterCutAnalysis.cutCategory === "aggressive" ? "bg-yellow-500/20 text-yellow-400"
+              : waterCutAnalysis.cutCategory === "moderate" ? "bg-blue-500/20 text-blue-400"
+              : "bg-emerald-500/20 text-emerald-400"
+            }`}>
+              {waterCutAnalysis.cutCategory === "unsafe" ? "Unsafe"
+                : waterCutAnalysis.cutCategory === "aggressive" ? "Aggressive"
+                : waterCutAnalysis.cutCategory === "moderate" ? "Moderate"
+                : "Minimal"}
+            </span>
+          </div>
+          <div className="grid grid-cols-3 gap-2 text-center">
+            <div className="bg-secondary rounded-lg p-2">
+              <p className="text-sm font-bold">{kgToLbs(waterCutAnalysis.currentWeightKg).toFixed(1)}</p>
+              <p className="text-xs text-muted-foreground">Current (lbs)</p>
+            </div>
+            <div className="bg-secondary rounded-lg p-2">
+              <p className="text-sm font-bold text-blue-400">{kgToLbs(waterCutAnalysis.cutKg).toFixed(1)}</p>
+              <p className="text-xs text-muted-foreground">To cut (lbs)</p>
+            </div>
+            <div className="bg-secondary rounded-lg p-2">
+              <p className="text-sm font-bold">{waterCutAnalysis.cutPct.toFixed(1)}%</p>
+              <p className="text-xs text-muted-foreground">Of bodyweight</p>
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground leading-relaxed">{waterCutAnalysis.recommendation}</p>
+          {waterCutAnalysis.useGlycogenDepletion && (
+            <p className="text-xs text-blue-400">Glycogen depletion protocol active in your peak week plan.</p>
+          )}
+        </div>
+      )}
+
 
       {/* ── DAILY TARGETS ──────────────────────────────────────────────────── */}
       <div className="bg-card border border-border rounded-xl p-4">
