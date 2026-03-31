@@ -211,20 +211,32 @@ export default function DashboardPage() {
             <p className="text-sm text-foreground">{peakWeekToday.focus}</p>
           </div>
 
-          {/* Macro targets */}
-          <div className="grid grid-cols-5 gap-2">
-            {[
-              { label: "Calories", value: `${peakWeekToday.calories}`, unit: "kcal", color: HEX.calories },
-              { label: "Protein",  value: `${peakWeekToday.proteinG}`, unit: "g",    color: HEX.protein },
-              { label: "Carbs",    value: `${peakWeekToday.carbsG}`,   unit: "g",    color: HEX.carbs },
-              { label: "Fat",      value: `${peakWeekToday.fatG}`,     unit: "g",    color: HEX.fat },
-              { label: "Sodium",   value: `${(peakWeekToday.sodiumMg/1000).toFixed(1)}`, unit: "g Na", color: "#60a5fa" },
-            ].map(({ label, value, unit, color }) => (
-              <div key={label} className="bg-secondary rounded-xl p-2 text-center">
-                <p className="text-sm font-bold" style={{ color }}>{value}<span className="text-xs font-normal text-muted-foreground ml-0.5">{unit}</span></p>
-                <p className="text-[10px] text-muted-foreground mt-0.5">{label}</p>
-              </div>
-            ))}
+          {/* Macro targets — two-row layout: calories full-width on top, 4 macros below */}
+          <div className="space-y-2">
+            {/* Calories — full width hero row */}
+            <div className="bg-secondary rounded-xl px-4 py-2.5 flex items-center justify-between">
+              <span className="text-xs text-muted-foreground font-medium">Calories</span>
+              <span className="text-base font-bold" style={{ color: HEX.calories }}>
+                {peakWeekToday.calories.toLocaleString()}
+                <span className="text-xs font-normal text-muted-foreground ml-1">kcal</span>
+              </span>
+            </div>
+            {/* 4 macros in a 2×2 grid */}
+            <div className="grid grid-cols-2 gap-2">
+              {[
+                { label: "Protein",  value: peakWeekToday.proteinG,                        unit: "g",    color: HEX.protein },
+                { label: "Carbs",    value: peakWeekToday.carbsG,                          unit: "g",    color: HEX.carbs },
+                { label: "Fat",      value: peakWeekToday.fatG,                            unit: "g",    color: HEX.fat },
+                { label: "Sodium",   value: +(peakWeekToday.sodiumMg / 1000).toFixed(1),  unit: "g Na", color: "#60a5fa" },
+              ].map(({ label, value, unit, color }) => (
+                <div key={label} className="bg-secondary rounded-xl px-3 py-2 flex items-center justify-between">
+                  <span className="text-xs text-muted-foreground">{label}</span>
+                  <span className="text-sm font-bold" style={{ color }}>
+                    {value}<span className="text-[11px] font-normal text-muted-foreground ml-0.5">{unit}</span>
+                  </span>
+                </div>
+              ))}
+            </div>
           </div>
 
           {/* Water */}
@@ -280,65 +292,75 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Calorie ring + macros */}
-      <div className="bg-card border border-border rounded-2xl p-5">
-        <div className="flex items-center gap-6">
-          {/* Big calorie ring */}
-          <div className="relative flex-shrink-0">
-            {(() => {
-              const r = 44, circ = 2 * Math.PI * r;
-              const pct = targets ? Math.min(1, totals.calories / targets.calories) : 0;
-              return (
-                <svg width={108} height={108} viewBox="0 0 108 108">
-                  {/* Outer glow track */}
-                  <circle cx={54} cy={54} r={r} fill="none" stroke="hsl(var(--muted))" strokeWidth={9} />
-                  <circle
-                    cx={54} cy={54} r={r}
-                    fill="none"
-                    stroke={calStroke}
-                    strokeWidth={9}
-                    strokeLinecap="round"
-                    strokeDasharray={`${circ * pct} ${circ}`}
-                    transform="rotate(-90 54 54)"
-                    style={{ transition: "stroke-dasharray 0.65s cubic-bezier(0.34,1.56,0.64,1), stroke 0.3s ease" }}
-                  />
-                  <text x={54} y={49} textAnchor="middle" fontSize="20" fontWeight="800" fill="hsl(var(--foreground))" fontFamily="var(--font-display)">
-                    {Math.round(totals.calories)}
-                  </text>
-                  <text x={54} y={66} textAnchor="middle" fontSize="11" fill="hsl(var(--muted-foreground))">
-                    {targets ? `/ ${targets.calories} kcal` : "kcal"}
-                  </text>
-                </svg>
-              );
-            })()}
-          </div>
+      {/* Calorie + macro card — redesigned for mobile */}
+      <div className="bg-card border border-border rounded-2xl p-4 space-y-3">
+        {/* Top row: calorie ring centred with remaining label */}
+        <div className="flex flex-col items-center">
+          {(() => {
+            const r = 44, circ = 2 * Math.PI * r;
+            const pct = targets ? Math.min(1, totals.calories / targets.calories) : 0;
+            return (
+              <svg width={108} height={108} viewBox="0 0 108 108">
+                <circle cx={54} cy={54} r={r} fill="none" stroke="hsl(var(--muted))" strokeWidth={9} />
+                <circle
+                  cx={54} cy={54} r={r} fill="none"
+                  stroke={calStroke} strokeWidth={9} strokeLinecap="round"
+                  strokeDasharray={`${circ * pct} ${circ}`}
+                  transform="rotate(-90 54 54)"
+                  style={{ transition: "stroke-dasharray 0.65s cubic-bezier(0.34,1.56,0.64,1), stroke 0.3s ease" }}
+                />
+                <text x={54} y={47} textAnchor="middle" fontSize="19" fontWeight="800" fill="hsl(var(--foreground))" fontFamily="var(--font-display)">
+                  {Math.round(totals.calories)}
+                </text>
+                <text x={54} y={63} textAnchor="middle" fontSize="10" fill="hsl(var(--muted-foreground))">
+                  {targets ? `of ${targets.calories}` : "kcal"}
+                </text>
+                <text x={54} y={74} textAnchor="middle" fontSize="9" fill="hsl(var(--muted-foreground))">
+                  kcal
+                </text>
+              </svg>
+            );
+          })()}
+          {calRemain !== null && (
+            <p className="text-xs text-muted-foreground -mt-1">
+              {calRemain >= 0
+                ? <><span className="text-foreground font-semibold">{calRemain}</span> kcal remaining</>
+                : <><span className="text-destructive font-semibold">{Math.abs(calRemain)}</span> kcal over</>}
+            </p>
+          )}
+        </div>
 
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold mb-0.5">Calories</p>
-            {calRemain !== null && (
-              <p className="text-xs text-muted-foreground mb-3">
-                {calRemain >= 0
-                  ? <><span className="text-foreground font-medium">{calRemain}</span> kcal remaining</>
-                  : <><span className="text-destructive font-medium">{Math.abs(calRemain)}</span> kcal over</>}
-              </p>
-            )}
-            <div className="flex gap-5">
-              <MacroRing value={totals.protein} max={targets?.proteinG ?? 160} color={TOKEN.protein} label="Protein" />
-              <MacroRing value={totals.carbs}   max={targets?.carbsG   ?? 250} color={TOKEN.carbs}   label="Carbs" />
-              <MacroRing value={totals.fat}     max={targets?.fatG     ?? 70}  color={TOKEN.fat}     label="Fat" />
-            </div>
-          </div>
+        {/* Macro bars — horizontal pill rows, no overflow possible */}
+        <div className="space-y-2">
+          {([
+            { label: "Protein", logged: totals.protein, goal: targets?.proteinG ?? 160, color: TOKEN.protein, hex: HEX.protein },
+            { label: "Carbs",   logged: totals.carbs,   goal: targets?.carbsG   ?? 250, color: TOKEN.carbs,   hex: HEX.carbs },
+            { label: "Fat",     logged: totals.fat,     goal: targets?.fatG     ?? 70,  color: TOKEN.fat,     hex: HEX.fat },
+          ] as const).map(({ label, logged, goal, color, hex }) => {
+            const pct = Math.min(100, goal > 0 ? (logged / goal) * 100 : 0);
+            return (
+              <div key={label}>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs font-medium" style={{ color: hex }}>{label}</span>
+                  <span className="text-xs text-muted-foreground">
+                    <span className="font-semibold text-foreground">{Math.round(logged)}</span>
+                    <span className="mx-0.5">/</span>
+                    {goal}g
+                  </span>
+                </div>
+                <div className="h-1.5 bg-secondary rounded-full overflow-hidden">
+                  <div
+                    className="h-full rounded-full transition-all duration-500"
+                    style={{ width: `${pct}%`, background: color }}
+                  />
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
 
-      {/* Stat row */}
-      {targets && (
-        <div className="grid grid-cols-3 gap-3">
-          <StatCard label="Protein goal" value={`${targets.proteinG}g`} sub={`${fmt1(totals.protein)}g logged`} accent={HEX.protein} />
-          <StatCard label="Carb goal"    value={`${targets.carbsG}g`}   sub={`${fmt1(totals.carbs)}g logged`}   accent={HEX.carbs} />
-          <StatCard label="Fat goal"     value={`${targets.fatG}g`}     sub={`${fmt1(totals.fat)}g logged`}     accent={HEX.fat} />
-        </div>
-      )}
+      {/* Stat row removed — macro bars above now show logged/goal in a cleaner format */}
 
       {/* Water tracker */}
       {enableWaterTracking && (
