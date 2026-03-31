@@ -246,7 +246,7 @@ export function analyzeWaterCut(user: User, recentWeightKg?: number): WaterCutAn
   let useWaterSodiumLoad = false;
   let recommendation = "";
 
-  if (cutPct < 1) {
+  if (cutPct < 0.5) {
     tier = 0; cutCategory = "none";
     recommendation = `You're essentially at weight (${cutKg.toFixed(2)}kg to lose). No manipulation needed — focus entirely on carb loading to maximise glycogen and come in at full strength.`;
   } else if (cutPct <= 2) {
