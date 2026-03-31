@@ -335,13 +335,17 @@ export default function DietPlanPage() {
   const currentLbs = latestWeight ? r1(kgToLbs(latestWeight)) : null;
   const targetLbs = user?.targetWeightKg ? r1(kgToLbs(user.targetWeightKg)) : null;
 
-  // Only show water cut buffer in progress if the user has the toggle on AND
-  // the automatic analysis confirms a water cut is actually needed at their cut%.
-  // If the analysis says Tier 0-1 (gut cut only), suppress the water cut UI.
-  const waterCutEnabled = !!user?.enableWaterCut && (waterCutAnalysis?.needsWaterCut ?? true);
-  const bufferLbs = currentLbs ? r1(currentLbs * 0.01) : 0;
+  // Compute the buffer reserved for the cut method (gut cut or water cut).
+  // Tier 1 (gut cut): reserve 1.5% BW — gut cut removes 1.5–2.5% BW
+  // Tier 2+ (water cut): reserve 1% BW
+  // Tier 0: no buffer
+  const cutTier = waterCutAnalysis?.tier ?? 0;
+  const bufferPct = cutTier === 1 ? 0.015 : cutTier >= 2 ? 0.01 : 0;
+  const bufferLbs = currentLbs ? r1(currentLbs * bufferPct) : 0;
+  const cutMethodLabel = cutTier === 1 ? "gut cut" : cutTier >= 2 ? "water cut" : "";
+  const hasBuffer = bufferPct > 0 && bufferLbs > 0;
   const dietTargetLbs =
-    targetLbs !== null && waterCutEnabled ? r1(targetLbs + bufferLbs) : targetLbs;
+    targetLbs !== null && hasBuffer ? r1(targetLbs + bufferLbs) : targetLbs;
   const lbsRemaining =
     currentLbs !== null && dietTargetLbs !== null
       ? r1(Math.abs(dietTargetLbs - currentLbs))
@@ -483,9 +487,9 @@ export default function DietPlanPage() {
               <div className="text-center">
                 <p className="text-sm font-semibold text-primary">{lbsRemaining} lbs</p>
                 <p className="text-xs text-muted-foreground">to go</p>
-                {waterCutEnabled && (
+                {hasBuffer && (
                   <p className="text-xs text-blue-400 mt-0.5 flex items-center justify-center gap-0.5">
-                    <Waves className="w-3 h-3" />+{bufferLbs} for cut
+                    <Waves className="w-3 h-3" />+{bufferLbs} {cutMethodLabel}
                   </p>
                 )}
               </div>
@@ -496,16 +500,17 @@ export default function DietPlanPage() {
             </div>
           </div>
 
-          {waterCutEnabled && (
+          {hasBuffer && (
             <div className="mt-3 pt-3 border-t border-border">
               <p className="text-xs text-blue-400 flex items-start gap-1.5">
                 <Waves className="w-3 h-3 mt-0.5 flex-shrink-0" />
                 Diet to{" "}
-                <span className="font-semibold text-foreground">
-                  {dietTargetLbs} lbs
-                </span>{" "}
-                — the final {bufferLbs} lbs (1% bodyweight) is reserved for
-                your water cut.
+                <span className="font-semibold text-foreground">{dietTargetLbs} lbs</span>
+                {" — the final "}
+                <span className="font-semibold text-foreground">{bufferLbs} lbs</span>
+                {cutTier === 1
+                  ? " will be dropped via gut cut (low-residue eating 3 days before weigh-in)."
+                  : " is reserved for the water cut."}
               </p>
             </div>
           )}
