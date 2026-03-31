@@ -43,7 +43,6 @@ export default function SettingsPage() {
   const [burnMode, setBurnMode] = useState(user?.burnMode ?? "tdee");
   const [trainingDays, setTrainingDays] = useState<number[]>(user?.trainingDays as number[] ?? [1, 3, 5]);
   const [meetDate, setMeetDate] = useState(user?.meetDate ?? "");
-  const [enableWaterCut, setEnableWaterCut] = useState(user?.enableWaterCut ?? false);
   const [enableWaterTracking, setEnableWaterTracking] = useState(user?.enableWaterTracking ?? false);
   const [waterUnit, setWaterUnit] = useState<"ml"|"oz"|"L"|"gal">((user as any)?.waterUnit ?? "oz");
   const [waterBottles, setWaterBottles] = useState<Array<{id:string;name:string;mlSize:number}>>((user as any)?.waterBottles ?? []);
@@ -89,7 +88,7 @@ export default function SettingsPage() {
       const heightCm = (parseInt(heightFt) * 12 + parseInt(heightIn)) * 2.54;
       const payload: Record<string, any> = {
         sex, dateOfBirth: dob, heightCm, activityLevel, goalType,
-        burnMode, trainingDays, enableWaterCut, enableWaterTracking,
+        burnMode, trainingDays, enableWaterTracking,
         waterUnit, waterBottles,
         // targetDate and targetWeightKg must be omitted (not null) when empty
         // — the server schema does not accept null for these fields
@@ -289,15 +288,6 @@ export default function SettingsPage() {
             <div className="space-y-1.5">
               <Label>Meet date</Label>
               <DateInput value={meetDate} onChange={setMeetDate} testId="input-meet-date" />
-            </div>
-
-            <div className="flex items-center gap-3">
-              <Switch
-                id="watercut" checked={enableWaterCut}
-                onCheckedChange={setEnableWaterCut}
-                data-testid="switch-watercut"
-              />
-              <Label htmlFor="watercut" className="cursor-pointer">Enable 7-day water cut plan</Label>
             </div>
 
           </>
