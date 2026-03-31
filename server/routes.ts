@@ -197,7 +197,6 @@ export async function registerRoutes(
         burnMode: z.enum(["wearable", "tdee"]).optional(),
         trainingDays: z.array(z.number().int().min(0).max(6)).optional(),
         meetDate: z.string().optional().nullable(),
-        enableWaterCut: z.boolean().optional(),
         enableWaterTracking: z.boolean().optional(),
         waterBottles: z.array(z.object({
           id: z.string(),
@@ -253,9 +252,9 @@ export async function registerRoutes(
         ? analyzeWaterCut(user, recentWeightKg)
         : null;
 
-      // Water cut plan if within 7 days of meet
+      // Water cut plan — shown automatically when analysis determines it's needed (Tier 2+)
       let waterCutPlan = null;
-      if (user.enableWaterCut && user.meetDate) {
+      if (user.meetDate && waterCutAnalysis?.needsWaterCut) {
         waterCutPlan = generateWaterCutPlan(user, user.meetDate);
       }
 
