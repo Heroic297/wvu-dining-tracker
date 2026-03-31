@@ -180,16 +180,25 @@ export function computeDailyTargets(
       (new Date(user.targetDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24)
     ));
     const isLossGoal = user.goalType === "weight_loss" || user.goalType === "powerlifting_loss";
-    // Automatically determine if a water cut is needed based on cut percentage.
-    // Tier 2+ (>2% BW cut) = water cut needed = reserve 1% BW buffer for it.
-    // No manual toggle required — the analysis decides.
+    // Automatically reserve a buffer for whichever cut method the protocol uses.
+    // The diet only needs to get the athlete to the point where the cut method
+    // covers the remainder — so we don't over-diet unnecessarily close to the meet.
+    //
+    // Buffer by tier:
+    //   Tier 0 (<1%):  No buffer — already at weight
+    //   Tier 1 (1-2%): Reserve 1.5% BW for gut cut (conservative lower bound of 1.5-2.5% range)
+    //   Tier 2 (2-4%): Reserve 1% BW for water/sodium cut
+    //   Tier 3+ (4%+): Reserve 1% BW for water cut (glycogen depletion covers the rest)
     const analysis = isLossGoal && user.targetWeightKg
       ? analyzeWaterCut(user, user.weightKg ?? undefined)
       : null;
-    const needsWaterCut = analysis?.needsWaterCut ?? false;
-    const dietTargetKg = needsWaterCut && isLossGoal
-      ? user.targetWeightKg + user.weightKg * 0.01
-      : user.targetWeightKg;
+    const tier = analysis?.tier ?? 0;
+    const cutBufferKg = isLossGoal
+      ? tier === 1 ? (user.weightKg ?? 0) * 0.015   // gut cut: 1.5% BW
+      : tier >= 2 ? (user.weightKg ?? 0) * 0.01     // water cut: 1% BW
+      : 0
+      : 0;
+    const dietTargetKg = (user.targetWeightKg ?? 0) + cutBufferKg;
     const kgToChange = dietTargetKg - user.weightKg;
     const dailyAdjust = (kgToChange * 7700) / daysLeft;
 
