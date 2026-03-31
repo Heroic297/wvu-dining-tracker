@@ -180,7 +180,14 @@ export function computeDailyTargets(
       (new Date(user.targetDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24)
     ));
     const isLossGoal = user.goalType === "weight_loss" || user.goalType === "powerlifting_loss";
-    const dietTargetKg = user.enableWaterCut && isLossGoal
+    // Automatically determine if a water cut is needed based on cut percentage.
+    // Tier 2+ (>2% BW cut) = water cut needed = reserve 1% BW buffer for it.
+    // No manual toggle required — the analysis decides.
+    const analysis = isLossGoal && user.targetWeightKg
+      ? analyzeWaterCut(user, user.weightKg ?? undefined)
+      : null;
+    const needsWaterCut = analysis?.needsWaterCut ?? false;
+    const dietTargetKg = needsWaterCut && isLossGoal
       ? user.targetWeightKg + user.weightKg * 0.01
       : user.targetWeightKg;
     const kgToChange = dietTargetKg - user.weightKg;
