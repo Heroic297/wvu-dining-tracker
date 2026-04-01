@@ -327,7 +327,7 @@ function CoachKnows({
   const [editWvu, setEditWvu] = useState(profile.isWvuStudent ?? false);
   const [editExp, setEditExp] = useState(profile.experienceLevel ?? "intermediate");
   const [editNotes, setEditNotes] = useState(profile.notes ?? "");
-  const [editTone, setEditTone] = useState(profile.coachTone ?? "balanced");
+  const [editTone, setEditTone] = useState<"coach" | "data" | "balanced">((profile.coachTone as any) ?? "balanced");
 
   // Reset edit state when profile changes (e.g. after save)
   const openEdit = () => {
@@ -336,7 +336,7 @@ function CoachKnows({
     setEditWvu(profile.isWvuStudent ?? false);
     setEditExp(profile.experienceLevel ?? "intermediate");
     setEditNotes(profile.notes ?? "");
-    setEditTone(profile.coachTone ?? "balanced");
+    setEditTone((profile.coachTone as any) ?? "balanced");
     setSaveError("");
     setEditing(true);
   };
