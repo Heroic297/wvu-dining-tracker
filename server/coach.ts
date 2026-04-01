@@ -281,11 +281,11 @@ const TOOLS = [
     type: "function",
     function: {
       name: "get_user_stats",
-      description: "Retrieve the user's weight, calorie, and water logs for a date range to identify trends.",
+      description: "Retrieve the user's logged weight, calories, macros, and water for a date range. Use this when the user asks how they have been doing, their diet adherence, weight trend, or progress over recent days. Always call this for questions like 'how have I been doing', 'how was my diet this week', 'am I on track'.",
       parameters: {
         type: "object",
         properties: {
-          days: { type: "number", description: "Number of past days to retrieve (e.g. 7, 14, 30)" },
+          days: { type: "number", description: "Number of past days to retrieve. Use 7 for 'this week', 3 for 'past few days', 14 for 'past two weeks'. Max 30." },
         },
         required: ["days"],
       },
@@ -368,27 +368,40 @@ async function executeTool(name: string, args: any, userId: string, profile: any
     }
 
     if (name === "get_user_stats") {
-      const days = Math.min(90, Math.max(1, Number(args.days ?? 7)));
-const [wRes, mRes, wlRes] = await Promise.all([
+      const days = Math.min(30, Math.max(1, Number(args.days ?? 7)));
+      // Use make_interval to safely parameterise the interval
+      const cutoff = `CURRENT_DATE - make_interval(days => $2)`;
+      const [wRes, mRes, wlRes] = await Promise.all([
         pool.query(
-          `SELECT date, weight_kg FROM weight_log WHERE user_id=$1 ORDER BY date DESC LIMIT $2`,
+          `SELECT date, ROUND((weight_kg * 2.20462)::numeric, 1) as weight_lbs, weight_kg
+           FROM weight_log WHERE user_id=$1 AND date >= ${cutoff}
+           ORDER BY date ASC`,
           [userId, days]
         ),
         pool.query(
-          `SELECT date, SUM(total_calories) as kcal, SUM(total_protein) as protein
-           FROM user_meals WHERE user_id=$1 AND date >= CURRENT_DATE - ($2 * INTERVAL '1 day')
-           GROUP BY date ORDER BY date DESC`,
+          `SELECT date,
+                  ROUND(SUM(total_calories)::numeric) as kcal_logged,
+                  ROUND(SUM(total_protein)::numeric, 1) as protein_g,
+                  ROUND(SUM(total_carbs)::numeric, 1) as carbs_g,
+                  ROUND(SUM(total_fat)::numeric, 1) as fat_g
+           FROM user_meals WHERE user_id=$1 AND date >= ${cutoff}
+           GROUP BY date ORDER BY date ASC`,
           [userId, days]
         ),
         pool.query(
-          `SELECT date, ml_logged FROM water_logs WHERE user_id=$1 AND date >= CURRENT_DATE - ($2 * INTERVAL '1 day') ORDER BY date DESC`,
+          `SELECT date, ml_logged,
+                  ROUND((ml_logged / 29.5735)::numeric, 1) as oz_logged
+           FROM water_logs WHERE user_id=$1 AND date >= ${cutoff}
+           ORDER BY date ASC`,
           [userId, days]
         ),
       ]);
       return JSON.stringify({
+        period_days: days,
         weights: wRes.rows,
-        daily_calories: mRes.rows,
+        daily_intake: mRes.rows,
         water_logs: wlRes.rows,
+        note: "kcal_logged is actual food logged. Compare to the user's daily calorie target from the LIVE USER CONTEXT to assess adherence.",
       });
     }
 
