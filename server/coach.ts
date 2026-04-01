@@ -1093,7 +1093,7 @@ export function registerCoachRoutes(app: Express): void {
         console.error("[coach] background compact error:", e.message)
       );
 
-      res.json({ message: safeOutput });
+      res.json({ message: safeOutput, model: aiConfig.model, provider: aiConfig.provider });
     } catch (err: any) {
       if (err.name === "ZodError") return res.status(400).json({ error: err.errors[0].message });
       // Log full error so Render logs show the real cause
