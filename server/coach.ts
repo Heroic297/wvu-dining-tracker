@@ -27,7 +27,7 @@ const COMPACT_THRESHOLD = 20;
 export const DEFAULT_MODELS: Record<string, string> = {
   groq:       "llama-3.3-70b-versatile",
   gemini:     "gemini-2.0-flash",
-  openrouter: "meta-llama/llama-3.3-70b-instruct:free",
+  openrouter: "qwen/qwen3.6-plus-preview:free",
 };
 
 // Curated free model catalog shown in the UI
@@ -37,6 +37,11 @@ const DEAD_MODELS = new Set([
   "microsoft/phi-4:free",
   "qwen/qwen-2.5-72b-instruct:free",
   "google/gemini-2.0-flash-exp:free",
+  // Previously-set defaults that are rate-limited—migrate to qwen3.6
+  "meta-llama/llama-3.3-70b-instruct:free",
+  "nousresearch/hermes-3-llama-3.1-405b:free",
+  "openai/gpt-oss-120b:free",
+  "nvidia/nemotron-3-super-120b-a12b:free",
 ]);
 
 export const FREE_MODEL_CATALOG: Record<string, Array<{ id: string; label: string; description: string }>> = {
@@ -52,12 +57,14 @@ export const FREE_MODEL_CATALOG: Record<string, Array<{ id: string; label: strin
     { id: "gemini-1.5-flash-8b",     label: "Gemini 1.5 Flash 8B", description: "Lighter and faster, good for quick questions" },
   ],
   openrouter: [
-    { id: "meta-llama/llama-3.3-70b-instruct:free",    label: "Llama 3.3 70B",      description: "Best all-around — fast, reliable, strong coaching (recommended)" },
-    { id: "nousresearch/hermes-3-llama-3.1-405b:free", label: "Hermes 3 405B",      description: "Largest free model available — outstanding reasoning and coaching depth" },
-    { id: "openai/gpt-oss-120b:free",                  label: "GPT OSS 120B",       description: "OpenAI open-source 120B — excellent instruction following" },
-    { id: "nvidia/nemotron-3-super-120b-a12b:free",    label: "Nemotron 120B",      description: "NVIDIA 120B — strong reasoning, good for detailed analysis" },
-    { id: "google/gemma-3-27b-it:free",                label: "Gemma 3 27B",        description: "Google 27B — solid coaching, no tool calling" },
-    { id: "qwen/qwen3-next-80b-a3b-instruct:free",     label: "Qwen3 80B",          description: "Qwen3 80B — strong multilingual reasoning" },
+    { id: "qwen/qwen3.6-plus-preview:free",            label: "Qwen 3.6 Plus",      description: "1M context, tool calling — excellent reasoning (recommended)" },
+    { id: "minimax/minimax-m2.5:free",                 label: "MiniMax M2.5",       description: "196k context, tool calling — fast and capable" },
+    { id: "meta-llama/llama-3.3-70b-instruct:free",    label: "Llama 3.3 70B",      description: "65k context, tool calling — proven reliable" },
+    { id: "openai/gpt-oss-120b:free",                  label: "GPT OSS 120B",       description: "131k context, tool calling — OpenAI open-source" },
+    { id: "nvidia/nemotron-3-super-120b-a12b:free",    label: "Nemotron 120B",      description: "262k context, tool calling — NVIDIA large model" },
+    { id: "stepfun/step-3.5-flash:free",               label: "Step 3.5 Flash",     description: "256k context, tool calling — fast inference" },
+    { id: "nousresearch/hermes-3-llama-3.1-405b:free", label: "Hermes 3 405B",      description: "131k context — largest free model, no tool calling" },
+    { id: "google/gemma-3-27b-it:free",                label: "Gemma 3 27B",        description: "131k context — Google model, no tool calling" },
   ],
 };
 
@@ -552,18 +559,18 @@ async function executeTool(name: string, args: any, userId: string, profile: any
 // OpenRouter free models that do NOT support tool/function calling
 // For these we strip tools and let the model answer from context alone
 // (most small/specialized models don't support tools)
+// Verified from OpenRouter API: models that do NOT support tool calling
 const OPENROUTER_NO_TOOLS = new Set([
+  "nousresearch/hermes-3-llama-3.1-405b:free",
   "google/gemma-3-27b-it:free",
   "google/gemma-3-12b-it:free",
   "google/gemma-3-4b-it:free",
   "google/gemma-3n-e4b-it:free",
   "google/gemma-3n-e2b-it:free",
-  "nvidia/nemotron-3-nano-30b-a3b:free",
-  "nvidia/nemotron-nano-9b-v2:free",
+  "meta-llama/llama-3.2-3b-instruct:free",
   "liquid/lfm-2.5-1.2b-instruct:free",
   "liquid/lfm-2.5-1.2b-thinking:free",
-  "arcee-ai/trinity-mini:free",
-  "arcee-ai/trinity-large-preview:free",
+  "cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
 ]);
 
 /** OpenAI-compatible call (Groq + OpenRouter share the same format) */
