@@ -655,7 +655,7 @@ export async function registerRoutes(
           proteinG: z.number().min(0).default(0),
           carbsG: z.number().min(0).default(0),
           fatG: z.number().min(0).default(0),
-          source: z.enum(["wvu", "usda", "ai_estimated", "manual_exact"]),
+          source: z.enum(["wvu", "usda", "usda_branded", "open_food_facts", "ai_estimated", "manual_exact"]),
         });
 
         const data = schema.parse(req.body);
