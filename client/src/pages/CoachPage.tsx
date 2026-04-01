@@ -23,9 +23,11 @@ import {
   Settings2,
   RefreshCw,
   Check,
+  Pencil,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import {
   Sheet,
@@ -314,6 +316,57 @@ function CoachKnows({
   onClearMemory: () => void;
   clearing: boolean;
 }) {
+  const qc = useQueryClient();
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
+
+  // Edit form state — initialised from current profile
+  const [editName, setEditName] = useState(profile.preferredName ?? "");
+  const [editGoal, setEditGoal] = useState(profile.mainGoal ?? "general_fitness");
+  const [editWvu, setEditWvu] = useState(profile.isWvuStudent ?? false);
+  const [editExp, setEditExp] = useState(profile.experienceLevel ?? "intermediate");
+  const [editNotes, setEditNotes] = useState(profile.notes ?? "");
+  const [editTone, setEditTone] = useState(profile.coachTone ?? "balanced");
+
+  // Reset edit state when profile changes (e.g. after save)
+  const openEdit = () => {
+    setEditName(profile.preferredName ?? "");
+    setEditGoal(profile.mainGoal ?? "general_fitness");
+    setEditWvu(profile.isWvuStudent ?? false);
+    setEditExp(profile.experienceLevel ?? "intermediate");
+    setEditNotes(profile.notes ?? "");
+    setEditTone(profile.coachTone ?? "balanced");
+    setSaveError("");
+    setEditing(true);
+  };
+
+  const saveEdit = async () => {
+    setSaving(true);
+    setSaveError("");
+    try {
+      const res = await api.coachUpdateProfile({
+        preferredName: editName,
+        mainGoal: editGoal,
+        isWvuStudent: editWvu,
+        experienceLevel: editExp,
+        notes: editNotes,
+        coachTone: editTone as any,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: "Save failed" }));
+        setSaveError(err.error ?? "Save failed");
+        return;
+      }
+      qc.invalidateQueries({ queryKey: ["coachProfile"] });
+      setEditing(false);
+    } catch (e: any) {
+      setSaveError(e?.message ?? "Network error");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const goalLabels: Record<string, string> = {
     powerlifting: "Powerlifting / competition prep",
     lose_weight: "Lose weight / cut body fat",
@@ -329,113 +382,246 @@ function CoachKnows({
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-2">
-        <BookOpen className="w-4 h-4 text-primary" />
-        <h3 className="text-sm font-semibold">What I know about you</h3>
-      </div>
-
-      <div className="space-y-2 text-sm">
-        {profile.preferredName && (
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">Name</span>
-            <span className="font-medium">{profile.preferredName}</span>
-          </div>
-        )}
-        {profile.mainGoal && (
-          <div className="flex justify-between gap-4">
-            <span className="text-muted-foreground flex-shrink-0">Goal</span>
-            <span className="font-medium text-right">{goalLabels[profile.mainGoal] ?? profile.mainGoal}</span>
-          </div>
-        )}
-        {profile.isWvuStudent !== undefined && (
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">WVU student</span>
-            <span className="font-medium">{profile.isWvuStudent ? "Yes" : "No"}</span>
-          </div>
-        )}
-        {profile.experienceLevel && (
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">Experience</span>
-            <span className="font-medium capitalize">{profile.experienceLevel}</span>
-          </div>
-        )}
-        {profile.coachTone && (
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">Tone</span>
-            <span className="font-medium">{toneLabels[profile.coachTone] ?? profile.coachTone}</span>
-          </div>
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <BookOpen className="w-4 h-4 text-primary" />
+          <h3 className="text-sm font-semibold">What I know about you</h3>
+        </div>
+        {!editing && (
+          <Button variant="ghost" size="sm" className="h-7 px-2 text-xs gap-1" onClick={openEdit}>
+            <Pencil className="w-3 h-3" /> Edit
+          </Button>
         )}
       </div>
 
-      {profile.notes && (
-        <div className="bg-secondary rounded-xl p-3">
-          <p className="text-xs text-muted-foreground mb-1 font-medium">Notes & preferences</p>
-          <p className="text-xs leading-relaxed">{profile.notes}</p>
-        </div>
-      )}
+      {/* ── Edit mode ── */}
+      {editing ? (
+        <div className="space-y-3">
+          <div className="space-y-1">
+            <p className="text-xs text-muted-foreground font-medium">Name</p>
+            <Input value={editName} onChange={e => setEditName(e.target.value)} className="h-8 text-xs" placeholder="Your name" />
+          </div>
 
-      {profile.rollingSummary && (
-        <div className="bg-secondary rounded-xl p-3">
-          <p className="text-xs text-muted-foreground mb-1 font-medium">Conversation memory</p>
-          <p className="text-xs leading-relaxed whitespace-pre-wrap">{profile.rollingSummary}</p>
-        </div>
-      )}
+          <div className="space-y-1">
+            <p className="text-xs text-muted-foreground font-medium">Main goal</p>
+            <div className="space-y-1">
+              {Object.entries(goalLabels).map(([val, label]) => (
+                <button
+                  key={val}
+                  onClick={() => setEditGoal(val)}
+                  className={`w-full text-left px-3 py-2 rounded-lg border text-xs font-medium transition-colors ${
+                    editGoal === val
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "border-border bg-secondary hover:border-primary/40"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
 
-      {!profile.rollingSummary && !profile.notes && (
-        <p className="text-xs text-muted-foreground">
-          Memory builds as you chat. After 20 messages I'll start compacting older ones into a summary that lives here.
-        </p>
-      )}
+          <div className="space-y-1">
+            <p className="text-xs text-muted-foreground font-medium">Experience level</p>
+            <div className="flex gap-1.5">
+              {(["beginner", "intermediate", "advanced"] as const).map(lvl => (
+                <button
+                  key={lvl}
+                  onClick={() => setEditExp(lvl)}
+                  className={`flex-1 py-1.5 rounded-lg border text-xs font-medium capitalize transition-colors ${
+                    editExp === lvl
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "border-border bg-secondary hover:border-primary/40"
+                  }`}
+                >
+                  {lvl}
+                </button>
+              ))}
+            </div>
+          </div>
 
-      {/* Usage meter (only shown if no own key) */}
-      {!profile.hasOwnKey && (
-        <div className="border-t border-border pt-3 space-y-1.5">
-          <p className="text-xs text-muted-foreground font-medium">Free messages today</p>
-          <div className="h-1.5 bg-secondary rounded-full overflow-hidden">
-            <div
-              className="h-full rounded-full bg-primary transition-all"
-              style={{ width: `${Math.min(100, (profile.dailyUsage / profile.dailyCap) * 100)}%` }}
+          <div className="space-y-1">
+            <p className="text-xs text-muted-foreground font-medium">Communication style</p>
+            <div className="space-y-1">
+              {Object.entries(toneLabels).map(([val, label]) => (
+                <button
+                  key={val}
+                  onClick={() => setEditTone(val)}
+                  className={`w-full text-left px-3 py-2 rounded-lg border text-xs font-medium transition-colors ${
+                    editTone === val
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "border-border bg-secondary hover:border-primary/40"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-1">
+            <p className="text-xs text-muted-foreground font-medium">WVU student?</p>
+            <div className="flex gap-1.5">
+              {([true, false] as const).map(v => (
+                <button
+                  key={String(v)}
+                  onClick={() => setEditWvu(v)}
+                  className={`flex-1 py-1.5 rounded-lg border text-xs font-medium transition-colors ${
+                    editWvu === v
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "border-border bg-secondary hover:border-primary/40"
+                  }`}
+                >
+                  {v ? "Yes" : "No"}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-1">
+            <p className="text-xs text-muted-foreground font-medium">Notes & preferences</p>
+            <Textarea
+              value={editNotes}
+              onChange={e => setEditNotes(e.target.value)}
+              placeholder="Injuries, dietary restrictions, preferences..."
+              className="text-xs resize-none min-h-[64px]"
             />
           </div>
-          <p className="text-xs text-muted-foreground">
-            {profile.dailyUsage} / {profile.dailyCap} used
-            {profile.dailyUsage >= profile.dailyCap && " — add your Groq key in Settings for unlimited"}
-          </p>
-        </div>
-      )}
 
-      {profile.hasOwnKey && (
-        <div className="flex items-center gap-2 text-xs text-green-400">
-          <Check className="w-3.5 h-3.5" />
-          <span>Using your Groq API key — unlimited messages</span>
-        </div>
-      )}
+          {saveError && (
+            <div className="flex items-start gap-2 bg-destructive/10 border border-destructive/30 rounded-xl px-3 py-2">
+              <AlertCircle className="w-3.5 h-3.5 text-destructive flex-shrink-0 mt-0.5" />
+              <p className="text-xs text-destructive">{saveError}</p>
+            </div>
+          )}
 
-      {/* Clear memory */}
-      <div className="border-t border-border pt-3">
-        <AlertDialog>
-          <AlertDialogTrigger asChild>
-            <Button variant="destructive" size="sm" className="w-full" disabled={clearing}>
-              <Trash2 className="w-3.5 h-3.5 mr-2" />
-              Clear all memory &amp; history
+          <div className="flex gap-2 pt-1">
+            <Button size="sm" className="flex-1" onClick={saveEdit} disabled={saving}>
+              {saving ? (
+                <span className="flex items-center gap-1.5">
+                  <svg className="animate-spin w-3 h-3" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
+                  </svg>
+                  Saving...
+                </span>
+              ) : (
+                <span className="flex items-center gap-1.5"><Check className="w-3 h-3" /> Save changes</span>
+              )}
             </Button>
-          </AlertDialogTrigger>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Clear AI Coach memory?</AlertDialogTitle>
-              <AlertDialogDescription>
-                This permanently deletes your full chat history and the AI's memory of you. You will go through the onboarding Q+A again. This cannot be undone.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction onClick={onClearMemory} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-                Yes, clear everything
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-      </div>
+            <Button size="sm" variant="ghost" onClick={() => setEditing(false)} disabled={saving}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : (
+        /* ── Read mode ── */
+        <>
+          <div className="space-y-2 text-sm">
+            {profile.preferredName && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Name</span>
+                <span className="font-medium">{profile.preferredName}</span>
+              </div>
+            )}
+            {profile.mainGoal && (
+              <div className="flex justify-between gap-4">
+                <span className="text-muted-foreground flex-shrink-0">Goal</span>
+                <span className="font-medium text-right">{goalLabels[profile.mainGoal] ?? profile.mainGoal}</span>
+              </div>
+            )}
+            {profile.isWvuStudent !== undefined && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">WVU student</span>
+                <span className="font-medium">{profile.isWvuStudent ? "Yes" : "No"}</span>
+              </div>
+            )}
+            {profile.experienceLevel && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Experience</span>
+                <span className="font-medium capitalize">{profile.experienceLevel}</span>
+              </div>
+            )}
+            {profile.coachTone && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Tone</span>
+                <span className="font-medium">{toneLabels[profile.coachTone] ?? profile.coachTone}</span>
+              </div>
+            )}
+          </div>
+
+          {profile.notes && (
+            <div className="bg-secondary rounded-xl p-3">
+              <p className="text-xs text-muted-foreground mb-1 font-medium">Notes & preferences</p>
+              <p className="text-xs leading-relaxed">{profile.notes}</p>
+            </div>
+          )}
+
+          {profile.rollingSummary && (
+            <div className="bg-secondary rounded-xl p-3">
+              <p className="text-xs text-muted-foreground mb-1 font-medium">Conversation memory</p>
+              <p className="text-xs leading-relaxed whitespace-pre-wrap">{profile.rollingSummary}</p>
+            </div>
+          )}
+
+          {!profile.rollingSummary && !profile.notes && (
+            <p className="text-xs text-muted-foreground">
+              Memory builds as you chat. After 20 messages I'll start compacting older ones into a summary that lives here.
+            </p>
+          )}
+
+          {/* Usage meter */}
+          {!profile.hasOwnKey && (
+            <div className="border-t border-border pt-3 space-y-1.5">
+              <p className="text-xs text-muted-foreground font-medium">Free messages today</p>
+              <div className="h-1.5 bg-secondary rounded-full overflow-hidden">
+                <div
+                  className="h-full rounded-full bg-primary transition-all"
+                  style={{ width: `${Math.min(100, (profile.dailyUsage / profile.dailyCap) * 100)}%` }}
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {profile.dailyUsage} / {profile.dailyCap} used
+                {profile.dailyUsage >= profile.dailyCap && " — add your Groq key in Settings for unlimited"}
+              </p>
+            </div>
+          )}
+
+          {profile.hasOwnKey && (
+            <div className="flex items-center gap-2 text-xs text-green-400">
+              <Check className="w-3.5 h-3.5" />
+              <span>Using your Groq API key — unlimited messages</span>
+            </div>
+          )}
+
+          {/* Clear memory */}
+          <div className="border-t border-border pt-3">
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button variant="destructive" size="sm" className="w-full" disabled={clearing}>
+                  <Trash2 className="w-3.5 h-3.5 mr-2" />
+                  Clear all memory &amp; history
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Clear AI Coach memory?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This permanently deletes your full chat history and the AI's memory of you. You will go through the onboarding Q+A again. This cannot be undone.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction onClick={onClearMemory} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+                    Yes, clear everything
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          </div>
+        </>
+      )}
     </div>
   );
 }
