@@ -660,11 +660,20 @@ export async function registerRoutes(
 
         const data = schema.parse(req.body);
 
+        // Normalize source to values guaranteed to exist in the Postgres enum.
+        // usda_branded and open_food_facts may not be in older DB instances.
+        const safeSourceMap: Record<string, string> = {
+          usda_branded: "usda",
+          open_food_facts: "usda",
+        };
+        const safeSource = (safeSourceMap[data.source] ?? data.source) as typeof data.source;
+
         // Macros are already pre-scaled by the client before sending.
         // servings is stored as metadata only — do NOT multiply again here.
         const scaledItem = {
           userMealId: req.params.mealId as string,
           ...data,
+          source: safeSource,
         };
 
         const item = await storage.createUserMealItem(scaledItem);
