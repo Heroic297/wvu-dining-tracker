@@ -859,12 +859,11 @@ export default function CoachPage() {
                   { id: "gemini-1.5-flash-8b",  label: "Gemini 1.5 Flash 8B" },
                 ],
                 openrouter: [
-                  { id: "meta-llama/llama-3.3-70b-instruct:free",    label: "Llama 3.3 70B" },
+                  { id: "qwen/qwen3.6-plus-preview:free",            label: "Qwen 3.6 Plus (recommended)" },
+                  { id: "minimax/minimax-m2.5:free",                 label: "MiniMax M2.5" },
+                  { id: "stepfun/step-3.5-flash:free",               label: "Step 3.5 Flash" },
                   { id: "nousresearch/hermes-3-llama-3.1-405b:free", label: "Hermes 3 405B" },
-                  { id: "openai/gpt-oss-120b:free",                  label: "GPT OSS 120B" },
-                  { id: "nvidia/nemotron-3-super-120b-a12b:free",    label: "Nemotron 120B" },
                   { id: "google/gemma-3-27b-it:free",                label: "Gemma 3 27B" },
-                  { id: "qwen/qwen3-next-80b-a3b-instruct:free",     label: "Qwen3 80B" },
                 ],
               };
               const models = (profile.modelCatalog?.[provider] ?? FALLBACK[provider] ?? []) as Array<{id:string;label:string}>;
