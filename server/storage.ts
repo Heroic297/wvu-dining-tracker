@@ -129,14 +129,14 @@ export class PgStorage implements IStorage {
   }
 
   async createUser(user: InsertUser) {
-    const [row] = await db.insert(users).values(user).returning();
+    const [row] = await db.insert(users).values(user as any).returning();
     return row;
   }
 
   async updateUser(id: string, data: Partial<InsertUser>) {
     const [row] = await db
       .update(users)
-      .set(data)
+      .set(data as any)
       .where(eq(users.id, id))
       .returning();
     return row;
