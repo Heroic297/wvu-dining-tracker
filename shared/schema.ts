@@ -95,9 +95,14 @@ export const users = pgTable("users", {
   waterUnit: text("water_unit").$type<"ml" | "oz" | "L" | "gal">().default("oz"),
   // Onboarding
   onboardingComplete: boolean("onboarding_complete").default(false),
-  // AI Coach — encrypted Groq API key (AES-256-GCM, hex-encoded iv:tag:ciphertext)
+  // AI Coach — encrypted API key (AES-256-GCM, hex-encoded iv:tag:ciphertext)
+  // Column kept as groq_api_key_encrypted for backwards compat; now stores any provider key
   groqApiKeyEncrypted: text("groq_api_key_encrypted"),
-  // AI Coach daily usage counter (resets each day)
+  // AI provider preference
+  aiProvider: text("ai_provider").default("groq"), // "groq" | "gemini" | "openrouter"
+  // Model preference (provider-specific string)
+  aiModel: text("ai_model"),
+  // AI Coach daily usage counter (resets each day, only used when no own key)
   aiDailyUsage: integer("ai_daily_usage").default(0),
   aiDailyUsageDate: date("ai_daily_usage_date"),
   createdAt: timestamp("created_at").default(sql`now()`),
