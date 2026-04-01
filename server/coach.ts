@@ -1091,12 +1091,19 @@ export function registerCoachRoutes(app: Express): void {
       if (err.name === "ZodError") return res.status(400).json({ error: err.errors[0].message });
       // Log full error so Render logs show the real cause
       console.error("[coach] chat error:", err.message, err.stack?.split("\n")[1] ?? "");
-      // Surface API errors from any provider so the user gets a useful message
-      if (err.message?.includes("404") && err.message?.includes("No endpoints")) {
-        return res.status(404).json({ error: "Model unavailable — this free model has been removed. Please go to Settings → AI Coach and switch to a different model." });
+      // Return clear, actionable error messages
+      const msg: string = err.message ?? "";
+      if (msg.includes("404") || msg.includes("No endpoints")) {
+        return res.status(200).json({ message: "The model you selected is no longer available on the free tier. Please tap the model selector in the Coach tab header to pick a different one." });
       }
-      if (err.message?.includes("API error") || err.message?.includes("Gemini API error")) {
-        return res.status(502).json({ error: `AI provider error: ${err.message}` });
+      if (msg.includes("429") || msg.includes("rate-limited") || msg.includes("rate_limited")) {
+        return res.status(200).json({ message: "This model is temporarily rate-limited by the provider. Please wait 30 seconds and try again, or switch to a different model using the selector in the Coach tab header." });
+      }
+      if (msg.includes("401")) {
+        return res.status(200).json({ message: "Your API key was rejected. Please go to Settings → AI Coach and re-enter your key." });
+      }
+      if (msg.includes("API error") || msg.includes("Gemini API error")) {
+        return res.status(200).json({ message: `Provider error: ${msg.split(":")[1]?.trim() ?? msg}. Try switching models in the Coach tab header.` });
       }
       res.status(500).json({ error: "Coach is temporarily unavailable. Please try again." });
     }
