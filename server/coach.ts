@@ -134,58 +134,66 @@ async function saveMessage(userId: string, role: string, content: string, extras
 async function buildLiveContext(userId: string, user: any): Promise<string> {
   const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
 
-  // Weight trend
-  const wRes = await pool.query(
-    `SELECT date, weight_kg FROM weight_log WHERE user_id=$1 ORDER BY date DESC LIMIT 7`,
-    [userId]
-  );
-  const weights = wRes.rows;
-  const latestWeight = weights[0];
-
-  // Today's food totals
-  const mRes = await pool.query(
-    `SELECT COALESCE(SUM(total_calories),0) as kcal,
-            COALESCE(SUM(total_protein),0) as protein,
-            COALESCE(SUM(total_carbs),0)   as carbs,
-            COALESCE(SUM(total_fat),0)     as fat
-     FROM user_meals WHERE user_id=$1 AND date=$2`,
-    [userId, today]
-  );
-  const totals = mRes.rows[0];
-
-  // Water
-  const wlRes = await pool.query(
-    `SELECT ml_logged FROM water_logs WHERE user_id=$1 AND date=$2`,
-    [userId, today]
-  );
-  const waterMl = wlRes.rows[0]?.ml_logged ?? 0;
-
-  // Targets
+  // Fetch each data point independently — one failure doesn't crash the whole context
+  let latestWeight: any = null;
+  let totals: any = { kcal: 0, protein: 0, carbs: 0, fat: 0 };
+  let waterMl = 0;
   let targets: any = null;
+
+  try {
+    const wRes = await pool.query(
+      `SELECT date, weight_kg FROM weight_log WHERE user_id=$1 ORDER BY date DESC LIMIT 1`,
+      [userId]
+    );
+    latestWeight = wRes.rows[0] ?? null;
+  } catch { /* non-fatal */ }
+
+  try {
+    const mRes = await pool.query(
+      `SELECT COALESCE(SUM(total_calories),0) as kcal,
+              COALESCE(SUM(total_protein),0) as protein,
+              COALESCE(SUM(total_carbs),0)   as carbs,
+              COALESCE(SUM(total_fat),0)     as fat
+       FROM user_meals WHERE user_id=$1 AND date=$2`,
+      [userId, today]
+    );
+    totals = mRes.rows[0] ?? totals;
+  } catch { /* non-fatal */ }
+
+  try {
+    const wlRes = await pool.query(
+      `SELECT ml_logged FROM water_logs WHERE user_id=$1 AND date=$2`,
+      [userId, today]
+    );
+    waterMl = wlRes.rows[0]?.ml_logged ?? 0;
+  } catch { /* non-fatal */ }
+
   try {
     targets = computeDailyTargets(user, undefined, today);
   } catch { /* non-fatal */ }
 
   // Meet countdown
   let meetLine = "";
-  if (user.meetDate) {
-    const daysOut = Math.ceil((new Date(user.meetDate).getTime() - Date.now()) / 86400000);
-    const waterCut = user.weightKg && user.targetWeightKg
-      ? analyzeWaterCut(user, latestWeight?.weight_kg ?? user.weightKg)
-      : null;
-    meetLine = `Meet: ${user.meetDate} (${daysOut > 0 ? `${daysOut} days out` : "MEET DAY / PAST"}) | Tier ${waterCut?.tier ?? "?"} cut protocol`;
-  }
+  try {
+    if (user.meetDate) {
+      const daysOut = Math.ceil((new Date(user.meetDate).getTime() - Date.now()) / 86400000);
+      const waterCut = user.weightKg && user.targetWeightKg
+        ? analyzeWaterCut(user, latestWeight?.weight_kg ?? user.weightKg)
+        : null;
+      meetLine = `Meet: ${user.meetDate} (${daysOut > 0 ? `${daysOut} days out` : "MEET DAY / PAST"}) | Tier ${waterCut?.tier ?? "?"} cut protocol`;
+    }
+  } catch { /* non-fatal */ }
 
   const lines = [
     `--- LIVE USER CONTEXT (${today}, EST) ---`,
-    `Name: ${user.displayName ?? "unknown"} | Sex: ${user.sex ?? "?"} | Age: ${user.dateOfBirth ? Math.floor((Date.now() - new Date(user.dateOfBirth).getTime()) / 31557600000) : "?"} | Height: ${user.heightCm ? `${user.heightCm}cm` : "?"} | Activity: ${user.activityLevel ?? "?"}`,
+    `Name: ${user.display_name ?? user.displayName ?? "unknown"} | Sex: ${user.sex ?? "?"} | Age: ${(user.date_of_birth ?? user.dateOfBirth) ? Math.floor((Date.now() - new Date(user.date_of_birth ?? user.dateOfBirth).getTime()) / 31557600000) : "?"} | Height: ${(user.height_cm ?? user.heightCm) ? `${user.height_cm ?? user.heightCm}cm` : "?"} | Activity: ${user.activity_level ?? user.activityLevel ?? "?"}`,
     `Weight: ${latestWeight ? `${(latestWeight.weight_kg * 2.20462).toFixed(1)} lbs (${latestWeight.weight_kg.toFixed(1)} kg) logged ${latestWeight.date}` : "no recent weigh-in"}`,
-    `Goal: ${user.goalType ?? "not set"} | Target: ${user.targetWeightKg ? `${(user.targetWeightKg * 2.20462).toFixed(1)} lbs` : "none"}`,
+    `Goal: ${user.goal_type ?? user.goalType ?? "not set"} | Target: ${(user.target_weight_kg ?? user.targetWeightKg) ? `${((user.target_weight_kg ?? user.targetWeightKg) * 2.20462).toFixed(1)} lbs` : "none"}`,
     meetLine,
     targets ? `Today's targets: ${targets.calories} kcal | P ${targets.proteinG}g / C ${targets.carbsG}g / F ${targets.fatG}g` : "",
     `Today's intake: ${Math.round(totals.kcal)} kcal | P ${Math.round(totals.protein)}g / C ${Math.round(totals.carbs)}g / F ${Math.round(totals.fat)}g`,
     `Water today: ${waterMl >= 1000 ? `${(waterMl / 1000).toFixed(1)}L` : `${waterMl}ml`} ${targets?.waterTargetMl ? `/ ${(targets.waterTargetMl / 1000).toFixed(1)}L target` : ""}`,
-    `Training today: ${user.trainingDays?.includes(new Date().getDay()) ? "YES" : "Rest day"}`,
+    `Training today: ${(user.training_days ?? user.trainingDays)?.includes(new Date().getDay()) ? "YES" : "Rest day"}`,
     `--- END LIVE CONTEXT ---`,
   ].filter(Boolean).join("\n");
 
@@ -691,8 +699,9 @@ export function registerCoachRoutes(app: Express): void {
         }
       }
 
-      // Load user + profile
-      const user = await storage.getUser(userId);
+      // Load user via raw query — avoids Drizzle crashing on missing columns mid-migration
+      const userRes = await pool.query("SELECT * FROM users WHERE id=$1", [userId]);
+      const user = userRes.rows[0];
       if (!user) return res.status(401).json({ error: "User not found" });
       const profile = await getOrCreateProfile(userId);
 
