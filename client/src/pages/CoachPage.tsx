@@ -29,6 +29,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Sheet,
   SheetContent,
@@ -69,6 +70,9 @@ interface CoachProfile {
   hasOwnKey: boolean;
   dailyUsage: number;
   dailyCap: number;
+  provider?: string;
+  aiModel?: string;
+  modelCatalog?: Record<string, Array<{ id: string; label: string; description: string }>>;
 }
 
 // ─── Onboarding Q+A ──────────────────────────────────────────────────────────
@@ -836,11 +840,29 @@ export default function CoachPage() {
             <h1 className="text-base font-semibold">
               Coach{profile?.preferredName ? ` · ${profile.preferredName}` : ""}
             </h1>
-            {profile?.hasOwnKey && (
-              <Badge variant="secondary" className="text-xs hidden sm:flex">Unlimited</Badge>
-            )}
           </div>
           <div className="flex items-center gap-2">
+            {/* Model selector — shown when user has their own key */}
+            {profile?.hasOwnKey && profile.modelCatalog && profile.provider && (
+              <Select
+                value={profile.aiModel ?? ""}
+                onValueChange={async (model) => {
+                  await api.coachUpdateProvider(profile.provider!, model);
+                  qc.invalidateQueries({ queryKey: ["coachProfile"] });
+                }}
+              >
+                <SelectTrigger className="h-7 text-xs w-auto max-w-[160px] border-border">
+                  <SelectValue placeholder="Select model" />
+                </SelectTrigger>
+                <SelectContent align="end">
+                  {(profile.modelCatalog[profile.provider] ?? []).map((m) => (
+                    <SelectItem key={m.id} value={m.id} className="text-xs">
+                      {m.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
             {/* Mobile: Coach Knows sheet trigger */}
             <Sheet>
               <SheetTrigger asChild>
