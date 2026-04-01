@@ -713,14 +713,15 @@ export function registerCoachRoutes(app: Express): void {
       // Save user message
       await saveMessage(userId, "user", message);
 
-      // Build messages array: system + recent history + new user message
+      // Build messages array: system + recent history (user + assistant text only)
+      // Tool call messages are NOT replayed — they lack tool_call_id and break Groq validation.
+      // The rolling memory summary captures useful context; tool calls are ephemeral.
       const recentMsgs = await getRecentMessages(userId, RECENT_WINDOW);
       const groqMessages: any[] = [
         { role: "system", content: systemPrompt },
-        ...recentMsgs.map((m: any) => ({
-          role: m.role === "tool" ? "tool" : m.role,
-          content: m.content,
-        })),
+        ...recentMsgs
+          .filter((m: any) => m.role === "user" || m.role === "assistant")
+          .map((m: any) => ({ role: m.role, content: m.content })),
       ];
 
       // Agentic loop — handle tool calls
@@ -782,7 +783,12 @@ export function registerCoachRoutes(app: Express): void {
       res.json({ message: safeOutput });
     } catch (err: any) {
       if (err.name === "ZodError") return res.status(400).json({ error: err.errors[0].message });
-      console.error("[coach] chat error:", err.message);
+      // Log full error so Render logs show the real cause
+      console.error("[coach] chat error:", err.message, err.stack?.split("\n")[1] ?? "");
+      // Surface Groq API errors directly so the user gets a useful message
+      if (err.message?.includes("Groq API error")) {
+        return res.status(502).json({ error: `AI service error: ${err.message}` });
+      }
       res.status(500).json({ error: "Coach is temporarily unavailable. Please try again." });
     }
   });
