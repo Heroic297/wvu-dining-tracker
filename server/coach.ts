@@ -529,22 +529,48 @@ async function executeTool(name: string, args: any, userId: string, profile: any
 
 // ─── Multi-provider AI caller ─────────────────────────────────────────────────────────
 
+// OpenRouter free models that do NOT support tool/function calling
+// For these we strip tools and let the model answer from context alone
+const OPENROUTER_NO_TOOLS = new Set([
+  "deepseek/deepseek-r1:free",
+  "microsoft/phi-4:free",
+  "qwen/qwen-2.5-72b-instruct:free",
+]);
+
 /** OpenAI-compatible call (Groq + OpenRouter share the same format) */
 async function callOpenAICompat(
   baseUrl: string,
   apiKey: string,
   model: string,
   messages: any[],
-  tools: any[]
+  tools: any[],
+  isOpenRouter = false
 ): Promise<any> {
+  // Strip tools for OpenRouter models that don\'t support function calling
+  const effectiveTools = (isOpenRouter && OPENROUTER_NO_TOOLS.has(model)) ? [] : tools;
+
   const body: any = { model, messages, max_tokens: 1024, temperature: 0.7 };
-  if (tools.length > 0) { body.tools = tools; body.tool_choice = "auto"; }
+  if (effectiveTools.length > 0) { body.tools = effectiveTools; body.tool_choice = "auto"; }
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${apiKey}`,
+  };
+  // OpenRouter requires these headers to identify the app
+  if (isOpenRouter) {
+    headers["HTTP-Referer"] = "https://wvu-dining-tracker.onrender.com";
+    headers["X-Title"] = "Macro Coach";
+  }
+
   const res = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+    headers,
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`API error ${res.status}: ${await res.text()}`);
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`API error ${res.status}: ${errText}`);
+  }
   return res.json();
 }
 
@@ -642,7 +668,8 @@ async function callAI(
       config.key,
       config.model,
       messages,
-      tools
+      tools,
+      true  // isOpenRouter — adds required headers + strips tools for unsupported models
     );
   }
   // Default: Groq
@@ -1035,9 +1062,9 @@ export function registerCoachRoutes(app: Express): void {
       if (err.name === "ZodError") return res.status(400).json({ error: err.errors[0].message });
       // Log full error so Render logs show the real cause
       console.error("[coach] chat error:", err.message, err.stack?.split("\n")[1] ?? "");
-      // Surface Groq API errors directly so the user gets a useful message
-      if (err.message?.includes("Groq API error")) {
-        return res.status(502).json({ error: `AI service error: ${err.message}` });
+      // Surface API errors from any provider so the user gets a useful message
+      if (err.message?.includes("API error") || err.message?.includes("Gemini API error")) {
+        return res.status(502).json({ error: `AI provider error: ${err.message}` });
       }
       res.status(500).json({ error: "Coach is temporarily unavailable. Please try again." });
     }
