@@ -50,7 +50,7 @@ app.use(
 storage.seedDiningLocations().catch(console.error);
 
 // Run any pending schema migrations on startup
-(async () => {
+async function runMigrations() {
   try {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS invite_codes (
@@ -140,7 +140,7 @@ storage.seedDiningLocations().catch(console.error);
   } catch (err: any) {
     console.error("[db] Migration error:", err.message);
   }
-})();
+}
 
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
@@ -180,6 +180,9 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  // Migrations MUST complete before routes are registered so all columns exist
+  await runMigrations();
+
   await registerRoutes(httpServer, app);
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
