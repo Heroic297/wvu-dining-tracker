@@ -133,12 +133,14 @@ function OnboardingFlow({ onComplete }: { onComplete: () => void }) {
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [textInput, setTextInput] = useState("");
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
   const qc = useQueryClient();
 
   const current = ONBOARDING_STEPS[step];
   const isLast = step === ONBOARDING_STEPS.length - 1;
 
   async function handleAnswer(value: string) {
+    setSaveError("");
     const newAnswers = { ...answers, [current.id]: value };
     setAnswers(newAnswers);
     setTextInput("");
@@ -146,18 +148,25 @@ function OnboardingFlow({ onComplete }: { onComplete: () => void }) {
     if (isLast) {
       setSaving(true);
       try {
-        await api.coachUpdateProfile({
-          preferredName: newAnswers.preferredName,
-          mainGoal: newAnswers.mainGoal,
+        const res = await api.coachUpdateProfile({
+          preferredName: newAnswers.preferredName ?? "",
+          mainGoal: newAnswers.mainGoal ?? "general_fitness",
           isWvuStudent: newAnswers.isWvuStudent === "yes",
-          experienceLevel: newAnswers.experienceLevel,
+          experienceLevel: newAnswers.experienceLevel ?? "intermediate",
           notes: newAnswers.notes ?? "",
           coachTone: (newAnswers.coachTone as any) ?? "balanced",
           onboardingComplete: true,
         });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ error: `Server error ${res.status}` }));
+          setSaveError(err.error ?? "Setup failed — please try again");
+          setSaving(false);
+          return;
+        }
         qc.invalidateQueries({ queryKey: ["coachProfile"] });
         onComplete();
-      } catch {
+      } catch (e: any) {
+        setSaveError(e?.message ?? "Network error — please try again");
         setSaving(false);
       }
     } else {
@@ -195,11 +204,25 @@ function OnboardingFlow({ onComplete }: { onComplete: () => void }) {
                   key={c.value}
                   onClick={() => handleAnswer(c.value)}
                   disabled={saving}
-                  className="w-full text-left px-4 py-2.5 rounded-xl border border-border bg-secondary hover:bg-secondary/80 hover:border-primary/40 text-sm font-medium transition-colors"
+                  className="w-full text-left px-4 py-2.5 rounded-xl border border-border bg-secondary hover:bg-secondary/80 hover:border-primary/40 text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {c.label}
+                  {saving && isLast ? (
+                    <span className="flex items-center gap-2">
+                      <svg className="animate-spin w-3.5 h-3.5" viewBox="0 0 24 24" fill="none">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
+                      </svg>
+                      Setting up your coach...
+                    </span>
+                  ) : c.label}
                 </button>
               ))}
+              {saveError && (
+                <div className="flex items-start gap-2 bg-destructive/10 border border-destructive/30 rounded-xl px-3 py-2 mt-1">
+                  <AlertCircle className="w-3.5 h-3.5 text-destructive flex-shrink-0 mt-0.5" />
+                  <p className="text-xs text-destructive">{saveError}</p>
+                </div>
+              )}
             </div>
           )}
 
