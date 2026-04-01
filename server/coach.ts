@@ -281,11 +281,11 @@ const TOOLS = [
     type: "function",
     function: {
       name: "get_user_stats",
-      description: "Retrieve the user's logged weight, calories, macros, and water for a date range. Use this when the user asks how they have been doing, their diet adherence, weight trend, or progress over recent days. Always call this for questions like 'how have I been doing', 'how was my diet this week', 'am I on track'.",
+      description: "Retrieve the user's logged weight, calories, macros, and water for a date range. Use this when the user asks how they have been doing, their diet adherence, weight trend, or progress over recent days. Always call this for questions like 'how have I been doing', 'how was my diet this week', 'am I on track'. IMPORTANT: days must be a plain integer with no quotes.",
       parameters: {
         type: "object",
         properties: {
-          days: { type: "number", description: "Number of past days to retrieve. Use 7 for 'this week', 3 for 'past few days', 14 for 'past two weeks'. Max 30." },
+          days: { description: "Number of past days as an integer. Use 7 for this week, 3 for past few days, 14 for past two weeks. Max 30. Example: 7" },
         },
         required: ["days"],
       },
@@ -368,6 +368,7 @@ async function executeTool(name: string, args: any, userId: string, profile: any
     }
 
     if (name === "get_user_stats") {
+      // Groq sometimes returns days as a string "3" instead of number 3 — coerce defensively
       const days = Math.min(30, Math.max(1, Number(args.days ?? 7)));
       // Compute cutoff date in JS — no SQL interval arithmetic needed
       const cutoffDate = new Date();
@@ -747,7 +748,18 @@ export function registerCoachRoutes(app: Express): void {
 
       while (iterations < MAX_ITERATIONS) {
         iterations++;
-        response = await callGroq(key, groqMessages, TOOLS);
+        // If Groq rejects our tool call (e.g. type coercion issue), retry without tools
+        let usedTools = TOOLS;
+        try {
+          response = await callGroq(key, groqMessages, usedTools);
+        } catch (groqErr: any) {
+          if (groqErr.message?.includes("tool_use_failed") || groqErr.message?.includes("tool call validation")) {
+            // Retry without tools — model will answer from context alone
+            response = await callGroq(key, groqMessages, []);
+          } else {
+            throw groqErr;
+          }
+        }
         const choice = response.choices?.[0];
         const assistantMsg = choice?.message;
 
@@ -764,7 +776,11 @@ export function registerCoachRoutes(app: Express): void {
         for (const tc of assistantMsg.tool_calls) {
           const toolName = tc.function.name;
           let toolArgs: any = {};
-          try { toolArgs = JSON.parse(tc.function.arguments); } catch { /* ignore */ }
+          try {
+            toolArgs = JSON.parse(tc.function.arguments);
+            // Coerce known numeric fields that Groq sometimes returns as strings
+            if (toolArgs.days !== undefined) toolArgs.days = Number(toolArgs.days);
+          } catch { /* ignore */ }
 
           const toolResult = await executeTool(toolName, toolArgs, userId, profile);
 
