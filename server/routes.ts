@@ -383,6 +383,7 @@ export async function registerRoutes(
   );
 
   // ── Barcode / UPC Lookup ──────────────────────────────────────────────────
+  // Priority: USDA Branded Foods (exact gtinUpc match) → Open Food Facts → AI name lookup
 
   app.get(
     "/api/nutrition/barcode",
@@ -395,9 +396,70 @@ export async function registerRoutes(
         }
 
         const axios = (await import("axios")).default;
+        const USDA_KEY = process.env.USDA_API_KEY || "DEMO_KEY";
+        const USDA_BASE = "https://api.nal.usda.gov/fdc/v1";
 
-        // 1. Open Food Facts — purpose-built barcode database, free, no key required
-        //    Covers millions of packaged goods with per-serving nutrition data
+        // ── 1. USDA Branded Foods — exact gtinUpc (UPC/EAN barcode) match ────────
+        //    This is the gold standard: official label data straight from the USDA FDC.
+        //    Uses the /foods/search endpoint with dataType=Branded and gtinUpc filter.
+        try {
+          const usdaResp = await axios.get(`${USDA_BASE}/foods/search`, {
+            params: {
+              query: upc,
+              dataType: "Branded",
+              pageSize: 5,
+              api_key: USDA_KEY,
+            },
+            timeout: 8000,
+          });
+
+          const foods: any[] = usdaResp.data?.foods ?? [];
+          // Filter to exact UPC/GTIN match
+          const match = foods.find(
+            (f: any) =>
+              f.gtinUpc === upc ||
+              f.gtinUpc === upc.replace(/^0+/, "") ||
+              ("0" + f.gtinUpc) === upc
+          );
+
+          if (match) {
+            const getNutrient = (number: string) => {
+              const found = (match.foodNutrients ?? []).find(
+                (n: any) => n.nutrientNumber === number
+              );
+              return found?.value ? Math.round(found.value * 10) / 10 : 0;
+            };
+
+            const calories = getNutrient("208");
+            const name = match.description || match.brandName
+              ? `${match.description}${match.brandName ? ` (${match.brandName})` : ""}`
+              : "Scanned product";
+
+            // USDA serving size for branded items
+            const servingSize = match.servingSize && match.servingSizeUnit
+              ? `${match.servingSize}${match.servingSizeUnit}`
+              : "per serving";
+
+            if (calories > 0) {
+              console.log(`[barcode] USDA Branded match: ${name} (fdcId ${match.fdcId})`);
+              return res.json({
+                foodName: name,
+                calories,
+                proteinG: getNutrient("203"),
+                carbsG:   getNutrient("205"),
+                fatG:     getNutrient("204"),
+                servingSize,
+                source: "usda_branded",
+                confidence: "high",
+                breakdown: [],
+              });
+            }
+          }
+        } catch (usdaErr: any) {
+          console.warn("[barcode] USDA branded lookup failed:", usdaErr.message);
+        }
+
+        // ── 2. Open Food Facts — covers global branded products not in USDA ────────
         try {
           const offResp = await axios.get(
             `https://world.openfoodfacts.org/api/v0/product/${encodeURIComponent(upc)}.json`,
@@ -407,9 +469,8 @@ export async function registerRoutes(
           if (offResp.data?.status === 1) {
             const product = offResp.data.product ?? {};
             const n = product.nutriments ?? {};
-            const name = product.product_name || product.product_name_en || "Scanned product";
+            const name = product.product_name_en || product.product_name || "Scanned product";
 
-            // Prefer per-serving values; fall back to per-100g scaled to serving quantity
             const servingQty: number = parseFloat(product.serving_quantity) || 100;
             const servingLabel: string = product.serving_size || `${servingQty}g`;
 
@@ -422,15 +483,16 @@ export async function registerRoutes(
             };
 
             const calories = getVal("energy-kcal_serving", "energy-kcal_100g");
-            if (calories) {
+            if (calories > 0) {
+              console.log(`[barcode] Open Food Facts match: ${name}`);
               return res.json({
                 foodName: name,
                 calories,
-                proteinG: getVal("proteins_serving",      "proteins_100g"),
-                carbsG:   getVal("carbohydrates_serving",  "carbohydrates_100g"),
-                fatG:     getVal("fat_serving",            "fat_100g"),
+                proteinG: getVal("proteins_serving",     "proteins_100g"),
+                carbsG:   getVal("carbohydrates_serving", "carbohydrates_100g"),
+                fatG:     getVal("fat_serving",           "fat_100g"),
                 servingSize: servingLabel,
-                source: "usda",   // surface as "USDA database" in the UI — still a verified DB
+                source: "open_food_facts",
                 confidence: "high",
                 breakdown: [],
               });
@@ -440,15 +502,14 @@ export async function registerRoutes(
           console.warn("[barcode] Open Food Facts lookup failed:", offErr.message);
         }
 
-        // 2. Fallback: ask AI to identify the product by name if known
-        //    Pass the UPC so the AI can try to recognise the product
-        const result = await lookupNutrition(`UPC ${upc}`);
-        if (result && result.source !== "manual_exact") {
+        // ── 3. AI fallback — last resort, AI tries to identify product by UPC ─────
+        const result = await lookupNutrition(`barcode product UPC ${upc}`);
+        if (result) {
           return res.json(result);
         }
 
         return res.status(404).json({
-          error: "Product not found — try typing the food name in the search bar instead.",
+          error: "Product not found in USDA or Open Food Facts. Try typing the food name instead.",
         });
       } catch (err) {
         console.error("[nutrition/barcode]", err);
