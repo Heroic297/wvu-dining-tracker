@@ -134,43 +134,47 @@ function OnboardingFlow({ onComplete }: { onComplete: () => void }) {
   const [textInput, setTextInput] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
+  // Track selected tone for the confirm step
+  const [selectedTone, setSelectedTone] = useState("");
   const qc = useQueryClient();
 
   const current = ONBOARDING_STEPS[step];
   const isLast = step === ONBOARDING_STEPS.length - 1;
 
-  async function handleAnswer(value: string) {
-    setSaveError("");
-    const newAnswers = { ...answers, [current.id]: value };
-    setAnswers(newAnswers);
+  // Advance to next step or record answer
+  function advance(id: string, value: string) {
+    setAnswers((prev) => ({ ...prev, [id]: value }));
     setTextInput("");
+    setSaveError("");
+    if (!isLast) setStep((s) => s + 1);
+  }
 
-    if (isLast) {
-      setSaving(true);
-      try {
-        const res = await api.coachUpdateProfile({
-          preferredName: newAnswers.preferredName ?? "",
-          mainGoal: newAnswers.mainGoal ?? "general_fitness",
-          isWvuStudent: newAnswers.isWvuStudent === "yes",
-          experienceLevel: newAnswers.experienceLevel ?? "intermediate",
-          notes: newAnswers.notes ?? "",
-          coachTone: (newAnswers.coachTone as any) ?? "balanced",
-          onboardingComplete: true,
-        });
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({ error: `Server error ${res.status}` }));
-          setSaveError(err.error ?? "Setup failed — please try again");
-          setSaving(false);
-          return;
-        }
-        qc.invalidateQueries({ queryKey: ["coachProfile"] });
-        onComplete();
-      } catch (e: any) {
-        setSaveError(e?.message ?? "Network error — please try again");
+  // Final save — called explicitly from the Finish button
+  async function finishSetup(tone: string) {
+    const finalAnswers = { ...answers, coachTone: tone };
+    setSaving(true);
+    setSaveError("");
+    try {
+      const res = await api.coachUpdateProfile({
+        preferredName: finalAnswers.preferredName ?? "",
+        mainGoal: finalAnswers.mainGoal ?? "general_fitness",
+        isWvuStudent: finalAnswers.isWvuStudent === "yes",
+        experienceLevel: finalAnswers.experienceLevel ?? "intermediate",
+        notes: finalAnswers.notes ?? "",
+        coachTone: (tone as any) ?? "balanced",
+        onboardingComplete: true,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: `Server error ${res.status}` }));
+        setSaveError(err.error ?? "Setup failed — please try again");
         setSaving(false);
+        return;
       }
-    } else {
-      setStep((s) => s + 1);
+      qc.invalidateQueries({ queryKey: ["coachProfile"] });
+      onComplete();
+    } catch (e: any) {
+      setSaveError(e?.message ?? "Network error — please try again");
+      setSaving(false);
     }
   }
 
@@ -197,28 +201,60 @@ function OnboardingFlow({ onComplete }: { onComplete: () => void }) {
             <p className="text-sm leading-relaxed">{current.question}</p>
           </div>
 
-          {current.type === "choice" && (
+          {current.type === "choice" && !isLast && (
             <div className="space-y-2 pl-11">
               {current.choices!.map((c) => (
                 <button
                   key={c.value}
-                  onClick={() => handleAnswer(c.value)}
-                  disabled={saving}
-                  className="w-full text-left px-4 py-2.5 rounded-xl border border-border bg-secondary hover:bg-secondary/80 hover:border-primary/40 text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  onClick={() => advance(current.id, c.value)}
+                  className="w-full text-left px-4 py-2.5 rounded-xl border border-border bg-secondary hover:bg-secondary/80 hover:border-primary/40 text-sm font-medium transition-colors"
                 >
-                  {saving && isLast ? (
+                  {c.label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Last step: tone selector — pick then explicitly confirm */}
+          {isLast && (
+            <div className="space-y-3 pl-11">
+              {current.choices!.map((c) => (
+                <button
+                  key={c.value}
+                  onClick={() => setSelectedTone(c.value)}
+                  disabled={saving}
+                  className={`w-full text-left px-4 py-2.5 rounded-xl border text-sm font-medium transition-colors ${
+                    selectedTone === c.value
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "border-border bg-secondary hover:bg-secondary/80 hover:border-primary/40"
+                  }`}
+                >
+                  {c.label}
+                </button>
+              ))}
+              {selectedTone && (
+                <Button
+                  className="w-full mt-1"
+                  onClick={() => finishSetup(selectedTone)}
+                  disabled={saving}
+                >
+                  {saving ? (
                     <span className="flex items-center gap-2">
                       <svg className="animate-spin w-3.5 h-3.5" viewBox="0 0 24 24" fill="none">
                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
                         <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
                       </svg>
-                      Setting up your coach...
+                      Setting up...
                     </span>
-                  ) : c.label}
-                </button>
-              ))}
+                  ) : (
+                    <span className="flex items-center gap-1.5">
+                      <Check className="w-3.5 h-3.5" /> Finish setup
+                    </span>
+                  )}
+                </Button>
+              )}
               {saveError && (
-                <div className="flex items-start gap-2 bg-destructive/10 border border-destructive/30 rounded-xl px-3 py-2 mt-1">
+                <div className="flex items-start gap-2 bg-destructive/10 border border-destructive/30 rounded-xl px-3 py-2">
                   <AlertCircle className="w-3.5 h-3.5 text-destructive flex-shrink-0 mt-0.5" />
                   <p className="text-xs text-destructive">{saveError}</p>
                 </div>
@@ -236,25 +272,24 @@ function OnboardingFlow({ onComplete }: { onComplete: () => void }) {
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.shiftKey && textInput.trim()) {
                     e.preventDefault();
-                    handleAnswer(textInput.trim());
+                    advance(current.id, textInput.trim());
                   }
                 }}
               />
               <div className="flex gap-2">
                 <Button
                   size="sm"
-                  onClick={() => handleAnswer(textInput.trim())}
+                  onClick={() => advance(current.id, textInput.trim())}
                   disabled={!textInput.trim() && !current.optional}
                 >
-                  {isLast ? (saving ? "Setting up..." : "Finish") : "Next"}
+                  Next
                   <ChevronRight className="w-3 h-3 ml-1" />
                 </Button>
                 {current.optional && (
                   <Button
                     size="sm"
                     variant="ghost"
-                    onClick={() => handleAnswer("")}
-                    disabled={saving}
+                    onClick={() => advance(current.id, "")}
                   >
                     Skip
                   </Button>
