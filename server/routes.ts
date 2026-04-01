@@ -19,6 +19,7 @@ import {
 import { z } from "zod";
 import { randomUUID } from "crypto";
 import crypto from "crypto";
+import { registerCoachRoutes } from "./coach.js";
 
 const CRON_SECRET = process.env.CRON_SECRET ?? "cron-secret";
 const ADMIN_SECRET = process.env.ADMIN_SECRET ?? "";
@@ -27,6 +28,9 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+  // ── AI Coach ──────────────────────────────────────────────────────────
+  registerCoachRoutes(app);
+
   // ── Auth ───────────────────────────────────────────────────────────────────
 
   app.post("/api/auth/register", async (req, res) => {
@@ -996,6 +1000,6 @@ export async function registerRoutes(
 
 /** Remove sensitive fields from user object */
 function sanitizeUser(user: any) {
-  const { passwordHash, ...safe } = user;
+  const { passwordHash, groqApiKeyEncrypted, ...safe } = user;
   return safe;
 }
