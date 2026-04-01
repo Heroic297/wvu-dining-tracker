@@ -123,19 +123,15 @@ async function runMigrations() {
     await pool.query(`
       CREATE INDEX IF NOT EXISTS chat_messages_user_created ON chat_messages(user_id, created_at)
     `);
-    // Add new enum values to nutrition_source if not already present
-    await pool.query(`
-      DO $$ BEGIN
-        ALTER TYPE nutrition_source ADD VALUE IF NOT EXISTS 'usda_branded';
-      EXCEPTION WHEN others THEN NULL;
-      END $$;
-    `);
-    await pool.query(`
-      DO $$ BEGIN
-        ALTER TYPE nutrition_source ADD VALUE IF NOT EXISTS 'open_food_facts';
-      EXCEPTION WHEN others THEN NULL;
-      END $$;
-    `);
+    // Add new enum values to nutrition_source if not already present.
+    // ALTER TYPE ADD VALUE cannot run inside a PL/pgSQL block with EXCEPTION handler —
+    // must run as a direct statement. Use a separate try/catch per value.
+    try {
+      await pool.query(`ALTER TYPE nutrition_source ADD VALUE IF NOT EXISTS 'usda_branded'`);
+    } catch { /* already exists */ }
+    try {
+      await pool.query(`ALTER TYPE nutrition_source ADD VALUE IF NOT EXISTS 'open_food_facts'`);
+    } catch { /* already exists */ }
     console.log("[db] migrations complete");
   } catch (err: any) {
     console.error("[db] Migration error:", err.message);
