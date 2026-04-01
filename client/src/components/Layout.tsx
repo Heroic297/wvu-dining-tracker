@@ -5,7 +5,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { api } from "@/lib/api";
 import {
   LayoutDashboard, UtensilsCrossed, Clock, Target, Settings,
-  LogOut, Menu, X, Sun, Moon, Users,
+  LogOut, Menu, X, Sun, Moon, Users, Brain,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -16,6 +16,7 @@ const BASE_NAV = [
   { href: "/log",     label: "Log Meal",  icon: UtensilsCrossed  },
   { href: "/history", label: "History",   icon: Clock            },
   { href: "/plan",    label: "Diet Plan", icon: Target           },
+  { href: "/coach",   label: "Coach",     icon: Brain            },
   { href: "/settings",label: "Settings",  icon: Settings         },
 ];
 
