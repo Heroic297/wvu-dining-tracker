@@ -2,7 +2,6 @@ import { useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { api, lbsToKg, kgToLbs } from "@/lib/api";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DateInput } from "@/components/DateInput";
@@ -10,7 +9,8 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { CheckCircle, XCircle, Loader2, Dumbbell, Activity, Scale, RefreshCw, Droplets, Plus, Trash2 } from "lucide-react";
+import { CheckCircle, XCircle, Loader2, Dumbbell, Activity, Scale, RefreshCw, Droplets, Plus, Trash2, Brain, Eye, EyeOff } from "lucide-react";
+import { useMutation, useQuery } from "@tanstack/react-query";
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -70,6 +70,33 @@ export default function SettingsPage() {
   };
 
   const removeBottle = (id: string) => setWaterBottles(prev => prev.filter(b => b.id !== id));
+
+  // AI Coach — BYOK
+  const [groqKeyInput, setGroqKeyInput] = useState("");
+  const [showGroqKey, setShowGroqKey] = useState(false);
+  const [groqKeySaving, setGroqKeySaving] = useState(false);
+  const { data: coachProfile, refetch: refetchCoachProfile } = useQuery({
+    queryKey: ["coachProfile"],
+    queryFn: () => api.coachProfile().then((r) => r.json()),
+  });
+  const saveGroqKey = async () => {
+    if (!groqKeyInput.trim()) return;
+    setGroqKeySaving(true);
+    try {
+      const res = await api.coachSaveApiKey(groqKeyInput.trim());
+      const data = await res.json();
+      if (!res.ok) { toast({ title: "Error", description: data.error, variant: "destructive" }); return; }
+      toast({ title: "Groq API key saved", description: `Key saved: ${data.masked}` });
+      setGroqKeyInput("");
+      refetchCoachProfile();
+    } catch { toast({ title: "Failed to save key", variant: "destructive" }); }
+    finally { setGroqKeySaving(false); }
+  };
+  const removeGroqKey = async () => {
+    await api.coachDeleteApiKey();
+    toast({ title: "Groq API key removed" });
+    refetchCoachProfile();
+  };
 
   // Wearable status
   const [syncing, setSyncing] = useState<string | null>(null);
@@ -459,6 +486,55 @@ export default function SettingsPage() {
             </p>
           </div>
         )}
+      </section>
+
+      {/* AI Coach — Groq API Key */}
+      <section className="space-y-3">
+        <div className="flex items-center gap-2">
+          <Brain className="w-4 h-4 text-primary" />
+          <h2 className="text-sm font-semibold">AI Coach</h2>
+        </div>
+        <div className="space-y-2">
+          <p className="text-xs text-muted-foreground">
+            Add your free{" "}
+            <a href="https://console.groq.com" target="_blank" rel="noopener noreferrer" className="underline text-primary">Groq API key</a>{" "}
+            for unlimited AI Coach messages. Without a key you get {coachProfile?.dailyCap ?? 15} free messages per day.
+          </p>
+          {coachProfile?.hasOwnKey ? (
+            <div className="flex items-center justify-between bg-secondary rounded-xl px-3 py-2">
+              <div className="flex items-center gap-2">
+                <CheckCircle className="w-4 h-4 text-green-400" />
+                <span className="text-sm font-medium">Groq key saved</span>
+              </div>
+              <Button size="sm" variant="destructive" onClick={removeGroqKey} className="h-7 text-xs">
+                Remove
+              </Button>
+            </div>
+          ) : (
+            <div className="flex gap-2">
+              <div className="relative flex-1">
+                <Input
+                  type={showGroqKey ? "text" : "password"}
+                  placeholder="gsk_..."
+                  value={groqKeyInput}
+                  onChange={(e) => setGroqKeyInput(e.target.value)}
+                  className="pr-8 text-sm h-9"
+                  onKeyDown={(e) => { if (e.key === "Enter") saveGroqKey(); }}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowGroqKey((v) => !v)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                >
+                  {showGroqKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                </button>
+              </div>
+              <Button size="sm" onClick={saveGroqKey} disabled={!groqKeyInput.trim() || groqKeySaving} className="h-9">
+                {groqKeySaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Save"}
+              </Button>
+            </div>
+          )}
+        </div>
       </section>
 
       <Button onClick={saveProfile} disabled={saving} className="w-full" data-testid="button-save-settings">
