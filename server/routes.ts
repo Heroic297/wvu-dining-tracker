@@ -423,31 +423,41 @@ export async function registerRoutes(
           );
 
           if (match) {
-            const getNutrient = (number: string) => {
+            // USDA /foods/search returns nutrients per 100g for branded foods.
+            // We must scale by (servingSize / 100) to get per-serving values.
+            const servingGrams: number = parseFloat(match.servingSize) || 100;
+            const scaleFactor = servingGrams / 100;
+
+            const getNutrientPer100g = (number: string): number => {
               const found = (match.foodNutrients ?? []).find(
                 (n: any) => n.nutrientNumber === number
               );
-              return found?.value ? Math.round(found.value * 10) / 10 : 0;
+              return found?.value ?? 0;
             };
 
-            const calories = getNutrient("208");
-            const name = match.description || match.brandName
-              ? `${match.description}${match.brandName ? ` (${match.brandName})` : ""}`
+            const scale = (per100g: number) =>
+              Math.round(per100g * scaleFactor * 10) / 10;
+
+            const caloriesPer100g = getNutrientPer100g("208");
+            const calories = scale(caloriesPer100g);
+
+            const brandPart = match.brandName ? ` (${match.brandName})` : "";
+            const name = match.description
+              ? `${match.description}${brandPart}`
               : "Scanned product";
 
-            // USDA serving size for branded items
             const servingSize = match.servingSize && match.servingSizeUnit
               ? `${match.servingSize}${match.servingSizeUnit}`
               : "per serving";
 
             if (calories > 0) {
-              console.log(`[barcode] USDA Branded match: ${name} (fdcId ${match.fdcId})`);
+              console.log(`[barcode] USDA Branded match: ${name} — ${servingGrams}g serving, ${calories} kcal (fdcId ${match.fdcId})`);
               return res.json({
                 foodName: name,
                 calories,
-                proteinG: getNutrient("203"),
-                carbsG:   getNutrient("205"),
-                fatG:     getNutrient("204"),
+                proteinG: scale(getNutrientPer100g("203")),
+                carbsG:   scale(getNutrientPer100g("205")),
+                fatG:     scale(getNutrientPer100g("204")),
                 servingSize,
                 source: "usda_branded",
                 confidence: "high",
