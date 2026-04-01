@@ -842,27 +842,54 @@ export default function CoachPage() {
             </h1>
           </div>
           <div className="flex items-center gap-2">
-            {/* Model selector — shown when user has their own key */}
-            {profile?.hasOwnKey && profile.modelCatalog && profile.provider && (
-              <Select
-                value={profile.aiModel ?? ""}
-                onValueChange={async (model) => {
-                  await api.coachUpdateProvider(profile.provider!, model);
-                  qc.invalidateQueries({ queryKey: ["coachProfile"] });
-                }}
-              >
-                <SelectTrigger className="h-7 text-xs w-auto max-w-[160px] border-border">
-                  <SelectValue placeholder="Select model" />
-                </SelectTrigger>
-                <SelectContent align="end">
-                  {(profile.modelCatalog[profile.provider] ?? []).map((m) => (
-                    <SelectItem key={m.id} value={m.id} className="text-xs">
-                      {m.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
+            {/* Model selector — shown whenever user has a key */}
+            {profile?.hasOwnKey && (() => {
+              const provider = profile.provider ?? "groq";
+              // Fallback catalog so selector always works even if profile.modelCatalog is missing
+              const FALLBACK: Record<string, Array<{id:string;label:string}>> = {
+                groq: [
+                  { id: "llama-3.3-70b-versatile", label: "Llama 3.3 70B" },
+                  { id: "llama-3.1-8b-instant",    label: "Llama 3.1 8B" },
+                  { id: "gemma2-9b-it",             label: "Gemma 2 9B" },
+                  { id: "mixtral-8x7b-32768",       label: "Mixtral 8x7B" },
+                ],
+                gemini: [
+                  { id: "gemini-2.0-flash",     label: "Gemini 2.0 Flash" },
+                  { id: "gemini-1.5-flash",     label: "Gemini 1.5 Flash" },
+                  { id: "gemini-1.5-flash-8b",  label: "Gemini 1.5 Flash 8B" },
+                ],
+                openrouter: [
+                  { id: "meta-llama/llama-3.3-70b-instruct:free",    label: "Llama 3.3 70B" },
+                  { id: "nousresearch/hermes-3-llama-3.1-405b:free", label: "Hermes 3 405B" },
+                  { id: "openai/gpt-oss-120b:free",                  label: "GPT OSS 120B" },
+                  { id: "nvidia/nemotron-3-super-120b-a12b:free",    label: "Nemotron 120B" },
+                  { id: "google/gemma-3-27b-it:free",                label: "Gemma 3 27B" },
+                  { id: "qwen/qwen3-next-80b-a3b-instruct:free",     label: "Qwen3 80B" },
+                ],
+              };
+              const models = (profile.modelCatalog?.[provider] ?? FALLBACK[provider] ?? []) as Array<{id:string;label:string}>;
+              const currentModel = profile.aiModel ?? "";
+              return (
+                <Select
+                  value={currentModel}
+                  onValueChange={async (model) => {
+                    await api.coachUpdateProvider(provider, model);
+                    qc.invalidateQueries({ queryKey: ["coachProfile"] });
+                  }}
+                >
+                  <SelectTrigger className="h-7 text-xs w-auto max-w-[150px] border-border bg-secondary">
+                    <SelectValue placeholder="Select model" />
+                  </SelectTrigger>
+                  <SelectContent align="end" className="max-w-[220px]">
+                    {models.map((m) => (
+                      <SelectItem key={m.id} value={m.id} className="text-xs">
+                        {m.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              );
+            })()}
             {/* Mobile: Coach Knows sheet trigger */}
             <Sheet>
               <SheetTrigger asChild>
