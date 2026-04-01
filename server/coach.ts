@@ -83,15 +83,32 @@ async function checkDailyUsage(userId: string): Promise<boolean> {
   return true;
 }
 
+/** Map raw snake_case DB row to camelCase for the client */
+function camelCaseProfile(row: any) {
+  if (!row) return row;
+  return {
+    userId:             row.user_id,
+    onboardingComplete: row.onboarding_complete,
+    preferredName:      row.preferred_name,
+    mainGoal:           row.main_goal,
+    isWvuStudent:       row.is_wvu_student,
+    experienceLevel:    row.experience_level,
+    notes:              row.notes,
+    rollingSummary:     row.rolling_summary,
+    coachTone:          row.coach_tone,
+    updatedAt:          row.updated_at,
+  };
+}
+
 async function getOrCreateProfile(userId: string) {
   const res = await pool.query("SELECT * FROM ai_profiles WHERE user_id=$1", [userId]);
-  if (res.rows[0]) return res.rows[0];
+  if (res.rows[0]) return camelCaseProfile(res.rows[0]);
   await pool.query(
     `INSERT INTO ai_profiles (user_id) VALUES ($1) ON CONFLICT DO NOTHING`,
     [userId]
   );
   const res2 = await pool.query("SELECT * FROM ai_profiles WHERE user_id=$1", [userId]);
-  return res2.rows[0];
+  return camelCaseProfile(res2.rows[0]);
 }
 
 async function getRecentMessages(userId: string, limit = RECENT_WINDOW) {
@@ -185,12 +202,12 @@ function buildSystemPrompt(profile: any, liveContext: string, tone: string): str
       ? "You are precise and numbers-forward. Use exact figures, minimal fluff."
       : "You balance motivation with precision. Be direct but supportive.";
 
-  const wvuNote = profile?.is_wvu_student
+  const wvuNote = profile?.isWvuStudent
     ? "This user is a WVU student. When asked about dining hall options, use the get_dining_menu tool to fetch today's or tomorrow's menu."
     : "This user is NOT a WVU student. Do not reference WVU dining.";
 
-  const memorySection = profile?.rolling_summary
-    ? `\n--- WHAT YOU KNOW ABOUT THIS USER (from memory) ---\n${profile.rolling_summary}\n--- END MEMORY ---\n`
+  const memorySection = profile?.rollingSummary
+    ? `\n--- WHAT YOU KNOW ABOUT THIS USER (from memory) ---\n${profile.rollingSummary}\n--- END MEMORY ---\n`
     : "";
 
   return `You are Macro Coach, an expert AI health and nutrition assistant embedded in the Macro app.
@@ -305,7 +322,7 @@ async function executeTool(name: string, args: any, userId: string, profile: any
     }
 
     if (name === "get_dining_menu") {
-      if (!profile?.is_wvu_student) return JSON.stringify({ error: "Not a WVU student" });
+      if (!profile?.isWvuStudent) return JSON.stringify({ error: "Not a WVU student" });
       const loc = String(args.location ?? "summit").toLowerCase();
       const date = String(args.date ?? "").slice(0, 10);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return JSON.stringify({ error: "Invalid date format" });
@@ -681,7 +698,7 @@ export function registerCoachRoutes(app: Express): void {
 
       // Build context
       const liveContext = await buildLiveContext(userId, user);
-      const tone = profile?.coach_tone ?? "balanced";
+      const tone = profile?.coachTone ?? "balanced";
       const systemPrompt = buildSystemPrompt(profile, liveContext, tone);
 
       // Save user message
