@@ -369,14 +369,17 @@ async function executeTool(name: string, args: any, userId: string, profile: any
 
     if (name === "get_user_stats") {
       const days = Math.min(30, Math.max(1, Number(args.days ?? 7)));
-      // Use make_interval to safely parameterise the interval
-      const cutoff = `CURRENT_DATE - make_interval(days => $2)`;
+      // Compute cutoff date in JS — no SQL interval arithmetic needed
+      const cutoffDate = new Date();
+      cutoffDate.setDate(cutoffDate.getDate() - days);
+      const cutoff = cutoffDate.toISOString().slice(0, 10); // YYYY-MM-DD
+
       const [wRes, mRes, wlRes] = await Promise.all([
         pool.query(
           `SELECT date, ROUND((weight_kg * 2.20462)::numeric, 1) as weight_lbs, weight_kg
-           FROM weight_log WHERE user_id=$1 AND date >= ${cutoff}
+           FROM weight_log WHERE user_id=$1 AND date >= $2
            ORDER BY date ASC`,
-          [userId, days]
+          [userId, cutoff]
         ),
         pool.query(
           `SELECT date,
@@ -384,16 +387,16 @@ async function executeTool(name: string, args: any, userId: string, profile: any
                   ROUND(SUM(total_protein)::numeric, 1) as protein_g,
                   ROUND(SUM(total_carbs)::numeric, 1) as carbs_g,
                   ROUND(SUM(total_fat)::numeric, 1) as fat_g
-           FROM user_meals WHERE user_id=$1 AND date >= ${cutoff}
+           FROM user_meals WHERE user_id=$1 AND date >= $2
            GROUP BY date ORDER BY date ASC`,
-          [userId, days]
+          [userId, cutoff]
         ),
         pool.query(
           `SELECT date, ml_logged,
                   ROUND((ml_logged / 29.5735)::numeric, 1) as oz_logged
-           FROM water_logs WHERE user_id=$1 AND date >= ${cutoff}
+           FROM water_logs WHERE user_id=$1 AND date >= $2
            ORDER BY date ASC`,
-          [userId, days]
+          [userId, cutoff]
         ),
       ]);
       return JSON.stringify({
