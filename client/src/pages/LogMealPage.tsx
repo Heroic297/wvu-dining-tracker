@@ -265,14 +265,19 @@ export default function LogMealPage() {
     setCustomSearch("");
     try {
       const res = await api.lookupBarcode(upc);
+      const data = await res.json();
       if (!res.ok) {
-        const err = await res.json();
-        setSearchResult({ error: err.error ?? "Product not found — try entering the name manually" });
+        setSearchResult({ error: data.error ?? "Product not found — try entering the name manually" });
         return;
       }
-      const data = await res.json();
-      setCustomSearch(data.foodName ?? `UPC ${upc}`);
-      setSearchResult(data);
+      // Always use the product name — never show raw UPC string in the search bar
+      const productName = data.foodName?.trim();
+      if (productName) {
+        setCustomSearch(productName);
+        setSearchResult(data);
+      } else {
+        setSearchResult({ error: "Product found but name is missing — try entering the name manually" });
+      }
     } catch {
       setSearchResult({ error: "Barcode lookup failed — try entering the name manually" });
     } finally {
