@@ -151,7 +151,7 @@ function OnboardingFlow({ onComplete }: { onComplete: () => void }) {
 
   // Final save — called explicitly from the Finish button
   async function finishSetup(tone: string) {
-    const finalAnswers = { ...answers, coachTone: tone };
+    const finalAnswers: Record<string, string> = { ...answers, coachTone: tone };
     setSaving(true);
     setSaveError("");
     try {
