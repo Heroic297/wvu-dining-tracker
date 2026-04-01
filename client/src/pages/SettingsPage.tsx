@@ -71,31 +71,39 @@ export default function SettingsPage() {
 
   const removeBottle = (id: string) => setWaterBottles(prev => prev.filter(b => b.id !== id));
 
-  // AI Coach — multi-provider BYOK
+  // AI Coach — provider + key (simplified)
   const [aiKeyInput, setAiKeyInput] = useState("");
   const [showAiKey, setShowAiKey] = useState(false);
   const [aiKeySaving, setAiKeySaving] = useState(false);
+  // selectedProvider tracks which tab is active in the UI right now
   const [selectedProvider, setSelectedProvider] = useState<"groq"|"gemini"|"openrouter">("groq");
-  const [selectedModel, setSelectedModel] = useState("");
   const { data: coachProfile, refetch: refetchCoachProfile } = useQuery({
     queryKey: ["coachProfile"],
     queryFn: () => api.coachProfile().then((r) => r.json()),
   });
 
-  // Sync provider/model selectors from saved profile
-  const savedProvider = (coachProfile as any)?.provider ?? "groq";
-  const savedModel = (coachProfile as any)?.aiModel ?? "";
-  const modelCatalog = (coachProfile as any)?.modelCatalog ?? {};
+  const savedProvider: string = (coachProfile as any)?.provider ?? "groq";
+  const savedModel: string   = (coachProfile as any)?.aiModel ?? "";
+  const hasOwnKey: boolean   = !!(coachProfile as any)?.hasOwnKey;
+
+  const PROVIDERS = [
+    { id: "groq"       as const, label: "Groq",          placeholder: "gsk_...",    url: "https://console.groq.com",             note: "Free tier — fast Llama 3.3 70B" },
+    { id: "gemini"     as const, label: "Google Gemini",  placeholder: "AIza...",    url: "https://aistudio.google.com/apikey",  note: "Free — 1,500 requests/day" },
+    { id: "openrouter" as const, label: "OpenRouter",     placeholder: "sk-or-v1-...", url: "https://openrouter.ai/keys",         note: "Free — access to many models" },
+  ];
+  const activeProvider = PROVIDERS.find(p => p.id === selectedProvider) ?? PROVIDERS[0];
 
   const saveAiKey = async () => {
-    if (!aiKeyInput.trim()) return;
+    const key = aiKeyInput.trim();
+    if (!key) return;
     setAiKeySaving(true);
-    const model = selectedModel || (modelCatalog[selectedProvider]?.[0]?.id ?? "");
     try {
-      const res = await api.coachSaveApiKey(aiKeyInput.trim(), selectedProvider, model);
+      // Always save provider = selectedProvider (the active tab when Save is clicked)
+      // No model sent here — provider default is used; user picks model in Coach tab
+      const res = await api.coachSaveApiKey(key, selectedProvider, "");
       const data = await res.json();
-      if (!res.ok) { toast({ title: "Error", description: data.error, variant: "destructive" }); return; }
-      toast({ title: "API key saved", description: `${providerLabel(selectedProvider)} — ${data.masked}` });
+      if (!res.ok) { toast({ title: "Error", description: data.error ?? "Save failed", variant: "destructive" }); return; }
+      toast({ title: "API key saved", description: `${activeProvider.label} — ${data.masked}` });
       setAiKeyInput("");
       refetchCoachProfile();
     } catch { toast({ title: "Failed to save key", variant: "destructive" }); }
@@ -106,13 +114,6 @@ export default function SettingsPage() {
     toast({ title: "API key removed" });
     refetchCoachProfile();
   };
-  const updateProviderModel = async (provider: "groq"|"gemini"|"openrouter", model: string) => {
-    const res = await api.coachUpdateProvider(provider, model);
-    if (res.ok) refetchCoachProfile();
-  };
-  const providerLabel = (p: string) => ({ groq: "Groq", gemini: "Google Gemini", openrouter: "OpenRouter" }[p] ?? p);
-  const providerKeyPlaceholder = (p: string) => ({ groq: "gsk_...", gemini: "AIza...", openrouter: "sk-or-..." }[p] ?? "API key...");
-  const providerKeyUrl = (p: string) => ({ groq: "https://console.groq.com", gemini: "https://aistudio.google.com/apikey", openrouter: "https://openrouter.ai/keys" }[p] ?? "#");
 
   // Wearable status
   const [syncing, setSyncing] = useState<string | null>(null);
@@ -504,85 +505,66 @@ export default function SettingsPage() {
         )}
       </section>
 
-      {/* AI Coach — multi-provider */}
+      {/* AI Coach — provider + key */}
       <section className="space-y-3">
         <div className="flex items-center gap-2">
           <Brain className="w-4 h-4 text-primary" />
           <h2 className="text-sm font-semibold">AI Coach</h2>
         </div>
 
-        {/* Current config badge */}
-        {(coachProfile as any)?.hasOwnKey && (
+        {/* Active key badge */}
+        {hasOwnKey && (
           <div className="flex items-center justify-between bg-secondary rounded-xl px-3 py-2">
             <div className="flex items-center gap-2">
               <CheckCircle className="w-4 h-4 text-green-400" />
               <div>
-                <p className="text-xs font-semibold">{providerLabel(savedProvider)} — {(coachProfile as any)?.maskedKey}</p>
-                <p className="text-xs text-muted-foreground">{savedModel}</p>
+                <p className="text-xs font-semibold">
+                  {PROVIDERS.find(p => p.id === savedProvider)?.label ?? savedProvider}
+                  {savedModel && <span className="text-muted-foreground font-normal"> — {savedModel.split("/").pop()?.replace(":free","") ?? savedModel}</span>}
+                </p>
+                <p className="text-xs text-muted-foreground">Unlimited messages — select your model in the Coach tab</p>
               </div>
             </div>
             <Button size="sm" variant="destructive" onClick={removeAiKey} className="h-7 text-xs">Remove</Button>
           </div>
         )}
 
-        {/* Provider selector */}
+        {/* Step 1: pick provider */}
         <div className="space-y-1.5">
-          <p className="text-xs font-medium text-muted-foreground">AI provider</p>
+          <p className="text-xs font-semibold">1. Select provider</p>
           <div className="grid grid-cols-3 gap-1.5">
-            {(["groq", "gemini", "openrouter"] as const).map(p => (
+            {PROVIDERS.map(p => (
               <button
-                key={p}
-                onClick={() => { setSelectedProvider(p); setSelectedModel(""); }}
-                className={`py-2 px-1 rounded-lg border text-xs font-medium transition-colors ${
-                  selectedProvider === p
+                key={p.id}
+                onClick={() => setSelectedProvider(p.id)}
+                className={`py-2.5 px-1 rounded-xl border text-xs font-medium transition-colors flex flex-col items-center gap-0.5 ${
+                  selectedProvider === p.id
                     ? "border-primary bg-primary/10 text-primary"
                     : "border-border bg-secondary hover:border-primary/40"
                 }`}
               >
-                {providerLabel(p)}
+                <span>{p.label}</span>
+                <span className={`text-[10px] font-normal ${ selectedProvider === p.id ? "text-primary/70" : "text-muted-foreground"}`}>{p.note}</span>
               </button>
             ))}
           </div>
         </div>
 
-        {/* Model selector */}
-        {modelCatalog[selectedProvider]?.length > 0 && (
-          <div className="space-y-1.5">
-            <p className="text-xs font-medium text-muted-foreground">Model</p>
-            <div className="space-y-1">
-              {modelCatalog[selectedProvider].map((m: any) => (
-                <button
-                  key={m.id}
-                  onClick={() => setSelectedModel(m.id)}
-                  className={`w-full text-left px-3 py-2 rounded-lg border text-xs transition-colors ${
-                    (selectedModel || modelCatalog[selectedProvider]?.[0]?.id) === m.id
-                      ? "border-primary bg-primary/10"
-                      : "border-border bg-secondary hover:border-primary/40"
-                  }`}
-                >
-                  <span className="font-medium">{m.label}</span>
-                  <span className="text-muted-foreground ml-1.5">— {m.description}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Key input */}
+        {/* Step 2: paste key */}
         <div className="space-y-1.5">
-          <p className="text-xs font-medium text-muted-foreground">
-            {providerLabel(selectedProvider)} API key{" "}
-            <a href={providerKeyUrl(selectedProvider)} target="_blank" rel="noopener noreferrer" className="underline text-primary">Get free key →</a>
+          <p className="text-xs font-semibold">
+            2. Paste your {activeProvider.label} API key{" "}
+            <a href={activeProvider.url} target="_blank" rel="noopener noreferrer" className="underline text-primary font-normal">Get free key →</a>
           </p>
           <div className="flex gap-2">
             <div className="relative flex-1">
               <Input
                 type={showAiKey ? "text" : "password"}
-                placeholder={providerKeyPlaceholder(selectedProvider)}
+                placeholder={activeProvider.placeholder}
                 value={aiKeyInput}
-                onChange={(e) => setAiKeyInput(e.target.value)}
+                onChange={e => setAiKeyInput(e.target.value)}
                 className="pr-8 text-sm h-9"
-                onKeyDown={(e) => { if (e.key === "Enter") saveAiKey(); }}
+                onKeyDown={e => { if (e.key === "Enter") saveAiKey(); }}
               />
               <button type="button" onClick={() => setShowAiKey(v => !v)}
                 className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
@@ -594,33 +576,9 @@ export default function SettingsPage() {
             </Button>
           </div>
           <p className="text-xs text-muted-foreground">
-            Without a key you get {(coachProfile as any)?.dailyCap ?? 15} free messages/day on Groq.
+            Without a key you get {(coachProfile as any)?.dailyCap ?? 15} free messages/day using Groq. Pick your AI model in the Coach tab after saving.
           </p>
         </div>
-
-        {/* Quick model switcher if key already saved */}
-        {(coachProfile as any)?.hasOwnKey && modelCatalog[savedProvider]?.length > 1 && (
-          <div className="border-t border-border pt-3 space-y-1.5">
-            <p className="text-xs font-medium text-muted-foreground">Switch model</p>
-            <div className="space-y-1">
-              {modelCatalog[savedProvider].map((m: any) => (
-                <button
-                  key={m.id}
-                  onClick={() => updateProviderModel(savedProvider, m.id)}
-                  className={`w-full text-left px-3 py-2 rounded-lg border text-xs transition-colors ${
-                    savedModel === m.id
-                      ? "border-primary bg-primary/10"
-                      : "border-border bg-secondary hover:border-primary/40"
-                  }`}
-                >
-                  <span className="font-medium">{m.label}</span>
-                  {savedModel === m.id && <span className="text-primary ml-1.5">(active)</span>}
-                  <span className="text-muted-foreground ml-1.5">— {m.description}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
       </section>
 
       <Button onClick={saveProfile} disabled={saving} className="w-full" data-testid="button-save-settings">
