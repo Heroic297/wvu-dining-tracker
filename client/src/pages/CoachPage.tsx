@@ -56,6 +56,8 @@ interface Message {
   content: string;
   pending?: boolean;
   error?: boolean;
+  model?: string;
+  provider?: string;
 }
 
 interface CoachProfile {
@@ -632,8 +634,84 @@ function CoachKnows({
 
 // ─── Message Bubble ───────────────────────────────────────────────────────────
 
+function renderInline(text: string): React.ReactNode[] {
+  const parts: React.ReactNode[] = [];
+  const re = /\*\*([^*]+)\*\*|\*([^*]+)\*|`([^`]+)`/g;
+  let last = 0, m: RegExpExecArray | null, key = 0;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) parts.push(<span key={key++}>{text.slice(last, m.index)}</span>);
+    if (m[1] !== undefined) parts.push(<strong key={key++} className="font-semibold">{m[1]}</strong>);
+    else if (m[2] !== undefined) parts.push(<em key={key++} className="italic">{m[2]}</em>);
+    else if (m[3] !== undefined) parts.push(<code key={key++} className="bg-black/10 dark:bg-white/10 px-1 rounded text-xs font-mono">{m[3]}</code>);
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) parts.push(<span key={key++}>{text.slice(last)}</span>);
+  return parts;
+}
+
+function renderMarkdown(content: string): React.ReactNode {
+  const lines = content.split("\n");
+  const nodes: React.ReactNode[] = [];
+  let listItems: React.ReactNode[] = [];
+  let listType: "ul" | "ol" | null = null;
+  let lk = 0;
+  const flushList = () => {
+    if (!listItems.length) return;
+    nodes.push(listType === "ul"
+      ? <ul key={`ul${lk++}`} className="list-disc pl-4 space-y-0.5 my-1">{listItems}</ul>
+      : <ol key={`ol${lk++}`} className="list-decimal pl-4 space-y-0.5 my-1">{listItems}</ol>);
+    listItems = []; listType = null;
+  };
+  lines.forEach((line, i) => {
+    const h3 = line.match(/^###\s+(.+)/), h2 = line.match(/^##\s+(.+)/), h1 = line.match(/^#\s+(.+)/);
+    const bullet = line.match(/^[-*]\s+(.+)/), numbered = line.match(/^\d+\.\s+(.+)/);
+    if (h1 || h2 || h3) {
+      flushList();
+      const t = (h3||h2||h1)![1];
+      const cls = h1 ? "text-base font-bold mt-2" : h2 ? "text-sm font-bold mt-2" : "text-sm font-semibold mt-1.5";
+      nodes.push(<p key={i} className={cls}>{renderInline(t)}</p>);
+    } else if (bullet) {
+      if (listType !== "ul") { flushList(); listType = "ul"; }
+      listItems.push(<li key={i}>{renderInline(bullet[1])}</li>);
+    } else if (numbered) {
+      if (listType !== "ol") { flushList(); listType = "ol"; }
+      listItems.push(<li key={i}>{renderInline(numbered[1])}</li>);
+    } else if (line.match(/^---+$/)) {
+      flushList(); nodes.push(<hr key={i} className="border-border my-1.5" />);
+    } else if (line.trim() === "") {
+      flushList();
+      if (i > 0 && i < lines.length - 1) nodes.push(<div key={i} className="h-1" />);
+    } else {
+      flushList(); nodes.push(<p key={i} className="leading-relaxed">{renderInline(line)}</p>);
+    }
+  });
+  flushList();
+  return <>{nodes}</>;
+}
+
+const MODEL_LABELS: Record<string, string> = {
+  "qwen/qwen3.6-plus-preview:free":            "Qwen 3.6 Plus",
+  "minimax/minimax-m2.5:free":                 "MiniMax M2.5",
+  "stepfun/step-3.5-flash:free":               "Step 3.5 Flash",
+  "nousresearch/hermes-3-llama-3.1-405b:free": "Hermes 3 405B",
+  "google/gemma-3-27b-it:free":                "Gemma 3 27B",
+  "meta-llama/llama-3.3-70b-instruct:free":    "Llama 3.3 70B",
+  "openai/gpt-oss-120b:free":                  "GPT OSS 120B",
+  "nvidia/nemotron-3-super-120b-a12b:free":    "Nemotron 120B",
+  "llama-3.3-70b-versatile":                   "Llama 3.3 70B",
+  "llama-3.1-8b-instant":                      "Llama 3.1 8B",
+  "gemma2-9b-it":                              "Gemma 2 9B",
+  "mixtral-8x7b-32768":                        "Mixtral 8x7B",
+  "gemini-2.0-flash":                          "Gemini 2.0 Flash",
+  "gemini-1.5-flash":                          "Gemini 1.5 Flash",
+};
+const PROVIDER_LABELS: Record<string, string> = { groq: "Groq", gemini: "Gemini", openrouter: "OpenRouter" };
+
 function MessageBubble({ msg }: { msg: Message }) {
   const isUser = msg.role === "user";
+  const watermark = !isUser && !msg.pending && msg.model
+    ? `${MODEL_LABELS[msg.model] ?? msg.model.split("/").pop()?.replace(":free","") ?? msg.model}${msg.provider ? ` · ${PROVIDER_LABELS[msg.provider] ?? msg.provider}` : ""}`
+    : null;
   return (
     <div className={`flex gap-2.5 ${isUser ? "justify-end" : "justify-start"}`}>
       {!isUser && (
@@ -641,21 +719,21 @@ function MessageBubble({ msg }: { msg: Message }) {
           <Brain className="w-3.5 h-3.5 text-primary" />
         </div>
       )}
-      <div
-        className={`max-w-[80%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed ${
-          isUser
-            ? "bg-primary text-primary-foreground rounded-br-sm"
-            : msg.error
-            ? "bg-destructive/10 border border-destructive/30 text-destructive-foreground rounded-bl-sm"
-            : "bg-card border border-border rounded-bl-sm"
-        } ${msg.pending ? "opacity-60 animate-pulse" : ""}`}
-      >
-        {msg.content.split("\n").map((line, i) => (
-          <span key={i}>
-            {line}
-            {i < msg.content.split("\n").length - 1 && <br />}
-          </span>
-        ))}
+      <div className={`flex flex-col ${isUser ? "items-end" : "items-start"} max-w-[80%]`}>
+        <div
+          className={`rounded-2xl px-3.5 py-2.5 text-sm ${
+            isUser
+              ? "bg-primary text-primary-foreground rounded-br-sm"
+              : msg.error
+              ? "bg-destructive/10 border border-destructive/30 text-destructive-foreground rounded-bl-sm"
+              : "bg-card border border-border rounded-bl-sm"
+          } ${msg.pending ? "opacity-60 animate-pulse" : ""}`}
+        >
+          {isUser || msg.pending ? msg.content : renderMarkdown(msg.content)}
+        </div>
+        {watermark && (
+          <p className="text-[10px] text-muted-foreground/60 mt-0.5 px-1 select-none">{watermark}</p>
+        )}
       </div>
     </div>
   );
@@ -754,7 +832,7 @@ export default function CoachPage() {
       }
       setMessages((prev) => [
         ...prev.slice(0, -1),
-        { role: "assistant", content: data.message },
+        { role: "assistant", content: data.message, model: data.model, provider: data.provider },
       ]);
       // Refresh profile (daily usage may have changed)
       qc.invalidateQueries({ queryKey: ["coachProfile"] });
