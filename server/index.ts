@@ -82,6 +82,47 @@ storage.seedDiningLocations().catch(console.error);
     await pool.query(`
       ALTER TABLE users ADD COLUMN IF NOT EXISTS water_unit TEXT NOT NULL DEFAULT 'oz'
     `);
+    // AI Coach columns on users
+    await pool.query(`
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS groq_api_key_encrypted TEXT
+    `);
+    await pool.query(`
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_daily_usage INTEGER NOT NULL DEFAULT 0
+    `);
+    await pool.query(`
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_daily_usage_date DATE
+    `);
+    // AI Coach profile table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS ai_profiles (
+        user_id            VARCHAR(36) PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        onboarding_complete BOOLEAN    NOT NULL DEFAULT FALSE,
+        preferred_name     TEXT,
+        main_goal          TEXT,
+        is_wvu_student     BOOLEAN     NOT NULL DEFAULT FALSE,
+        experience_level   TEXT,
+        notes              TEXT,
+        rolling_summary    TEXT,
+        coach_tone         TEXT        NOT NULL DEFAULT 'balanced',
+        updated_at         TIMESTAMPTZ DEFAULT now()
+      )
+    `);
+    // AI Chat messages table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS chat_messages (
+        id          VARCHAR(36)  PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id     VARCHAR(36)  NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        role        TEXT         NOT NULL,
+        content     TEXT         NOT NULL,
+        tool_name   TEXT,
+        tool_args   JSONB,
+        tool_result TEXT,
+        created_at  TIMESTAMPTZ  DEFAULT now()
+      )
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS chat_messages_user_created ON chat_messages(user_id, created_at)
+    `);
     // Add new enum values to nutrition_source if not already present
     await pool.query(`
       DO $$ BEGIN
