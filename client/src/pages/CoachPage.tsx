@@ -736,9 +736,15 @@ export default function CoachPage() {
         return;
       }
       if (data.error) {
+        // Clean up raw API error messages into something readable
+        let msg: string = data.error;
+        if (msg.includes("401")) msg = "API key rejected — check your key in Settings → AI Coach.";
+        else if (msg.includes("429")) msg = "Rate limit hit — try again in a moment, or switch to a different model.";
+        else if (msg.includes("403")) msg = "API key doesn\'t have access to this model — check Settings → AI Coach.";
+        else if (msg.includes("402")) msg = "API account issue — check your provider account balance or plan.";
         setMessages((prev) => [
           ...prev.slice(0, -1),
-          { role: "assistant", content: data.error, error: true },
+          { role: "assistant", content: msg, error: true },
         ]);
         return;
       }
