@@ -95,6 +95,11 @@ export const users = pgTable("users", {
   waterUnit: text("water_unit").$type<"ml" | "oz" | "L" | "gal">().default("oz"),
   // Onboarding
   onboardingComplete: boolean("onboarding_complete").default(false),
+  // AI Coach — encrypted Groq API key (AES-256-GCM, hex-encoded iv:tag:ciphertext)
+  groqApiKeyEncrypted: text("groq_api_key_encrypted"),
+  // AI Coach daily usage counter (resets each day)
+  aiDailyUsage: integer("ai_daily_usage").default(0),
+  aiDailyUsageDate: date("ai_daily_usage_date"),
   createdAt: timestamp("created_at").default(sql`now()`),
 });
 
@@ -414,6 +419,55 @@ export const insertInviteCodeSchema = createInsertSchema(inviteCodes).omit({
 });
 export type InsertInviteCode = z.infer<typeof insertInviteCodeSchema>;
 export type InviteCode = typeof inviteCodes.$inferSelect;
+
+// ─── AI Coach Profiles ───────────────────────────────────────────────────────
+// Stores onboarding answers and the rolling memory summary for each user.
+
+export const aiProfiles = pgTable("ai_profiles", {
+  userId: varchar("user_id", { length: 36 })
+    .primaryKey()
+    .references(() => users.id, { onDelete: "cascade" }),
+  // Onboarding state
+  onboardingComplete: boolean("onboarding_complete").default(false),
+  // Answers from Q+A
+  preferredName: text("preferred_name"),
+  mainGoal: text("main_goal"),             // "lose_weight" | "build_muscle" | "powerlifting" | "general_fitness" | "other"
+  isWvuStudent: boolean("is_wvu_student").default(false),
+  experienceLevel: text("experience_level"), // "beginner" | "intermediate" | "advanced"
+  notes: text("notes"),                    // free-text: injuries, dietary restrictions, preferences
+  // Rolling memory — rewritten by compaction, never appended
+  rollingSummary: text("rolling_summary"),
+  // Tone preference set during onboarding or by user request
+  coachTone: text("coach_tone").default("balanced"), // "coach" | "data" | "balanced"
+  updatedAt: timestamp("updated_at").default(sql`now()`),
+});
+
+export type AiProfile = typeof aiProfiles.$inferSelect;
+
+// ─── AI Chat Messages ─────────────────────────────────────────────────────────
+// Rolling window of recent messages. Old messages are compacted into ai_profiles.rolling_summary.
+
+export const chatMessages = pgTable(
+  "chat_messages",
+  {
+    id: varchar("id", { length: 36 })
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    userId: varchar("user_id", { length: 36 })
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    role: text("role").notNull(),   // "user" | "assistant" | "tool"
+    content: text("content").notNull(),
+    // Tool call metadata (assistant tool-use turns)
+    toolName: text("tool_name"),
+    toolArgs: jsonb("tool_args"),
+    toolResult: text("tool_result"),
+    createdAt: timestamp("created_at").default(sql`now()`),
+  },
+  (t) => [index("chat_messages_user_created").on(t.userId, t.createdAt)]
+);
+
+export type ChatMessage = typeof chatMessages.$inferSelect;
 
 // ─── Sessions (express-session via pg) ───────────────────────────────────────
 
