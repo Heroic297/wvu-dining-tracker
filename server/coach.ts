@@ -19,11 +19,38 @@ import { z } from "zod";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const FREE_DAILY_CAP = 15;           // messages/day using master key
-const RECENT_WINDOW = 15;            // messages kept verbatim
-const COMPACT_THRESHOLD = 20;        // trigger compaction when window > this
-const GROQ_MODEL = "llama-3.3-70b-versatile";
-const GROQ_API_BASE = "https://api.groq.com/openai/v1";
+const FREE_DAILY_CAP = 15;
+const RECENT_WINDOW = 15;
+const COMPACT_THRESHOLD = 20;
+
+// Default models per provider (all free)
+export const DEFAULT_MODELS: Record<string, string> = {
+  groq:       "llama-3.3-70b-versatile",
+  gemini:     "gemini-2.0-flash",
+  openrouter: "meta-llama/llama-3.3-70b-instruct:free",
+};
+
+// Curated free model catalog shown in the UI
+export const FREE_MODEL_CATALOG: Record<string, Array<{ id: string; label: string; description: string }>> = {
+  groq: [
+    { id: "llama-3.3-70b-versatile", label: "Llama 3.3 70B",       description: "Best all-around — fast reasoning, strong nutrition knowledge" },
+    { id: "llama-3.1-8b-instant",    label: "Llama 3.1 8B",        description: "Fastest responses, lighter model" },
+    { id: "gemma2-9b-it",            label: "Gemma 2 9B",          description: "Google compact model, good for Q&A" },
+    { id: "mixtral-8x7b-32768",      label: "Mixtral 8x7B",        description: "Strong reasoning, 32k context window" },
+  ],
+  gemini: [
+    { id: "gemini-2.0-flash",        label: "Gemini 2.0 Flash",    description: "Best free Gemini — 1,500 req/day, fast, excellent coaching" },
+    { id: "gemini-1.5-flash",        label: "Gemini 1.5 Flash",    description: "Proven model, great at following complex instructions" },
+    { id: "gemini-1.5-flash-8b",     label: "Gemini 1.5 Flash 8B", description: "Lighter and faster, good for quick questions" },
+  ],
+  openrouter: [
+    { id: "meta-llama/llama-3.3-70b-instruct:free", label: "Llama 3.3 70B",    description: "Same model as Groq default — reliable free option" },
+    { id: "google/gemini-2.0-flash-exp:free",       label: "Gemini 2.0 Flash", description: "Google best free model via OpenRouter" },
+    { id: "deepseek/deepseek-r1:free",              label: "DeepSeek R1",      description: "Best free reasoning model — ideal for diet analysis" },
+    { id: "microsoft/phi-4:free",                   label: "Phi-4",            description: "Microsoft compact reasoning model, highly capable" },
+    { id: "qwen/qwen-2.5-72b-instruct:free",        label: "Qwen 2.5 72B",    description: "Alibaba large model, strong instruction following" },
+  ],
+};
 
 // Known prompt-injection patterns — reject before sending to model
 const INJECTION_PATTERNS = [
@@ -43,21 +70,33 @@ function containsInjection(text: string): boolean {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-async function getGroqKey(userId: string): Promise<{ key: string; isOwn: boolean }> {
+type Provider = "groq" | "gemini" | "openrouter";
+
+interface AiConfig {
+  provider: Provider;
+  model: string;
+  key: string;
+  isOwn: boolean;
+}
+
+async function getAiConfig(userId: string): Promise<AiConfig> {
   const res = await pool.query(
-    "SELECT groq_api_key_encrypted FROM users WHERE id=$1",
+    "SELECT groq_api_key_encrypted, ai_provider, ai_model FROM users WHERE id=$1",
     [userId]
   );
-  const enc = res.rows[0]?.groq_api_key_encrypted;
+  const row = res.rows[0];
+  const provider: Provider = (row?.ai_provider as Provider) || "groq";
+  const model = row?.ai_model || DEFAULT_MODELS[provider] || DEFAULT_MODELS.groq;
+
+  const enc = row?.groq_api_key_encrypted;
   if (enc) {
     try {
-      return { key: decryptString(enc), isOwn: true };
-    } catch {
-      // decryption failure — fall through to master key
-    }
+      return { provider, model, key: decryptString(enc), isOwn: true };
+    } catch { /* fall through */ }
   }
+  // No own key — fall back to master Groq key
   const master = process.env.GROQ_API_KEY ?? "";
-  return { key: master, isOwn: false };
+  return { provider: "groq", model: DEFAULT_MODELS.groq, key: master, isOwn: false };
 }
 
 /** Check and increment daily usage for master-key users. Returns true if allowed. */
@@ -488,38 +527,137 @@ async function executeTool(name: string, args: any, userId: string, profile: any
 
 // ─── Groq API Call ────────────────────────────────────────────────────────────
 
-async function callGroq(
+// ─── Multi-provider AI caller ─────────────────────────────────────────────────────────
+
+/** OpenAI-compatible call (Groq + OpenRouter share the same format) */
+async function callOpenAICompat(
+  baseUrl: string,
   apiKey: string,
+  model: string,
   messages: any[],
-  tools: any[],
-  signal?: AbortSignal
+  tools: any[]
 ): Promise<any> {
-  const res = await fetch(`${GROQ_API_BASE}/chat/completions`, {
+  const body: any = { model, messages, max_tokens: 1024, temperature: 0.7 };
+  if (tools.length > 0) { body.tools = tools; body.tool_choice = "auto"; }
+  const res = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: GROQ_MODEL,
-      messages,
-      tools,
-      tool_choice: "auto",
-      max_tokens: 1024,
-      temperature: 0.7,
-    }),
-    signal,
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify(body),
   });
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Groq API error ${res.status}: ${err}`);
-  }
+  if (!res.ok) throw new Error(`API error ${res.status}: ${await res.text()}`);
   return res.json();
+}
+
+/** Gemini uses a different REST API — translate to/from OpenAI format */
+async function callGemini(
+  apiKey: string,
+  model: string,
+  messages: any[],
+  tools: any[]
+): Promise<any> {
+  // Convert OpenAI message format to Gemini contents format
+  const systemMsg = messages.find((m: any) => m.role === "system");
+  const chatMsgs = messages.filter((m: any) => m.role !== "system");
+
+  const contents = chatMsgs.map((m: any) => ({
+    role: m.role === "assistant" ? "model" : "user",
+    parts: [{ text: m.content ?? "" }],
+  }));
+
+  // Convert OpenAI tool definitions to Gemini function declarations
+  const functionDeclarations = tools.map((t: any) => ({
+    name: t.function.name,
+    description: t.function.description,
+    parameters: t.function.parameters,
+  }));
+
+  const requestBody: any = {
+    contents,
+    generationConfig: { maxOutputTokens: 1024, temperature: 0.7 },
+  };
+  if (systemMsg) {
+    requestBody.systemInstruction = { parts: [{ text: systemMsg.content }] };
+  }
+  if (functionDeclarations.length > 0) {
+    requestBody.tools = [{ functionDeclarations }];
+    requestBody.toolConfig = { functionCallingConfig: { mode: "AUTO" } };
+  }
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(requestBody),
+  });
+  if (!res.ok) throw new Error(`Gemini API error ${res.status}: ${await res.text()}`);
+  const geminiRes = await res.json();
+
+  // Translate Gemini response back to OpenAI format
+  const candidate = geminiRes.candidates?.[0];
+  const part = candidate?.content?.parts?.[0];
+
+  // Check for function call
+  if (part?.functionCall) {
+    return {
+      choices: [{
+        message: {
+          role: "assistant",
+          content: null,
+          tool_calls: [{
+            id: `gemini-${Date.now()}`,
+            type: "function",
+            function: {
+              name: part.functionCall.name,
+              arguments: JSON.stringify(part.functionCall.args ?? {}),
+            },
+          }],
+        },
+      }],
+    };
+  }
+
+  return {
+    choices: [{
+      message: {
+        role: "assistant",
+        content: part?.text ?? "",
+        tool_calls: [],
+      },
+    }],
+  };
+}
+
+/** Unified AI caller — dispatches to the right provider */
+async function callAI(
+  config: AiConfig,
+  messages: any[],
+  tools: any[]
+): Promise<any> {
+  if (config.provider === "gemini") {
+    return callGemini(config.key, config.model, messages, tools);
+  }
+  if (config.provider === "openrouter") {
+    return callOpenAICompat(
+      "https://openrouter.ai/api/v1",
+      config.key,
+      config.model,
+      messages,
+      tools
+    );
+  }
+  // Default: Groq
+  return callOpenAICompat(
+    "https://api.groq.com/openai/v1",
+    config.key,
+    config.model,
+    messages,
+    tools
+  );
 }
 
 // ─── Compaction ───────────────────────────────────────────────────────────────
 
-async function maybeCompact(userId: string, apiKey: string): Promise<void> {
+async function maybeCompact(userId: string, config: AiConfig): Promise<void> {
   const countRes = await pool.query(
     "SELECT COUNT(*) as n FROM chat_messages WHERE user_id=$1",
     [userId]
@@ -565,7 +703,7 @@ Write a new rolling summary that:
 Return ONLY the summary text, no preamble.`;
 
   try {
-    const compactRes = await callGroq(apiKey, [
+    const compactRes = await callAI(config, [
       { role: "user", content: compactionPrompt },
     ], []);
     const newSummary = compactRes.choices?.[0]?.message?.content?.trim() ?? existingSummary;
@@ -595,24 +733,34 @@ export function registerCoachRoutes(app: Express): void {
       const userId = req.user!.id;
       const profile = await getOrCreateProfile(userId);
 
-      // Check if user has their own key
       const keyRes = await pool.query(
-        "SELECT groq_api_key_encrypted, ai_daily_usage, ai_daily_usage_date FROM users WHERE id=$1",
+        "SELECT groq_api_key_encrypted, ai_daily_usage, ai_daily_usage_date, ai_provider, ai_model FROM users WHERE id=$1",
         [userId]
       );
       const row = keyRes.rows[0];
       const hasOwnKey = !!row?.groq_api_key_encrypted;
+      const provider: Provider = (row?.ai_provider as Provider) || "groq";
+      const aiModel = row?.ai_model || DEFAULT_MODELS[provider];
       const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
       const usageDate = row?.ai_daily_usage_date
         ? new Date(row.ai_daily_usage_date).toISOString().slice(0, 10)
         : null;
       const dailyUsage = usageDate === today ? (row?.ai_daily_usage ?? 0) : 0;
+      // Return masked key if set
+      let maskedKey: string | null = null;
+      if (row?.groq_api_key_encrypted) {
+        try { maskedKey = maskApiKey(decryptString(row.groq_api_key_encrypted)); } catch { /* ignore */ }
+      }
 
       res.json({
         ...profile,
         hasOwnKey,
+        provider,
+        aiModel,
+        maskedKey,
         dailyUsage,
         dailyCap: FREE_DAILY_CAP,
+        modelCatalog: FREE_MODEL_CATALOG,
       });
     } catch (err: any) {
       console.error("[coach] profile error:", err.message);
@@ -672,26 +820,48 @@ export function registerCoachRoutes(app: Express): void {
     }
   });
 
-  // PATCH /api/coach/apikey  — save/update BYOK key
+  // PATCH /api/coach/apikey  — save provider + model + encrypted key
   app.patch("/api/coach/apikey", requireAuth, async (req: AuthRequest, res) => {
     try {
       const userId = req.user!.id;
-      const { apiKey } = z.object({ apiKey: z.string().min(10).max(200) }).parse(req.body);
-
-      // Basic sanity check — Groq keys start with gsk_
-      if (!apiKey.startsWith("gsk_")) {
-        return res.status(400).json({ error: "Invalid Groq API key format. Keys start with gsk_" });
-      }
+      const schema = z.object({
+        apiKey:   z.string().min(6).max(300),
+        provider: z.enum(["groq", "gemini", "openrouter"]).default("groq"),
+        model:    z.string().max(120).optional(),
+      });
+      const { apiKey, provider, model } = schema.parse(req.body);
 
       const encrypted = encryptString(apiKey);
+      const resolvedModel = model || DEFAULT_MODELS[provider];
       await pool.query(
-        "UPDATE users SET groq_api_key_encrypted=$1 WHERE id=$2",
-        [encrypted, userId]
+        "UPDATE users SET groq_api_key_encrypted=$1, ai_provider=$2, ai_model=$3 WHERE id=$4",
+        [encrypted, provider, resolvedModel, userId]
       );
-      res.json({ ok: true, masked: maskApiKey(apiKey) });
+      res.json({ ok: true, masked: maskApiKey(apiKey), provider, model: resolvedModel });
     } catch (err: any) {
       if (err.name === "ZodError") return res.status(400).json({ error: err.errors[0].message });
       res.status(500).json({ error: "Failed to save API key" });
+    }
+  });
+
+  // PATCH /api/coach/provider  — update provider/model without changing key
+  app.patch("/api/coach/provider", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const userId = req.user!.id;
+      const schema = z.object({
+        provider: z.enum(["groq", "gemini", "openrouter"]),
+        model:    z.string().max(120).optional(),
+      });
+      const { provider, model } = schema.parse(req.body);
+      const resolvedModel = model || DEFAULT_MODELS[provider];
+      await pool.query(
+        "UPDATE users SET ai_provider=$1, ai_model=$2 WHERE id=$3",
+        [provider, resolvedModel, userId]
+      );
+      res.json({ ok: true, provider, model: resolvedModel });
+    } catch (err: any) {
+      if (err.name === "ZodError") return res.status(400).json({ error: err.errors[0].message });
+      res.status(500).json({ error: "Failed to update provider" });
     }
   });
 
@@ -746,19 +916,19 @@ export function registerCoachRoutes(app: Express): void {
         });
       }
 
-      // Get API key + check usage cap
-      const { key, isOwn } = await getGroqKey(userId);
-      if (!key) {
+      // Get AI config (provider + model + key)
+      const aiConfig = await getAiConfig(userId);
+      if (!aiConfig.key) {
         return res.status(402).json({
-          error: "No Groq API key configured. Add your free Groq key in Settings → AI Coach.",
+          error: "No API key configured. Add your free AI API key in Settings → AI Coach.",
           needsKey: true,
         });
       }
-      if (!isOwn) {
+      if (!aiConfig.isOwn) {
         const allowed = await checkDailyUsage(userId);
         if (!allowed) {
           return res.status(429).json({
-            error: `You've used your ${FREE_DAILY_CAP} free messages for today. Add your own free Groq API key in Settings for unlimited access.`,
+            error: `You've used your ${FREE_DAILY_CAP} free messages for today. Add your own free API key in Settings for unlimited access.`,
             needsKey: true,
             cap: FREE_DAILY_CAP,
           });
@@ -800,13 +970,12 @@ export function registerCoachRoutes(app: Express): void {
         // If Groq rejects our tool call (e.g. type coercion issue), retry without tools
         let usedTools = TOOLS;
         try {
-          response = await callGroq(key, groqMessages, usedTools);
-        } catch (groqErr: any) {
-          if (groqErr.message?.includes("tool_use_failed") || groqErr.message?.includes("tool call validation")) {
-            // Retry without tools — model will answer from context alone
-            response = await callGroq(key, groqMessages, []);
+          response = await callAI(aiConfig, groqMessages, usedTools);
+        } catch (aiErr: any) {
+          if (aiErr.message?.includes("tool_use_failed") || aiErr.message?.includes("tool call validation")) {
+            response = await callAI(aiConfig, groqMessages, []);
           } else {
-            throw groqErr;
+            throw aiErr;
           }
         }
         const choice = response.choices?.[0];
@@ -857,7 +1026,7 @@ export function registerCoachRoutes(app: Express): void {
       await saveMessage(userId, "assistant", safeOutput);
 
       // Async compaction — don't await, fire and forget
-      maybeCompact(userId, key).catch((e) =>
+      maybeCompact(userId, aiConfig).catch((e) =>
         console.error("[coach] background compact error:", e.message)
       );
 
