@@ -44,11 +44,12 @@ export const FREE_MODEL_CATALOG: Record<string, Array<{ id: string; label: strin
     { id: "gemini-1.5-flash-8b",     label: "Gemini 1.5 Flash 8B", description: "Lighter and faster, good for quick questions" },
   ],
   openrouter: [
-    { id: "meta-llama/llama-3.3-70b-instruct:free", label: "Llama 3.3 70B",    description: "Same model as Groq default — reliable free option" },
-    { id: "google/gemini-2.0-flash-exp:free",       label: "Gemini 2.0 Flash", description: "Google best free model via OpenRouter" },
-    { id: "deepseek/deepseek-r1:free",              label: "DeepSeek R1",      description: "Best free reasoning model — ideal for diet analysis" },
-    { id: "microsoft/phi-4:free",                   label: "Phi-4",            description: "Microsoft compact reasoning model, highly capable" },
-    { id: "qwen/qwen-2.5-72b-instruct:free",        label: "Qwen 2.5 72B",    description: "Alibaba large model, strong instruction following" },
+    { id: "meta-llama/llama-3.3-70b-instruct:free",    label: "Llama 3.3 70B",      description: "Best all-around — fast, reliable, strong coaching (recommended)" },
+    { id: "nousresearch/hermes-3-llama-3.1-405b:free", label: "Hermes 3 405B",      description: "Largest free model available — outstanding reasoning and coaching depth" },
+    { id: "openai/gpt-oss-120b:free",                  label: "GPT OSS 120B",       description: "OpenAI open-source 120B — excellent instruction following" },
+    { id: "nvidia/nemotron-3-super-120b-a12b:free",    label: "Nemotron 120B",      description: "NVIDIA 120B — strong reasoning, good for detailed analysis" },
+    { id: "google/gemma-3-27b-it:free",                label: "Gemma 3 27B",        description: "Google 27B — solid coaching, no tool calling" },
+    { id: "qwen/qwen3-next-80b-a3b-instruct:free",     label: "Qwen3 80B",          description: "Qwen3 80B — strong multilingual reasoning" },
   ],
 };
 
@@ -531,10 +532,19 @@ async function executeTool(name: string, args: any, userId: string, profile: any
 
 // OpenRouter free models that do NOT support tool/function calling
 // For these we strip tools and let the model answer from context alone
+// (most small/specialized models don't support tools)
 const OPENROUTER_NO_TOOLS = new Set([
-  "deepseek/deepseek-r1:free",
-  "microsoft/phi-4:free",
-  "qwen/qwen-2.5-72b-instruct:free",
+  "google/gemma-3-27b-it:free",
+  "google/gemma-3-12b-it:free",
+  "google/gemma-3-4b-it:free",
+  "google/gemma-3n-e4b-it:free",
+  "google/gemma-3n-e2b-it:free",
+  "nvidia/nemotron-3-nano-30b-a3b:free",
+  "nvidia/nemotron-nano-9b-v2:free",
+  "liquid/lfm-2.5-1.2b-instruct:free",
+  "liquid/lfm-2.5-1.2b-thinking:free",
+  "arcee-ai/trinity-mini:free",
+  "arcee-ai/trinity-large-preview:free",
 ]);
 
 /** OpenAI-compatible call (Groq + OpenRouter share the same format) */
@@ -1063,6 +1073,9 @@ export function registerCoachRoutes(app: Express): void {
       // Log full error so Render logs show the real cause
       console.error("[coach] chat error:", err.message, err.stack?.split("\n")[1] ?? "");
       // Surface API errors from any provider so the user gets a useful message
+      if (err.message?.includes("404") && err.message?.includes("No endpoints")) {
+        return res.status(404).json({ error: "Model unavailable — this free model has been removed. Please go to Settings → AI Coach and switch to a different model." });
+      }
       if (err.message?.includes("API error") || err.message?.includes("Gemini API error")) {
         return res.status(502).json({ error: `AI provider error: ${err.message}` });
       }
