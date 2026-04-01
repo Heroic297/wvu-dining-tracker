@@ -81,6 +81,18 @@ export const api = {
   // Activity
   getActivity: (days?: number) =>
     apiRequest("GET", `/api/activity${days ? `?days=${days}` : ""}`),
+
+  // AI Coach
+  coachChat: (message: string) =>
+    apiRequest("POST", "/api/coach/chat", { message }),
+  coachProfile: () => apiRequest("GET", "/api/coach/profile"),
+  coachUpdateProfile: (data: Record<string, any>) =>
+    apiRequest("PATCH", "/api/coach/profile", data),
+  coachHistory: () => apiRequest("GET", "/api/coach/history"),
+  coachClearMemory: () => apiRequest("DELETE", "/api/coach/memory"),
+  coachSaveApiKey: (apiKey: string) =>
+    apiRequest("PATCH", "/api/coach/apikey", { apiKey }),
+  coachDeleteApiKey: () => apiRequest("DELETE", "/api/coach/apikey"),
 };
 
 /** Store the JWT token in memory */
