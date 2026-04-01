@@ -447,7 +447,7 @@ function CoachKnows({
               {Object.entries(toneLabels).map(([val, label]) => (
                 <button
                   key={val}
-                  onClick={() => setEditTone(val)}
+                  onClick={() => setEditTone(val as any)}
                   className={`w-full text-left px-3 py-2 rounded-lg border text-xs font-medium transition-colors ${
                     editTone === val
                       ? "border-primary bg-primary/10 text-primary"
