@@ -83,15 +83,11 @@ async function runMigrations() {
       ALTER TABLE users ADD COLUMN IF NOT EXISTS water_unit TEXT NOT NULL DEFAULT 'oz'
     `);
     // AI Coach columns on users
-    await pool.query(`
-      ALTER TABLE users ADD COLUMN IF NOT EXISTS groq_api_key_encrypted TEXT
-    `);
-    await pool.query(`
-      ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_daily_usage INTEGER NOT NULL DEFAULT 0
-    `);
-    await pool.query(`
-      ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_daily_usage_date DATE
-    `);
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS groq_api_key_encrypted TEXT`);
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_daily_usage INTEGER NOT NULL DEFAULT 0`);
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_daily_usage_date DATE`);
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_provider TEXT NOT NULL DEFAULT 'groq'`);
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_model TEXT`);
     // AI Coach profile table
     await pool.query(`
       CREATE TABLE IF NOT EXISTS ai_profiles (
