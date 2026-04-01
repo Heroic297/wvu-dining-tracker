@@ -31,6 +31,14 @@ export const DEFAULT_MODELS: Record<string, string> = {
 };
 
 // Curated free model catalog shown in the UI
+// Models removed from free tiers — getAiConfig auto-migrates users stuck on these
+const DEAD_MODELS = new Set([
+  "deepseek/deepseek-r1:free",
+  "microsoft/phi-4:free",
+  "qwen/qwen-2.5-72b-instruct:free",
+  "google/gemini-2.0-flash-exp:free",
+]);
+
 export const FREE_MODEL_CATALOG: Record<string, Array<{ id: string; label: string; description: string }>> = {
   groq: [
     { id: "llama-3.3-70b-versatile", label: "Llama 3.3 70B",       description: "Best all-around — fast reasoning, strong nutrition knowledge" },
@@ -87,7 +95,18 @@ async function getAiConfig(userId: string): Promise<AiConfig> {
   );
   const row = res.rows[0];
   const provider: Provider = (row?.ai_provider as Provider) || "groq";
-  const model = row?.ai_model || DEFAULT_MODELS[provider] || DEFAULT_MODELS.groq;
+  const savedModel = row?.ai_model || "";
+
+  // Auto-fallback if the saved model has been removed from the free tier
+  const model = (savedModel && !DEAD_MODELS.has(savedModel))
+    ? savedModel
+    : DEFAULT_MODELS[provider] || DEFAULT_MODELS.groq;
+
+  // If model was dead and we fell back, update the DB silently so it stays fixed
+  if (savedModel && DEAD_MODELS.has(savedModel)) {
+    console.log(`[coach] auto-migrating dead model ${savedModel} → ${model} for user ${userId}`);
+    pool.query("UPDATE users SET ai_model=$1 WHERE id=$2", [model, userId]).catch(() => {});
+  }
 
   const enc = row?.groq_api_key_encrypted;
   if (enc) {
