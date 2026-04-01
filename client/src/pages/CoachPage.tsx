@@ -591,7 +591,7 @@ function CoachKnows({
           {profile.hasOwnKey && (
             <div className="flex items-center gap-2 text-xs text-green-400">
               <Check className="w-3.5 h-3.5" />
-              <span>Using your Groq API key — unlimited messages</span>
+              <span>API key active — unlimited messages</span>
             </div>
           )}
 
@@ -664,19 +664,9 @@ function NoKeyBanner() {
     <div className="mx-4 mb-3 bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 flex items-start gap-2.5">
       <AlertCircle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
       <div className="text-xs space-y-1">
-        <p className="font-semibold text-amber-400">Add your Groq API key for unlimited messages</p>
+        <p className="font-semibold text-amber-400">Add a free API key for unlimited messages</p>
         <p className="text-muted-foreground">
-          Go to <strong>Settings → AI Coach</strong> and paste your free Groq key.
-          Sign up at{" "}
-          <a
-            href="https://console.groq.com"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline text-amber-400"
-          >
-            console.groq.com
-          </a>{" "}
-          — it takes 30 seconds and is completely free.
+          Go to <strong>Settings → AI Coach</strong> to pick a provider (Groq, Google Gemini, or OpenRouter) and add your free key. All providers are free.
         </p>
       </div>
     </div>
