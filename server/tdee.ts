@@ -567,9 +567,11 @@ export function generatePeakWeekPlan(
 
         if (i === 3) {
           // Load day 2 — high water + sodium, gut cut day 1
+          // Calories stay at TDEE — only water/sodium and food SOURCES change (low-residue)
           phase = "Water load 2 + Gut cut day 1";
-          carbsG = Math.round(weightKg * 3.0);  // Moderate carbs, low-residue only
-          fatG   = Math.round(weightKg * 0.8);
+          const fatCalLoad3 = Math.round(bmr * 1.55 * 0.28);
+          fatG   = Math.round(fatCalLoad3 / 9);
+          carbsG = Math.round(Math.max(0, bmr * 1.55 - proteinG * 4 - fatCalLoad3) / 4);
           calories = (proteinG * 4) + (carbsG * 4) + (fatG * 9);
           sodiumMg = 3250; waterL = loadWaterL; waterTargetL = loadWaterTarget;
           focus = `Load day 2: ${loadWaterL} water + 3,000–3,500mg sodium. Gut cut day 1 — low-residue foods only.`;
@@ -584,9 +586,11 @@ export function generatePeakWeekPlan(
           avoid = ["Oats / bran / whole grains", "Raw vegetables", "Beans / legumes", "Processed/canned food (hidden sodium)"];
         } else if (i === 2) {
           // Sodium cut + moderate water, gut cut day 2
+          // Calories stay at TDEE — only sodium/water change, not total food intake
           phase = "Sodium cut + Gut cut day 2";
-          carbsG = Math.round(weightKg * 2.5);
-          fatG   = Math.round(weightKg * 0.7);
+          const fatCalCut = Math.round(bmr * 1.55 * 0.28);
+          fatG   = Math.round(fatCalCut / 9);
+          carbsG = Math.round(Math.max(0, bmr * 1.55 - proteinG * 4 - fatCalCut) / 4);
           calories = (proteinG * 4) + (carbsG * 4) + (fatG * 9);
           sodiumMg = 700; waterL = "2–2.5 L"; waterTargetL = 2.25;
           focus = "Cut sodium sharply today. Moderate water. Gut cut day 2 — low-residue only.";
@@ -601,9 +605,12 @@ export function generatePeakWeekPlan(
           avoid = ["Any added salt", "Processed/canned food", "Restaurant food", "Sports drinks", "Oats / vegetables / beans"];
         } else {
           // Day 1 — dry window + gut cut day 3
+          // Slight calorie reduction (~85% TDEE) — athlete can't eat much with restricted fluids
           phase = "Dry window + Gut cut day 3";
-          carbsG = Math.round(weightKg * 1.5);
-          fatG   = Math.round(weightKg * 0.5);
+          const day1Cals = Math.round(bmr * 1.55 * 0.85);
+          const fatCalDay1 = Math.round(day1Cals * 0.28);
+          fatG   = Math.round(fatCalDay1 / 9);
+          carbsG = Math.round(Math.max(0, day1Cals - proteinG * 4 - fatCalDay1) / 4);
           calories = (proteinG * 4) + (carbsG * 4) + (fatG * 9);
           sodiumMg = 500; waterL = "1–1.5 L total, stop 10–12h before weigh-in"; waterTargetL = 1.25;
           focus = "Last fluids 10–12h before weigh-in. Gut cut day 3 — low-residue all day.";
@@ -680,8 +687,10 @@ export function generatePeakWeekPlan(
         // CORRECTED: Day 4 is now LOAD 1, not the cut day
         const loadWaterL = `${(weightKg * 0.055).toFixed(1)}–${(weightKg * 0.060).toFixed(1)} L`;
         const loadWaterTarget = weightKg * 0.057;
-        carbsG = Math.round(weightKg * 3.0);
-        fatG   = Math.round(weightKg * 0.8);
+        // Calories stay at TDEE on load days — only water/sodium change, not food intake
+        const fatCalLoad = Math.round(bmr * 1.55 * 0.28);
+        fatG   = Math.round(fatCalLoad / 9);
+        carbsG = Math.round(Math.max(0, bmr * 1.55 - proteinG * 4 - fatCalLoad) / 4);
         calories = (proteinG * 4) + (carbsG * 4) + (fatG * 9);
         phase = "Water load 1";
         sodiumMg = 3250; waterL = loadWaterL; waterTargetL = loadWaterTarget;
