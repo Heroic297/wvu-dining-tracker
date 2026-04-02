@@ -303,16 +303,65 @@ export function generateWaterCutPlan(user: User, meetDate: string): MeetPlan[] {
     ? calcBMR(weightKg, user.heightCm, calcAge(user.dateOfBirth), user.sex as "male" | "female")
     : 1800;
 
-  // Sodium and water targets per day — based on evidence-based loading/cut protocol
+  // Evidence-based 2hr USAPL weigh-in protocol (adjusted per user suggestion):
+  // - 2 high-load days instead of 3
+  // - Cut sodium day 2 out, moderate water
+  // - Day 1 out: low water finished 10-12h before weigh-in, NOT zero all day
+  // - Morning of: no fluids, but only 10-12h dry window
+  // - Post weigh-in: 500-750ml fluid + sodium + carbs over 20-30 min
+  const normalWaterLow  = parseFloat((weightKg * 0.033).toFixed(1));
+  const normalWaterHigh = parseFloat((weightKg * 0.040).toFixed(1));
+  const loadWaterLow    = parseFloat((weightKg * 0.055).toFixed(1));
+  const loadWaterHigh   = parseFloat((weightKg * 0.060).toFixed(1));
+
   type DayPlan = { waterIntake: string; sodiumMg: number; sodiumLabel: string; notes: string; carbsG: number; targetCalories: number; };
   const dayMap: Record<number, DayPlan> = {
-    7: { waterIntake: `${(weightKg * 0.038 - 0.3).toFixed(1)}–${(weightKg * 0.038 + 0.3).toFixed(1)} L`, sodiumMg: 2300, sodiumLabel: "2,300 mg",           notes: "Normal training week. Begin hydrating consistently.",                   carbsG: Math.round((bmr * 1.4 * 0.45) / 4), targetCalories: Math.round(bmr * 1.4) },
-    6: { waterIntake: `${(weightKg * 0.055).toFixed(1)}–${(weightKg * 0.060).toFixed(1)} L`,  sodiumMg: 3500, sodiumLabel: "3,000–3,500 mg (HIGH — load)", notes: "Begin water + sodium loading together. Both high.",                     carbsG: Math.round((bmr * 1.2 * 0.35) / 4), targetCalories: Math.round(bmr * 1.2) },
-    5: { waterIntake: `${(weightKg * 0.065).toFixed(1)}–${(weightKg * 0.070).toFixed(1)} L`,  sodiumMg: 3500, sodiumLabel: "3,000–3,500 mg (HIGH — load)", notes: "Peak water + sodium loading. Drink consistently all day.",             carbsG: Math.round((bmr * 1.2 * 0.35) / 4), targetCalories: Math.round(bmr * 1.2) },
-    4: { waterIntake: "2–3 L (begin taper)",                                                   sodiumMg: 600,  sodiumLabel: "< 600 mg (CUT — drop abruptly)",    notes: "Cut BOTH water AND sodium abruptly. Kidneys still excreting at peak rate.", carbsG: Math.round(weightKg * 1.5),          targetCalories: Math.round(bmr * 1.0) },
-    3: { waterIntake: "1–2 L",                                                                  sodiumMg: 400,  sodiumLabel: "< 400 mg (very low)",              notes: "Very low water and sodium. No added salt, no processed food.",          carbsG: 30,                                  targetCalories: Math.round(bmr * 1.0) },
-    2: { waterIntake: "< 1 L",                                                                   sodiumMg: 200,  sodiumLabel: "< 200 mg (minimal)",               notes: "Minimal water. Stop all intake 10–12h before weigh-in.",                carbsG: 20,                                  targetCalories: Math.round(bmr * 0.85) },
-    1: { waterIntake: "0 until after weigh-in",                                                  sodiumMg: 0,    sodiumLabel: "0 until post weigh-in",             notes: "Nothing until weigh-in. Post weigh-in: 500ml electrolyte drink immediately.", carbsG: 0,                              targetCalories: Math.round(bmr * 0.75) },
+    // Days 7-5: Normal baseline — stable sodium, normal hydration
+    7: {
+      waterIntake: `${normalWaterLow}–${normalWaterHigh} L`,
+      sodiumMg: 2650, sodiumLabel: "2,300–3,000 mg (normal baseline)",
+      notes: "Normal training week. Keep hydration and sodium consistent — you need a stable baseline before the loading phase.",
+      carbsG: Math.round((bmr * 1.4 * 0.45) / 4), targetCalories: Math.round(bmr * 1.4),
+    },
+    6: {
+      waterIntake: `${normalWaterLow}–${normalWaterHigh} L`,
+      sodiumMg: 2650, sodiumLabel: "2,300–3,000 mg (normal baseline)",
+      notes: "Continue normal intake. Loading begins tomorrow — don't under-eat sodium today or the loading effect is blunted.",
+      carbsG: Math.round((bmr * 1.4 * 0.45) / 4), targetCalories: Math.round(bmr * 1.4),
+    },
+    5: {
+      waterIntake: `${normalWaterLow}–${normalWaterHigh} L`,
+      sodiumMg: 2650, sodiumLabel: "2,300–3,000 mg (normal baseline)",
+      notes: "Final normal day. Tomorrow loading starts. Eat and drink as usual — no changes yet.",
+      carbsG: Math.round((bmr * 1.4 * 0.45) / 4), targetCalories: Math.round(bmr * 1.4),
+    },
+    // Days 4-3: Water + sodium LOAD — primes aldosterone suppression
+    4: {
+      waterIntake: `${loadWaterLow}–${loadWaterHigh} L`,
+      sodiumMg: 3250, sodiumLabel: "3,000–3,500 mg (HIGH — load day 1)",
+      notes: "Load 1: Increase both water AND sodium together. Sip consistently throughout the day — don't chug. High sodium + high water primes your kidneys for excretion.",
+      carbsG: Math.round((bmr * 1.2 * 0.40) / 4), targetCalories: Math.round(bmr * 1.2),
+    },
+    3: {
+      waterIntake: `${loadWaterLow}–${loadWaterHigh} L`,
+      sodiumMg: 3250, sodiumLabel: "3,000–3,500 mg (HIGH — load day 2)",
+      notes: "Load 2: Same as yesterday — high water, high sodium. Your kidneys are now in elevated excretion mode. The sharp drop tomorrow is what drives scale weight down.",
+      carbsG: Math.round((bmr * 1.2 * 0.40) / 4), targetCalories: Math.round(bmr * 1.2),
+    },
+    // Day 2: Cut sodium sharply, moderate water reduction
+    2: {
+      waterIntake: "2–2.5 L",
+      sodiumMg: 700, sodiumLabel: "< 600–800 mg (CUT sharply — trace amounts only)",
+      notes: "Cut sodium sharply today — no added salt, no processed food, no canned food, no sports drinks. Water drops to moderate. Your kidneys are still excreting at elevated rate from loading — the sharp sodium cut accelerates excretion.",
+      carbsG: Math.round(weightKg * 2.0), targetCalories: Math.round(bmr * 1.0),
+    },
+    // Day 1: Final reduction — last fluids 10-12h before weigh-in, NOT zero all day
+    1: {
+      waterIntake: "1–1.5 L total, last drink 10–12h before weigh-in",
+      sodiumMg: 500, sodiumLabel: "< 400–600 mg (low, from food trace amounts)",
+      notes: "Drink 1–1.5 L total today, finishing 10–12h before your weigh-in. Low-residue, lower-carb foods later in the day. If still a bit heavy morning of weigh-in: hot shower, light clothing, brief light sweating — do NOT extend dry window further. Post weigh-in: 500–750ml fluid with sodium + carbs over 20–30 min, then small frequent carb/protein meals until lift time.",
+      carbsG: Math.round(weightKg * 1.0), targetCalories: Math.round(bmr * 0.85),
+    },
   };
 
   const plans: MeetPlan[] = [];
