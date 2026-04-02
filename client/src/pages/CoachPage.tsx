@@ -928,10 +928,10 @@ export default function CoachPage() {
               // Fallback catalog so selector always works even if profile.modelCatalog is missing
               const FALLBACK: Record<string, Array<{id:string;label:string}>> = {
                 groq: [
-                  { id: "llama-3.3-70b-versatile", label: "Llama 3.3 70B" },
-                  { id: "llama-3.1-8b-instant",    label: "Llama 3.1 8B" },
+                  { id: "llama-3.1-8b-instant",    label: "Llama 3.1 8B Instant (recommended)" },
                   { id: "gemma2-9b-it",             label: "Gemma 2 9B" },
                   { id: "mixtral-8x7b-32768",       label: "Mixtral 8x7B" },
+                  { id: "llama-3.3-70b-versatile",  label: "Llama 3.3 70B" },
                 ],
                 gemini: [
                   { id: "gemini-2.0-flash",     label: "Gemini 2.0 Flash" },
