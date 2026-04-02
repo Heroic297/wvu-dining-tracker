@@ -504,178 +504,269 @@ export function generatePeakWeekPlan(
       foods = ["White rice", "Rice cakes + honey", "Banana", "White pasta (small portions)", tier >= 2 ? "Lean chicken (unsalted)" : "Lean protein"];
       avoid = ["Salt / sodium", "High-fat foods", "High-fiber vegetables", "Legumes", "New foods", "Alcohol"];
 
-    // ── DAYS 2–3: Carb load (Tier 2+) OR Gut cut day 1–2 (Tier 1) OR Normal (Tier 0) ──────
-    } else if (i <= 3) {
-      label = `${i} days out`; isKeyDay = true;
+    // ── CORRECTED PROTOCOL (days 2–6) ────────────────────────────────────────
+    //
+    // TIER 1 (gut cut only):
+    //   Days 5-6: normal eating
+    //   Days 4-3-2: gut cut (low residue, normal calories) — days 3,2,1 before weigh-in
+    //   Day 1: gut cut day 3, normal hydration
+    //
+    // TIER 2+ (gut cut + water/sodium load/cut):
+    //   Days 5-6: normal eating (baseline before loading)
+    //   Day 4:    LOAD 1 — high water + high sodium, gut cut day 1
+    //   Day 3:    LOAD 2 — high water + high sodium, gut cut day 2
+    //   Day 2:    CUT sodium sharply, moderate water, gut cut day 3
+    //   Day 1:    Dry window (last drink 10-12h before weigh-in), low residue
+    //
+    // TIER 3+ (full depletion protocol) — same as Tier 2 but with depletion days 6-5
+
+    } else if (i <= 3 && i >= 1) {
+      label = i === 1 ? "1 day out" : `${i} days out`;
+      isKeyDay = true;
+
+      const normalDay = computeDailyTargets(user, undefined, undefined);
+      const normalCals = normalDay?.calories ?? Math.round(bmr * 1.4);
+      const normalCarbs = normalDay?.carbsG ?? Math.round(weightKg * 3.0);
+      const normalFat   = normalDay?.fatG   ?? Math.round(weightKg * 1.0);
 
       if (tier <= 1) {
-        // ── TIER 0–1: Gut cut days 1–2 (days 3–2 out) — normal calories, low-residue foods
-        // Research: gut cut is 3 days out to 1 day out. GI transit = 24–72h.
-        // No carb loading needed — no depletion occurred, glycogen is intact.
-        phase = "Gut cut";
-        const normalGutLoad = computeDailyTargets(user, undefined, undefined);
-        calories = normalGutLoad?.calories ?? Math.round(bmr * 1.4);
-        carbsG = normalGutLoad?.carbsG ?? Math.round(weightKg * 3.0);
-        fatG = normalGutLoad?.fatG ?? Math.round(weightKg * 1.0);
+        // ── TIER 0-1: Pure gut cut days ─────────────────────────────────────
+        phase = i === 3 ? "Gut cut — day 1" : i === 2 ? "Gut cut — day 2" : "Gut cut — day 3";
+        calories = normalCals; carbsG = normalCarbs; fatG = normalFat;
         sodiumMg = 2500; waterL = normalWaterL; waterTargetL = normalWaterTargetL;
         focus = i === 3
-          ? tier === 0
-            ? "Gut cut starts — switch to low-residue foods, same calories"
-            : "Gut cut day 1 — switch to low-residue foods, same total calories"
-          : "Gut cut day 2 — continue low-residue eating";
-        guidance = i === 3
-          ? [
-              `Day 1 of your 3-day gut cut (days 3, 2, 1 before weigh-in). Switch all food sources to low-residue items while keeping your total calorie intake at ~${calories} kcal.`,
-              "Formula: 60% of calories from protein shakes + almonds (half each), 40% from zero-fiber/sugary foods (white rice, gummy bears, honey, sugary cereal). This combination has essentially zero gut weight.",
-              "Do NOT reduce calories. The weight loss comes from clearing GI residue (~1.5–2.5% BW), not from eating less. Cutting calories now would drain energy before competition.",
-              "Sodium stays normal — salted almonds are recommended. Only cut sodium if combining with a water cut (not needed at your cut level).",
-              "Expected result: GI transit time is 24–72 hours. By weigh-in day, most of the residue from your previous high-fiber eating will have cleared.",
-            ]
-          : [
-              "Continue day 2 of gut cut. Same foods as yesterday: protein shakes, almonds, white rice, zero-fiber carbs.",
-              "GI clearing is progressing. You may notice the scale moving without any strength loss — that's gut residue exiting, not muscle.",
-              `Hydrate normally (${normalWaterL}). You want to be well-hydrated at lift time.`,
-              "Sodium normal. Keep eating salted almonds rather than unsalted.",
-              "Lay out your kit tonight: singlet, belt, wraps, attempt card, post-weigh-in food.",
-            ];
-        foods = ["Protein shakes (whey/casein)", "Salted almonds", "White rice / cream of rice", "Gummy bears / white bread / honey", "Low-fat Greek yogurt", "Bananas"];
-        avoid = ["Oats / bran / whole grains", "Raw vegetables", "Beans / legumes", "High-fat foods", "Alcohol"];
-      } else {
-        // ── TIER 2+: Carb load — follows depletion phase
-        phase = "Carb load";
-        const carbPerKg = i === 3 ? 6 : 7;
-        carbsG = Math.round(weightKg * carbPerKg);
-        fatG = Math.round(weightKg * 0.5);
-        calories = (proteinG * 4) + (carbsG * 4) + (fatG * 9);
-        // Sodium moderate-high: co-transports glucose into muscle via SGLT mechanism
-        sodiumMg = i === 3 ? 3000 : 2500;
-        // Carb load days: slightly reduced water (tapering toward cut) but still bodyweight-scaled
-        // Day 3: ~normalWaterL, Day 2: slightly less as cut approaches
-        waterL = tier >= 2 ? (i === 3 ? normalWaterL : `${(normalWaterTargetL - 0.5).toFixed(1)}–${normalWaterTargetL.toFixed(1)} L`) : normalWaterL;
-        waterTargetL = tier >= 2 ? (i === 3 ? normalWaterTargetL : normalWaterTargetL - 0.4) : normalWaterTargetL;
-        focus = i === 3
-          ? `Carb load starts — ${carbsG}g carbs today (${carbPerKg}g/kg). Sodium stays moderate-high.`
-          : `Final carb load day — ${carbsG}g carbs today. Muscles should feel full.`;
-        guidance = [
-          `Target ${carbsG}g carbohydrates across 5–6 meals (~${Math.round(carbsG / 5)}g per meal). This is a lot — spread it evenly.`,
-          "LOW-FIBER carbs only: white rice, white bread, rice cakes, cream of rice, bananas, white pasta, honey. No oats, no brown rice.",
-          `Sodium at ${sodiumMg}mg today. This is intentional — sodium acts as a co-transporter (SGLT) that drives glucose AND water into muscle cells. Higher glycogen storage = harder, fuller muscles.`,
-          "Fat must be under 50g today. Fat slows digestion and competes with glycogen synthesis. Keep meals almost fat-free.",
-          i === 2
-            ? "Your muscles should feel noticeably full and firm by tonight. That tightness is glycogen supercompensation — you are now stronger than you were a week ago."
-            : "You may feel flat after depletion days — this is normal. The fullness arrives over the next 48 hours as glycogen loads.",
+          ? "Gut cut day 1 — switch to low-residue foods, same total calories"
+          : i === 2
+          ? "Gut cut day 2 — continue low-residue eating"
+          : "Gut cut day 3 (final) — normal calories, low-residue foods only";
+        guidance = i === 3 ? [
+          `Day 1 of your 3-day gut cut. Switch ALL food sources to low-residue items while keeping total intake at ~${normalCals} kcal.`,
+          "Formula: protein shakes + salted almonds (60% of calories), white rice / gummy bears / honey / white bread (40%). Near-zero gut weight.",
+          "Do NOT reduce calories — weight loss comes from clearing GI residue (~1.5–2.5% BW), not eating less. Cutting calories now drains energy before the platform.",
+          "Sodium stays normal (salted almonds). Hydrate normally.",
+          "Expected: GI transit is 24–72h. By weigh-in most prior high-fiber residue will have cleared.",
+        ] : i === 2 ? [
+          "Gut cut day 2. Same foods as yesterday — protein shakes, almonds, white rice, zero-fiber carbs.",
+          "Scale may be moving — that's gut residue clearing, not muscle loss.",
+          `Hydrate normally (${normalWaterL}). You want full hydration at lift time.`,
+          "Sodium normal — keep eating salted almonds.",
+        ] : [
+          "Final gut cut day. Continue low-residue protocol through weigh-in.",
+          "GI tract has been clearing for 48+ hours. By weigh-in time you should be on weight or very close.",
+          "Hydrate normally today — you'll be at full hydration for the platform.",
+          "Lay out everything tonight: singlet, belt, wraps, attempt card, post-weigh-in food.",
         ];
-        foods = ["White rice (large portions)", "Rice cakes + honey or jam", "White pasta (small fat)", "Cream of rice", "Bananas / dried mango", "Low-fat Greek yogurt", "White bread + turkey (no cheese)"];
-        avoid = ["Oats / brown rice / quinoa (high fiber)", "Broccoli / leafy greens (gas, bloating)", "Cheese / nuts / avocado (fat)", "Alcohol"];
+        foods = ["Protein shakes (whey/casein)", "Salted almonds", "White rice / cream of rice", "Gummy bears / white bread / honey", "Low-fat Greek yogurt"];
+        avoid = ["Oats / bran / whole grains", "Raw vegetables", "Beans / legumes", "High-fat foods", "Alcohol"];
+
+      } else if (tier === 2) {
+        // ── TIER 2: Load 2 (day 3), Sodium cut (day 2), Dry window (day 1)
+        // Gut cut runs alongside ALL three days — low-residue carb sources only
+        const loadWaterL = `${(weightKg * 0.055).toFixed(1)}–${(weightKg * 0.060).toFixed(1)} L`;
+        const loadWaterTarget = weightKg * 0.057;
+
+        if (i === 3) {
+          // Load day 2 — high water + sodium, gut cut day 1
+          phase = "Water load 2 + Gut cut day 1";
+          carbsG = Math.round(weightKg * 3.0);  // Moderate carbs, low-residue only
+          fatG   = Math.round(weightKg * 0.8);
+          calories = (proteinG * 4) + (carbsG * 4) + (fatG * 9);
+          sodiumMg = 3250; waterL = loadWaterL; waterTargetL = loadWaterTarget;
+          focus = `Load day 2: ${loadWaterL} water + 3,000–3,500mg sodium. Gut cut day 1 — low-residue foods only.`;
+          guidance = [
+            `Drink ${loadWaterL} consistently all day — sip every 30–60 min. High water + high sodium primes kidney excretion.`,
+            `Sodium target: 3,000–3,500mg. This is intentional — loading both together primes the excretion mechanism for tomorrow's sharp cut.`,
+            "GUT CUT DAY 1: All carbs must be low-residue — white rice, rice cakes, white bread, protein shakes, almonds. No oats, no vegetables, no beans.",
+            "Carbs at normal levels (not a high carb day — save the carb load for after weigh-in).",
+            "Note any overnight weight changes. The loading effect combined with the gut cut will start moving the scale.",
+          ];
+          foods = ["Protein shakes", "Salted almonds", "White rice", "Rice cakes + honey", "Lean chicken (unsalted)", "Banana"];
+          avoid = ["Oats / bran / whole grains", "Raw vegetables", "Beans / legumes", "Processed/canned food (hidden sodium)"];
+        } else if (i === 2) {
+          // Sodium cut + moderate water, gut cut day 2
+          phase = "Sodium cut + Gut cut day 2";
+          carbsG = Math.round(weightKg * 2.5);
+          fatG   = Math.round(weightKg * 0.7);
+          calories = (proteinG * 4) + (carbsG * 4) + (fatG * 9);
+          sodiumMg = 700; waterL = "2–2.5 L"; waterTargetL = 2.25;
+          focus = "Cut sodium sharply today. Moderate water. Gut cut day 2 — low-residue only.";
+          guidance = [
+            "CUT SODIUM sharply — target < 600–800mg total. No added salt, no processed food, no canned food, no sports drinks with sodium.",
+            "Water drops to 2–2.5 L today. Your kidneys are still in high-excretion mode from the loading days — the sodium cut drives rapid water excretion.",
+            "GUT CUT DAY 2: Continue low-residue foods — protein shakes, almonds, white rice, rice cakes, white bread only.",
+            "This is the day the scale moves most. Weigh yourself morning and evening to track progress.",
+            "Lay out your post weigh-in kit: electrolyte drink, rice cakes, banana, honey. Have it ready at the venue.",
+          ];
+          foods = ["Protein shakes", "Unsalted almonds", "White rice (plain)", "Rice cakes (unsalted)", "Egg whites", "Chicken breast (fresh, no seasoning)"];
+          avoid = ["Any added salt", "Processed/canned food", "Restaurant food", "Sports drinks", "Oats / vegetables / beans"];
+        } else {
+          // Day 1 — dry window + gut cut day 3
+          phase = "Dry window + Gut cut day 3";
+          carbsG = Math.round(weightKg * 1.5);
+          fatG   = Math.round(weightKg * 0.5);
+          calories = (proteinG * 4) + (carbsG * 4) + (fatG * 9);
+          sodiumMg = 500; waterL = "1–1.5 L total, stop 10–12h before weigh-in"; waterTargetL = 1.25;
+          focus = "Last fluids 10–12h before weigh-in. Gut cut day 3 — low-residue all day.";
+          guidance = [
+            "Drink 1–1.5 L total today, finishing 10–12 hours before your weigh-in. At a 4:30 PM weigh-in that means your last real drink is around 4–6 AM.",
+            "GUT CUT DAY 3: Low-residue foods only — protein shakes, almonds, white rice, rice cakes. Keep portions smaller toward evening.",
+            "Sodium under 400–600mg — trace amounts from food only. No added salt.",
+            "If you're still slightly over in the morning: hot shower, light clothing, brief light activity (bike warmup). Do NOT extend your dry window — 10–12h is the limit for a 2-hour recovery.",
+            "Post weigh-in (critical): 500–750ml electrolyte drink + 50g fast carbs immediately. Then 100–150g carbs every 60–90 min until lift. Prioritise carbs over just water.",
+          ];
+          foods = ["Protein shakes (small portions)", "Unsalted almonds", "White rice cakes", "Small banana"];
+          avoid = ["Any added fluids after cutoff", "Salt", "High-fiber foods", "Alcohol"];
+        }
+
+      } else {
+        // ── TIER 3+: Full depletion protocol — similar to Tier 2 but carb load days 3-2
+        // Day 3: Carb load day 1 + gut cut day 1
+        // Day 2: Carb load day 2 (peak) + gut cut day 2
+        // Day 1: Moderate carbs, dry window, gut cut day 3
+        if (i === 3) {
+          phase = "Carb load day 1 + Gut cut day 1";
+          carbsG = Math.round(weightKg * 6);
+          fatG   = Math.round(weightKg * 0.5);
+          calories = (proteinG * 4) + (carbsG * 4) + (fatG * 9);
+          sodiumMg = 3000; waterL = normalWaterL; waterTargetL = normalWaterTargetL;
+          focus = `Carb load day 1 — ${carbsG}g carbs. Gut cut day 1. Sodium moderate-high for SGLT transport.`;
+          guidance = [
+            `Target ${carbsG}g carbs across 5–6 meals — ALL low-fiber: white rice, rice cakes, white bread, banana, honey. This is gut cut day 1 so no high-fiber foods regardless.`,
+            `Sodium ${sodiumMg}mg — sodium is a co-transporter (SGLT) that drives glucose into muscle cells. High sodium = faster glycogen loading.`,
+            "Fat under 50g — fat competes with glycogen synthesis. Keep meals almost fat-free.",
+            "You may feel flat after depletion. The fullness arrives over the next 24–48h as glycogen loads.",
+          ];
+          foods = ["White rice (large portions)", "Rice cakes + honey/jam", "White bread", "Banana / dried mango", "Lean chicken (unsalted)", "Low-fat Greek yogurt"];
+          avoid = ["Oats / brown rice", "Vegetables (gas/bloating)", "Cheese / nuts / avocado", "Alcohol"];
+        } else if (i === 2) {
+          phase = "Carb load day 2 + Gut cut day 2";
+          carbsG = Math.round(weightKg * 7);
+          fatG   = Math.round(weightKg * 0.5);
+          calories = (proteinG * 4) + (carbsG * 4) + (fatG * 9);
+          sodiumMg = 2500; waterL = `${(normalWaterTargetL - 0.4).toFixed(1)}–${normalWaterTargetL.toFixed(1)} L`; waterTargetL = normalWaterTargetL - 0.4;
+          focus = `Final carb load — ${carbsG}g carbs. Gut cut day 2. Muscles should feel full and firm.`;
+          guidance = [
+            `Target ${carbsG}g carbs — all low-fiber. Spread across 6 meals.`,
+            "Muscles should feel noticeably full and firm tonight. That tightness is glycogen supercompensation working.",
+            `Sodium ${sodiumMg}mg — still moderate-high for continued SGLT loading.`,
+            "GUT CUT DAY 2: Same low-residue sources as yesterday — no raw vegetables, no oats, no beans.",
+          ];
+          foods = ["White rice (large portions)", "Rice cakes + honey", "White pasta", "Banana / dates", "Low-fat Greek yogurt", "White bread + turkey"];
+          avoid = ["Oats / brown rice / quinoa", "Broccoli / leafy greens", "Cheese / nuts / avocado", "Alcohol"];
+        } else {
+          phase = "Final prep + Gut cut day 3";
+          carbsG = Math.round(weightKg * 5);
+          fatG   = Math.round(weightKg * 0.4);
+          calories = (proteinG * 4) + (carbsG * 4) + (fatG * 9);
+          sodiumMg = 1200; waterL = "< 1 L (stop 12h before weigh-in)"; waterTargetL = 0.8;
+          focus = "Stop water 12h before weigh-in. Gut cut day 3. Low sodium, low residue.";
+          guidance = [
+            "Stop all fluid intake 12 hours before weigh-in. Set a phone alarm for the exact cutoff.",
+            "GUT CUT DAY 3: Low-residue foods only. Small portions, nothing heavy.",
+            `Sodium under ${sodiumMg}mg — final subcutaneous water reduction.`,
+            "Post weigh-in: 500–750ml electrolyte drink immediately, then 100–150g carbs every hour until lift.",
+          ];
+          foods = ["Rice cakes (small)", "Lean protein (small portion)", "Banana (half)"];
+          avoid = ["Fluids after cutoff", "Salt", "High-fiber foods", "Alcohol"];
+        }
       }
 
-    // ── WATER + SODIUM CUT (day 4) — Tier 2+ only ────────────────────────────
+    // ── DAY 4: LOAD 1 (Tier 2+) or NORMAL (Tier 0-1) ─────────────────────────
     } else if (i === 4) {
       label = "4 days out"; isKeyDay = tier >= 2;
-      // Macros set per-branch below
-      carbsG = 0; fatG = 0; calories = 0;
+      const normalDay4 = computeDailyTargets(user, undefined, undefined);
 
       if (tier >= 2 && useWaterSodium) {
-        // Water/sodium cut day: low carb to support depletion or moderate
-        carbsG = useDepletion ? Math.round(weightKg * 0.8) : Math.round(weightKg * 1.5);
-        fatG = Math.round(weightKg * 0.7);
+        // CORRECTED: Day 4 is now LOAD 1, not the cut day
+        const loadWaterL = `${(weightKg * 0.055).toFixed(1)}–${(weightKg * 0.060).toFixed(1)} L`;
+        const loadWaterTarget = weightKg * 0.057;
+        carbsG = Math.round(weightKg * 3.0);
+        fatG   = Math.round(weightKg * 0.8);
         calories = (proteinG * 4) + (carbsG * 4) + (fatG * 9);
-        phase = "Transition"; // Cut day — not a load day
-        sodiumMg = 600;
-        waterL = "2–3 L (tapering)"; waterTargetL = 2.5;
-        focus = "Cut both water AND sodium abruptly — kidneys still excreting at peak rate";
+        phase = "Water load 1";
+        sodiumMg = 3250; waterL = loadWaterL; waterTargetL = loadWaterTarget;
+        focus = `Load day 1: ${loadWaterL} water + 3,000–3,500mg sodium together`;
         guidance = [
-          "Stop both water loading AND sodium loading today. Abrupt cessation is key — your kidneys are still in high-excretion mode from the loading days and will continue expelling water and sodium for hours.",
-          `Limit water to 2–3 L total today, tapering toward evening. Sodium under ${sodiumMg}mg — no added salt, no processed food, no canned food.`,
-          "This is the day the scale moves. You'll urinate frequently. Weigh yourself morning and evening.",
+          `Drink ${loadWaterL} consistently throughout the day — sip every 30–60 minutes, don't chug.`,
+          "SODIUM must be HIGH (3,000–3,500mg). Loading water AND sodium together is what primes the excretion mechanism — loading water alone without sodium significantly blunts the effect.",
+          "Normal eating today. Sodium comes from salted foods — you don't need to add table salt to everything, just eat normally salted food and track it.",
           useDepletion
-            ? `Continue low carb (${carbsG}g) to maintain glycogen depletion. Tomorrow starts the carb load — the lower your glycogen is today, the higher the supercompensation ceiling.`
-            : `Carbs moderate at ${carbsG}g — no depletion needed at your cut level.`,
-          "Note any unusually large overnight weight drop — this confirms the loading phase worked and your kidneys are in high-excretion mode.",
+            ? `Carbs at ${carbsG}g — glycogen depletion is active from prior days. Tomorrow is load day 2, same protocol.`
+            : `Carbs at ${carbsG}g — normal level, no depletion needed at ${cutPct.toFixed(1)}%.`,
+          "Take a potassium + magnesium supplement (no sodium) to prevent electrolyte imbalance at high water volumes.",
         ];
-        foods = ["Chicken breast (fresh, unsalted)", "Egg whites", "Fish (not canned)", "Cucumber", "Small amounts of green vegetables"];
-        avoid = ["Any added salt", "Processed meats", "Canned/packaged food", "Restaurant food", "Sports drinks with sodium"];
+        foods = ["Lean proteins", "Rice", "Bread", "Salted nuts/snacks", "Vegetables", "Fruit"];
+        avoid = ["Alcohol", "Diuretics (caffeine in excess)", "Low-sodium diet foods"];
       } else {
-        // Tier 0–1: rest day before carb load — normal calories
-        const normalDay4 = computeDailyTargets(user, undefined, undefined);
+        // Tier 0-1: Normal day — gut cut starts tomorrow
         calories = normalDay4?.calories ?? Math.round(bmr * 1.4);
         carbsG = normalDay4?.carbsG ?? Math.round(weightKg * 3.0);
         fatG = normalDay4?.fatG ?? Math.round(weightKg * 1.0);
-        phase = "Transition";
+        phase = "Normal prep";
         sodiumMg = 2000; waterL = normalWaterL; waterTargetL = normalWaterTargetL;
-        focus = "Active rest — prepare mentally, eat clean, carb load starts tomorrow";
+        focus = "Normal eating — gut cut starts tomorrow (day 3 out)";
         guidance = [
-          "Rest day. No training. Save all energy for the platform.",
-          "Eat clean whole foods. Begin reducing fiber intake to start clearing GI residue before the carb load.",
-          "Sodium stays at normal levels — no manipulation needed at your cut percentage.",
-          "Hydrate well. You need water to effectively store tomorrow's carb load.",
+          "Normal eating today. Gut cut begins tomorrow.",
+          "Begin mentally preparing to switch food sources tomorrow — protein shakes, almonds, white rice, zero-fiber carbs.",
+          "Hydrate well. Good baseline hydration makes the gut cut easier.",
+          "Rest day. No heavy training.",
           "Mental prep: review openers, confirm rack heights, visualise attempts.",
         ];
-        foods = ["Lean protein", "White rice (moderate)", useGutCut ? "Protein shake, white bread (low fiber)" : "Vegetables", "Fruit"];
-        avoid = ["Heavy training", "Salty junk food", "Alcohol"];
+        foods = ["Lean proteins", "Rice", "Oats (last day)", "Sweet potato", "Fruit", "Vegetables"];
+        avoid = ["Heavy training", "Alcohol"];
       }
 
-    // ── WATER + SODIUM LOADING (days 5–6) — Tier 2+ only ─────────────────────
+    // ── DAYS 5–6: NORMAL PREP for all tiers (except Tier 3+ depletion) ────────
     } else if (i <= 6) {
       label = `${i} days out`;
-      isKeyDay = useWaterSodium;
-      // Macros set per-branch below — gut cut days use normal targets, loading days use protocol values
-      carbsG = 0; fatG = 0; calories = 0; // will be overwritten below
+      isKeyDay = useDepletion; // only key for Tier 3+ depletion days
+      const normalGut56 = computeDailyTargets(user, undefined, undefined);
 
-      if (useWaterSodium) {
-        // Loading days: macros set by protocol
-        carbsG = useDepletion ? Math.round(weightKg * 0.8) : Math.round(weightKg * 2.5);
-        fatG = Math.round(weightKg * 0.8);
+      if (useDepletion && tier >= 3) {
+        // Tier 3+: Glycogen depletion days 5-6
+        carbsG = Math.round(weightKg * 0.8);
+        fatG   = Math.round(weightKg * 0.8);
         calories = (proteinG * 4) + (carbsG * 4) + (fatG * 9);
-        phase = useDepletion ? "Depletion" : "Water load";
-        // HIGH sodium with HIGH water — primes both ADH and aldosterone
+        phase = "Depletion";
         sodiumMg = 3500;
-        // Research standard: 100ml/kg bodyweight on loading days
         const loadL = Math.round(weightKg * 0.1 * 10) / 10;
-        waterL = i === 6 ? `${loadL} L (100ml/kg)` : `${loadL} L (100ml/kg — peak load)`;
-        waterTargetL = loadL;
+        waterL = `${loadL} L (100ml/kg)`; waterTargetL = loadL;
         focus = i === 6
-          ? `Begin water + sodium loading simultaneously — drink ${waterL} with ${sodiumMg}mg sodium`
-          : `Peak loading day — ${waterL} water + ${sodiumMg}mg sodium`;
+          ? `Depletion day 1: low carb (${carbsG}g) + water load + high sodium`
+          : `Depletion day 2: low carb + peak water load (${waterL})`;
         guidance = [
-          `Drink ${waterL} today spread evenly — set a timer for every 2 hours as a reminder.`,
-          `SODIUM MUST BE HIGH (${sodiumMg}mg). This is correct and intentional. Water + sodium loading together suppresses both ADH and aldosterone. When you cut both on Day 4, your kidneys keep excreting at the elevated rate — that's how you shed water quickly. Loading only water without sodium blunts this response.`,
-          i === 5 ? "Peak loading day — after today both water AND sodium get cut simultaneously tomorrow." : "Start of the loading phase. Your body will begin adjusting kidney excretion rates.",
-          useDepletion
-            ? `Carbs very low (${carbsG}g/day). Glycogen depletion is active. On Day 3 you start the carb load — the emptier your glycogen is now, the more you can load (NIH glycogen supercompensation research: depletion group reached 147% baseline vs 124% without depletion).`
-            : `Carbs moderate at ${carbsG}g — no depletion needed at your cut level (${cutPct.toFixed(1)}%).`,
-          "Take a potassium + magnesium electrolyte supplement (no sodium). High water volumes can dilute electrolytes — hyponatremia is a real risk at these volumes.",
+          `Carbs very low at ${carbsG}g to deplete glycogen stores. Protein and fat fill caloric needs.`,
+          `Drink ${waterL} today + sodium at ${sodiumMg}mg — loading begins alongside depletion.`,
+          "Glycogen depletion + carb load supercompensation: depletion group reaches 147% baseline glycogen vs 124% without (NIH glycogen study). You will be stronger than normal on meet day.",
+          "Take potassium + magnesium supplement — high water volumes risk diluting electrolytes.",
+          i === 5 ? "Loading continues tomorrow (Day 4). Stay consistent." : "Day 1 of depletion. You may feel flat and tired — this is normal and temporary.",
         ];
-        foods = useDepletion
-          ? ["Chicken breast", "Egg whites", "Fish", "Low-fat cottage cheese", "Green vegetables", "Unsalted rice cakes (small)"]
-          : ["Lean proteins", "Rice", "Oats", "Vegetables", "Fruit"];
-        avoid = useDepletion
-          ? ["Rice / bread / pasta (high carb)", "Sports drinks", "Sugary food or drink"]
-          : ["Alcohol", "Excess junk food"];
+        foods = ["Chicken breast", "Egg whites", "Fish", "Low-fat cottage cheese", "Green vegetables", "Unsalted rice cakes (tiny amounts)"];
+        avoid = ["Rice / bread / pasta / fruit (high carb)", "Sports drinks", "Sugary foods"];
       } else {
-        // Tier 0–1: days 5–6 are NORMAL PREP — gut cut doesn't start until day 3 out.
-        // Research is unanimous: gut cut = 3 days out to weigh-in. Starting earlier is not
-        // better and creates unnecessary dietary restriction before competition.
-        const normalGut56 = computeDailyTargets(user, undefined, undefined);
+        // All other tiers: normal eating days
         calories = normalGut56?.calories ?? Math.round(bmr * 1.4);
         carbsG = normalGut56?.carbsG ?? Math.round(weightKg * 3.5);
         fatG = normalGut56?.fatG ?? Math.round(weightKg * 1.0);
         phase = "Normal prep";
         sodiumMg = 2500; waterL = normalWaterL; waterTargetL = normalWaterTargetL;
         focus = i === 6
-          ? "Normal eating — gut cut begins in 3 days, nothing to restrict yet"
-          : "Continue normal eating — gut cut starts tomorrow";
+          ? tier >= 2 ? "Normal eating — loading begins in 2 days (day 4 out)" : "Normal eating — gut cut begins in 3 days"
+          : tier >= 2 ? "Normal eating — loading begins tomorrow (day 4 out)" : "Normal eating — gut cut begins in 2 days";
         guidance = [
-          `Normal eating today — no food restrictions yet. Your gut cut starts in ${i - 3} day${i - 3 > 1 ? "s" : ""}${i === 4 ? " (tomorrow)" : ""}.`,
-          "Eat your normal whole foods: oats, vegetables, lean meats, rice. Enjoy them — you'll be switching to protein shakes and almonds soon enough.",
-          "Hydrate consistently (3–4 L). Good baseline hydration in these days makes weigh-in easier.",
-          "Focus on sleep quality. Growth hormone peaks during deep sleep and is critical for recovery and strength.",
-          `Gut cut protocol begins ${i === 4 ? "tomorrow" : `in ${i - 3} days`} (3 days before weigh-in): switch to protein shakes, salted almonds, white rice, and zero-fiber carbs at normal calorie intake.`,
+          "Normal eating today. No restrictions yet.",
+          tier >= 2
+            ? `Water + sodium LOADING starts on Day 4 (${i === 6 ? "2 days from now" : "tomorrow"}). Until then keep sodium and hydration at your normal baseline — you need a stable baseline for loading to work.`
+            : `Gut cut begins Day 3 (${i - 3} day${i - 3 > 1 ? "s" : ""} from now). Enjoy normal foods now — you'll switch to shakes and almonds soon.`,
+          "Hydrate at your normal level. Good baseline hydration makes everything downstream easier.",
+          "Focus on sleep quality. Growth hormone peaks during deep sleep.",
+          "Light training only if planned. Save energy for the platform.",
         ];
         foods = ["Lean proteins", "Rice", "Oats", "Sweet potato", "Fruit", "Vegetables"];
         avoid = ["Alcohol", "Excess junk food"];
       }
 
+    // ── DAY 7 (transition) ─────────────────────────────────────────────────────
     // ── DAY 7 (transition) ─────────────────────────────────────────────────────
     } else if (i === 7) {
       label = "7 days out"; phase = "Transition"; isKeyDay = true;
