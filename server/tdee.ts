@@ -158,12 +158,16 @@ export interface WaterCutAnalysis {
 // ── computeDailyTargets ───────────────────────────────────────────────────────
 
 export function computeDailyTargets(
-  user: User, burnCalories?: number, date?: string
+  user: User, burnCalories?: number, date?: string, recentWeightKg?: number
 ): DailyTargets | null {
   if (!user.weightKg || !user.heightCm || !user.dateOfBirth || !user.sex) return null;
 
+  // Use the most recent logged weight for all calculations when available.
+  // Falls back to user.weightKg (profile weight) only if no recent weigh-in.
+  const currentWeightKg = recentWeightKg ?? user.weightKg;
+
   const age = calcAge(user.dateOfBirth);
-  const bmr = calcBMR(user.weightKg, user.heightCm, age, user.sex as "male" | "female");
+  const bmr = calcBMR(currentWeightKg, user.heightCm, age, user.sex as "male" | "female");
   const tdee = calcTDEE(bmr, user.activityLevel ?? "moderately_active");
   const dailyBurn = burnCalories ?? tdee;
 
@@ -182,24 +186,24 @@ export function computeDailyTargets(
     const isLossGoal = user.goalType === "weight_loss" || user.goalType === "powerlifting_loss";
     // Automatically reserve a buffer for whichever cut method the protocol uses.
     // The diet only needs to get the athlete to the point where the cut method
-    // covers the remainder — so we don't over-diet unnecessarily close to the meet.
+    // covers the remainder — so we don\'t over-diet unnecessarily close to the meet.
     //
     // Buffer by tier:
-    //   Tier 0 (<1%):  No buffer — already at weight
-    //   Tier 1 (1-2%): Reserve 1.5% BW for gut cut (conservative lower bound of 1.5-2.5% range)
-    //   Tier 2 (2-4%): Reserve 1% BW for water/sodium cut
-    //   Tier 3+ (4%+): Reserve 1% BW for water cut (glycogen depletion covers the rest)
+    //   Tier 0 (<0.5%):  No buffer — essentially already at weight
+    //   Tier 1 (0.5-2%): Reserve 1.5% BW for gut cut
+    //   Tier 2 (2-4%):   Reserve 1% BW for water/sodium cut
+    //   Tier 3+ (4%+):   Reserve 1% BW for water cut
     const analysis = isLossGoal && user.targetWeightKg
-      ? analyzeWaterCut(user, user.weightKg ?? undefined)
+      ? analyzeWaterCut(user, currentWeightKg)
       : null;
     const tier = analysis?.tier ?? 0;
     const cutBufferKg = isLossGoal
-      ? tier === 1 ? (user.weightKg ?? 0) * 0.015   // gut cut: 1.5% BW
-      : tier >= 2 ? (user.weightKg ?? 0) * 0.01     // water cut: 1% BW
+      ? tier === 1 ? currentWeightKg * 0.015   // gut cut: 1.5% BW
+      : tier >= 2 ? currentWeightKg * 0.01     // water cut: 1% BW
       : 0
       : 0;
     const dietTargetKg = (user.targetWeightKg ?? 0) + cutBufferKg;
-    const kgToChange = dietTargetKg - user.weightKg;
+    const kgToChange = dietTargetKg - currentWeightKg;
     const dailyAdjust = (kgToChange * 7700) / daysLeft;
 
     if (isLossGoal) {
@@ -217,7 +221,7 @@ export function computeDailyTargets(
   }
 
   targetCalories = Math.round(targetCalories);
-  const proteinG = Math.round(user.weightKg * 2.0);
+  const proteinG = Math.round(currentWeightKg * 2.0);
   const fatCal = Math.round(targetCalories * 0.28);
   const fatG = Math.round(fatCal / 9);
   const carbsG = Math.round(Math.max(0, targetCalories - proteinG * 4 - fatCal) / 4);
