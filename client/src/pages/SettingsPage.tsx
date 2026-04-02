@@ -77,7 +77,7 @@ export default function SettingsPage() {
   const [aiKeySaving, setAiKeySaving] = useState(false);
   // selectedProvider tracks which tab is active in the UI right now
   const [selectedProvider, setSelectedProvider] = useState<"groq"|"openrouter">("groq");
-  const { data: coachProfile, refetch: refetchCoachProfile } = useQuery({
+  const { data: coachProfile } = useQuery({
     queryKey: ["coachProfile"],
     queryFn: () => api.coachProfile().then((r) => r.json()),
   });
@@ -107,14 +107,14 @@ export default function SettingsPage() {
       if (!res.ok) { toast({ title: "Error", description: data.error ?? "Save failed", variant: "destructive" }); return; }
       toast({ title: "API key saved", description: `${activeProvider.label} — ${data.masked}` });
       setAiKeyInput("");
-      refetchCoachProfile();
+      await queryClient.invalidateQueries({ queryKey: ["coachProfile"] });
     } catch { toast({ title: "Failed to save key", variant: "destructive" }); }
     finally { setAiKeySaving(false); }
   };
   const removeAiKey = async (provider: "groq" | "openrouter") => {
     await api.coachDeleteApiKey(provider);
     toast({ title: `${PROVIDERS.find(p => p.id === provider)?.label} key removed` });
-    refetchCoachProfile();
+    await queryClient.invalidateQueries({ queryKey: ["coachProfile"] });
   };
 
   // Wearable status
