@@ -1112,6 +1112,9 @@ export function registerCoachRoutes(app: Express): void {
       console.error("[coach] chat error:", err.message, err.stack?.split("\n")[1] ?? "");
       // Return clear, actionable error messages
       const msg: string = err.message ?? "";
+      if (msg.includes("guardrail") || msg.includes("data policy") || msg.includes("privacy")) {
+        return res.status(200).json({ message: "OpenRouter is blocking this request due to your account's data policy settings. Go to openrouter.ai/settings/privacy and enable access to providers that train on inputs — this is required for free models. Paid models don't have this restriction." });
+      }
       if (msg.includes("404") || msg.includes("No endpoints")) {
         return res.status(200).json({ message: "The model you selected is no longer available on the free tier. Please tap the model selector in the Coach tab header to pick a different one." });
       }
