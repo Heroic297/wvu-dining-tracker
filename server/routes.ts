@@ -240,16 +240,17 @@ export async function registerRoutes(
         if (totalBurn > 0) burnCalories = totalBurn;
       }
 
-      const targets = computeDailyTargets(user, burnCalories, date);
+      // Most recent weight log — MUST be fetched before computeDailyTargets
+      // so the latest logged weight drives tier + buffer calculations
+      const recentWeightLogs = await storage.getWeightLogs(user.id, 1);
+      const recentWeightKg = recentWeightLogs[0]?.weightKg ?? user.weightKg;
+
+      const targets = computeDailyTargets(user, burnCalories, date, recentWeightKg);
       if (!targets) {
         return res.status(400).json({
           error: "Profile incomplete — please finish setup to get targets",
         });
       }
-
-      // Most recent weight log for dynamic plan adjustments
-      const recentWeightLogs = await storage.getWeightLogs(user.id, 1);
-      const recentWeightKg = recentWeightLogs[0]?.weightKg ?? user.weightKg;
 
       // Water cut analysis
       const waterCutAnalysis = user.meetDate
@@ -1013,18 +1014,19 @@ export async function registerRoutes(
           );
         }
 
-        // Targets
-        const targets = computeDailyTargets(user, burnCalories, date);
-
-        // Recent weight
+        // Recent weight — must be fetched before computeDailyTargets
         const recentWeights = await storage.getWeightLogs(user.id, 7);
+
+        // Targets — pass most recent weight so tier+buffer uses real current weight
+        const mostRecentForTargets = recentWeights[0]?.weightKg ?? user.weightKg;
+        const targets = computeDailyTargets(user, burnCalories, date, mostRecentForTargets);
 
         // Recent activity (7 days)
         const recentActivity = await storage.getRecentActivity(user.id, 7);
 
         // Peak week — today's plan if within 14 days of meet
         // Pass most recent weight for dynamic protocol adjustments
-        const mostRecentWeight = recentWeights[0]?.weightKg ?? user.weightKg;
+        const mostRecentWeight = mostRecentForTargets;
         let peakWeekToday = null;
         if (user.meetDate) {
           const plan = generatePeakWeekPlan(user, user.meetDate, mostRecentWeight ?? undefined);
