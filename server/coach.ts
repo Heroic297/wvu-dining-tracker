@@ -53,7 +53,6 @@ export const FREE_MODEL_CATALOG: Record<string, Array<{ id: string; label: strin
     { id: "llama-3.1-8b-instant",    label: "Llama 3.1 8B Instant", description: "Fastest — almost never rate-limited, great for coaching (recommended)" },
     { id: "gemma2-9b-it",            label: "Gemma 2 9B",           description: "Google compact model, reliable and fast" },
     { id: "mixtral-8x7b-32768",      label: "Mixtral 8x7B",         description: "Stronger reasoning, 32k context window" },
-    { id: "llama-3.3-70b-versatile", label: "Llama 3.3 70B",        description: "Most capable but frequently rate-limited on free tier" },
   ],
   gemini: [
     { id: "gemini-2.0-flash",        label: "Gemini 2.0 Flash",    description: "Best free Gemini — 1,500 req/day, fast, excellent coaching" },
@@ -68,6 +67,19 @@ export const FREE_MODEL_CATALOG: Record<string, Array<{ id: string; label: strin
     { id: "google/gemma-3-27b-it:free",            label: "Gemma 3 27B",      description: "131k context — no tool calling" },
   ],
 };
+
+// Build a set of valid model IDs per provider from the catalog for validation
+const VALID_MODELS: Record<string, Set<string>> = Object.fromEntries(
+  Object.entries(FREE_MODEL_CATALOG).map(([prov, models]) => [
+    prov,
+    new Set(models.map((m) => m.id)),
+  ])
+);
+
+/** Check if model belongs to provider */
+function isValidModelForProvider(provider: string, model: string): boolean {
+  return VALID_MODELS[provider]?.has(model) ?? false;
+}
 
 // Known prompt-injection patterns — reject before sending to model
 const INJECTION_PATTERNS = [
@@ -105,14 +117,17 @@ async function getAiConfig(userId: string): Promise<AiConfig> {
   const provider: Provider = (row?.ai_provider as Provider) || "groq";
   const savedModel = row?.ai_model || "";
 
-  // Auto-fallback if the saved model has been removed from the free tier
-  const model = (savedModel && !DEAD_MODELS.has(savedModel))
+  // Auto-fallback: dead model OR model that doesn't belong to the current provider
+  const isDead = savedModel && DEAD_MODELS.has(savedModel);
+  const isMismatch = savedModel && !isDead && !isValidModelForProvider(provider, savedModel);
+  const model = (savedModel && !isDead && !isMismatch)
     ? savedModel
     : DEFAULT_MODELS[provider] || DEFAULT_MODELS.groq;
 
-  // If model was dead and we fell back, update the DB silently so it stays fixed
-  if (savedModel && DEAD_MODELS.has(savedModel)) {
-    console.log(`[coach] auto-migrating dead model ${savedModel} → ${model} for user ${userId}`);
+  // If model was dead or mismatched, update the DB silently so it stays fixed
+  if (isDead || isMismatch) {
+    const reason = isDead ? "dead" : "provider-mismatch";
+    console.log(`[coach] auto-migrating ${reason} model ${savedModel} → ${model} for user ${userId}`);
     pool.query("UPDATE users SET ai_model=$1 WHERE id=$2", [model, userId]).catch(() => {});
   }
 
@@ -702,6 +717,37 @@ async function callGemini(
   };
 }
 
+/**
+ * Normalize raw provider error messages into user-friendly text.
+ * Returns null if the error doesn't match any known pattern (caller should use a generic fallback).
+ */
+function normalizeProviderError(msg: string): string | null {
+  if (msg.includes("guardrail") || msg.includes("data policy") || msg.includes("privacy")) {
+    return "OpenRouter is blocking this request due to your account's data policy settings. Go to openrouter.ai/settings/privacy and enable access to providers that train on inputs — this is required for free models.";
+  }
+  if (msg.includes("404") || msg.includes("No endpoints") || msg.includes("not found")) {
+    return "The model you selected is no longer available. Please use the model selector in the Coach tab header to pick a different one.";
+  }
+  if (msg.includes("429") || msg.includes("rate-limited") || msg.includes("rate_limit") || msg.includes("quota")) {
+    return "This model is temporarily rate-limited by the provider. Please wait 30 seconds and try again, or switch to a different model using the selector in the Coach tab header.";
+  }
+  if (msg.includes("401") || msg.includes("invalid_api_key") || msg.includes("Unauthorized")) {
+    return "Your API key was rejected by the provider. Please go to Settings → AI Coach and re-enter your key.";
+  }
+  if (msg.includes("403") || msg.includes("Forbidden") || msg.includes("permission")) {
+    return "Your API key doesn't have access to this model. Check your provider account or switch to a different model.";
+  }
+  if (msg.includes("timeout") || msg.includes("ETIMEDOUT") || msg.includes("ECONNREFUSED")) {
+    return "The AI provider is not responding. Please try again in a moment.";
+  }
+  if (msg.includes("API error") || msg.includes("Gemini API error")) {
+    // Extract the meaningful part after the status code
+    const detail = msg.replace(/^.*?API error \d+:\s*/i, "").slice(0, 200);
+    return `Provider error: ${detail || msg}. Try switching models in the Coach tab header.`;
+  }
+  return null;
+}
+
 /** Unified AI caller — dispatches to the right provider */
 async function callAI(
   config: AiConfig,
@@ -910,6 +956,14 @@ export function registerCoachRoutes(app: Express): void {
 
       const encrypted = encryptString(apiKey);
       const resolvedModel = model || DEFAULT_MODELS[provider];
+
+      // Validate model belongs to provider
+      if (resolvedModel && !isValidModelForProvider(provider, resolvedModel)) {
+        return res.status(400).json({
+          error: `Model "${resolvedModel}" is not available for ${provider}. Using default.`,
+        });
+      }
+
       await pool.query(
         "UPDATE users SET groq_api_key_encrypted=$1, ai_provider=$2, ai_model=$3 WHERE id=$4",
         [encrypted, provider, resolvedModel, userId]
@@ -931,6 +985,14 @@ export function registerCoachRoutes(app: Express): void {
       });
       const { provider, model } = schema.parse(req.body);
       const resolvedModel = model || DEFAULT_MODELS[provider];
+
+      // Validate model belongs to this provider — prevent cross-provider mismatch
+      if (!isValidModelForProvider(provider, resolvedModel)) {
+        return res.status(400).json({
+          error: `Model "${resolvedModel}" is not available for ${provider}. Please select a valid model.`,
+        });
+      }
+
       await pool.query(
         "UPDATE users SET ai_provider=$1, ai_model=$2 WHERE id=$3",
         [provider, resolvedModel, userId]
@@ -1112,22 +1174,12 @@ export function registerCoachRoutes(app: Express): void {
       if (err.name === "ZodError") return res.status(400).json({ error: err.errors[0].message });
       // Log full error so Render logs show the real cause
       console.error("[coach] chat error:", err.message, err.stack?.split("\n")[1] ?? "");
-      // Return clear, actionable error messages
+
+      // Normalize raw provider errors into readable, actionable messages
       const msg: string = err.message ?? "";
-      if (msg.includes("guardrail") || msg.includes("data policy") || msg.includes("privacy")) {
-        return res.status(200).json({ message: "OpenRouter is blocking this request due to your account's data policy settings. Go to openrouter.ai/settings/privacy and enable access to providers that train on inputs — this is required for free models. Paid models don't have this restriction." });
-      }
-      if (msg.includes("404") || msg.includes("No endpoints")) {
-        return res.status(200).json({ message: "The model you selected is no longer available on the free tier. Please tap the model selector in the Coach tab header to pick a different one." });
-      }
-      if (msg.includes("429") || msg.includes("rate-limited") || msg.includes("rate_limited")) {
-        return res.status(200).json({ message: "This model is temporarily rate-limited by the provider. Please wait 30 seconds and try again, or switch to a different model using the selector in the Coach tab header." });
-      }
-      if (msg.includes("401")) {
-        return res.status(200).json({ message: "Your API key was rejected. Please go to Settings → AI Coach and re-enter your key." });
-      }
-      if (msg.includes("API error") || msg.includes("Gemini API error")) {
-        return res.status(200).json({ message: `Provider error: ${msg.split(":")[1]?.trim() ?? msg}. Try switching models in the Coach tab header.` });
+      const normalized = normalizeProviderError(msg);
+      if (normalized) {
+        return res.status(200).json({ message: normalized });
       }
       res.status(500).json({ error: "Coach is temporarily unavailable. Please try again." });
     }

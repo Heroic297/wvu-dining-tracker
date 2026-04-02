@@ -820,12 +820,15 @@ export default function CoachPage() {
         return;
       }
       if (data.error) {
-        // Clean up raw API error messages into something readable
+        // Server errors already come pre-normalized for most provider issues;
+        // apply final client-side cleanup for any raw status codes that slipped through
         let msg: string = data.error;
-        if (msg.includes("401")) msg = "API key rejected — check your key in Settings → AI Coach.";
-        else if (msg.includes("429")) msg = "Rate limit hit — try again in a moment, or switch to a different model.";
-        else if (msg.includes("403")) msg = "API key doesn\'t have access to this model — check Settings → AI Coach.";
-        else if (msg.includes("402")) msg = "API account issue — check your provider account balance or plan.";
+        if (/\b401\b/.test(msg) && !msg.includes("rejected") && !msg.includes("Settings"))
+          msg = "API key rejected — check your key in Settings → AI Coach.";
+        else if (/\b429\b/.test(msg) && !msg.includes("rate"))
+          msg = "Rate limit hit — try again in a moment, or switch to a different model.";
+        else if (/\b403\b/.test(msg) && !msg.includes("access"))
+          msg = "API key doesn't have access to this model — check Settings → AI Coach.";
         setMessages((prev) => [
           ...prev.slice(0, -1),
           { role: "assistant", content: msg, error: true },
@@ -925,13 +928,12 @@ export default function CoachPage() {
             {/* Model selector — shown whenever user has a key */}
             {profile?.hasOwnKey && (() => {
               const provider = profile.provider ?? "groq";
-              // Fallback catalog so selector always works even if profile.modelCatalog is missing
+              // Fallback catalog — kept in sync with server FREE_MODEL_CATALOG (no dead models)
               const FALLBACK: Record<string, Array<{id:string;label:string}>> = {
                 groq: [
                   { id: "llama-3.1-8b-instant",    label: "Llama 3.1 8B Instant (recommended)" },
                   { id: "gemma2-9b-it",             label: "Gemma 2 9B" },
                   { id: "mixtral-8x7b-32768",       label: "Mixtral 8x7B" },
-                  { id: "llama-3.3-70b-versatile",  label: "Llama 3.3 70B" },
                 ],
                 gemini: [
                   { id: "gemini-2.0-flash",     label: "Gemini 2.0 Flash" },
@@ -943,17 +945,25 @@ export default function CoachPage() {
                   { id: "qwen/qwen3-coder:free",                     label: "Qwen3 Coder 480B" },
                   { id: "minimax/minimax-m2.5:free",                 label: "MiniMax M2.5" },
                   { id: "qwen/qwen3-next-80b-a3b-instruct:free",     label: "Qwen3 80B" },
-                  { id: "nousresearch/hermes-3-llama-3.1-405b:free", label: "Hermes 3 405B" },
                   { id: "google/gemma-3-27b-it:free",                label: "Gemma 3 27B" },
                 ],
               };
+              // Use server catalog (authoritative), fall back to local. Only show models for current provider.
               const models = (profile.modelCatalog?.[provider] ?? FALLBACK[provider] ?? []) as Array<{id:string;label:string}>;
               const currentModel = profile.aiModel ?? "";
+              // If current model isn't in the list (dead/mismatched), show the default
+              const effectiveModel = models.some((m) => m.id === currentModel)
+                ? currentModel
+                : (models[0]?.id ?? "");
               return (
                 <Select
-                  value={currentModel}
+                  value={effectiveModel}
                   onValueChange={async (model) => {
-                    await api.coachUpdateProvider(provider, model);
+                    try {
+                      await api.coachUpdateProvider(provider, model);
+                    } catch {
+                      // On failure, don't leave UI broken — just refresh to current server state
+                    }
                     qc.invalidateQueries({ queryKey: ["coachProfile"] });
                   }}
                 >

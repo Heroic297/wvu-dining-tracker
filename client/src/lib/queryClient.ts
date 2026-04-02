@@ -6,7 +6,13 @@ const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
     const text = (await res.text()) || res.statusText;
-    throw new Error(`${res.status}: ${text}`);
+    // Try to extract a readable error message from JSON responses
+    let message = text;
+    try {
+      const json = JSON.parse(text);
+      if (json.error && typeof json.error === "string") message = json.error;
+    } catch { /* not JSON, use raw text */ }
+    throw new Error(`${res.status}: ${message}`);
   }
 }
 
