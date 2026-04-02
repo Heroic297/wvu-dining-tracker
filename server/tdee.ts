@@ -136,6 +136,8 @@ export interface MeetPlan {
   daysOut: number;
   targetCalories: number;
   waterIntake: string;
+  sodiumMg: number;
+  sodiumLabel: string;   // e.g. "3,000–3,500 mg"
   carbsG: number;
   notes: string;
 }
@@ -301,15 +303,22 @@ export function generateWaterCutPlan(user: User, meetDate: string): MeetPlan[] {
     ? calcBMR(weightKg, user.heightCm, calcAge(user.dateOfBirth), user.sex as "male" | "female")
     : 1800;
 
+  // Sodium and water targets per day — based on evidence-based loading/cut protocol
+  type DayPlan = { waterIntake: string; sodiumMg: number; sodiumLabel: string; notes: string; carbsG: number; targetCalories: number; };
+  const dayMap: Record<number, DayPlan> = {
+    7: { waterIntake: `${(weightKg * 0.038 - 0.3).toFixed(1)}–${(weightKg * 0.038 + 0.3).toFixed(1)} L`, sodiumMg: 2300, sodiumLabel: "2,300 mg",           notes: "Normal training week. Begin hydrating consistently.",                   carbsG: Math.round((bmr * 1.4 * 0.45) / 4), targetCalories: Math.round(bmr * 1.4) },
+    6: { waterIntake: `${(weightKg * 0.055).toFixed(1)}–${(weightKg * 0.060).toFixed(1)} L`,  sodiumMg: 3500, sodiumLabel: "3,000–3,500 mg (HIGH — load)", notes: "Begin water + sodium loading together. Both high.",                     carbsG: Math.round((bmr * 1.2 * 0.35) / 4), targetCalories: Math.round(bmr * 1.2) },
+    5: { waterIntake: `${(weightKg * 0.065).toFixed(1)}–${(weightKg * 0.070).toFixed(1)} L`,  sodiumMg: 3500, sodiumLabel: "3,000–3,500 mg (HIGH — load)", notes: "Peak water + sodium loading. Drink consistently all day.",             carbsG: Math.round((bmr * 1.2 * 0.35) / 4), targetCalories: Math.round(bmr * 1.2) },
+    4: { waterIntake: "2–3 L (begin taper)",                                                   sodiumMg: 600,  sodiumLabel: "< 600 mg (CUT — drop abruptly)",    notes: "Cut BOTH water AND sodium abruptly. Kidneys still excreting at peak rate.", carbsG: Math.round(weightKg * 1.5),          targetCalories: Math.round(bmr * 1.0) },
+    3: { waterIntake: "1–2 L",                                                                  sodiumMg: 400,  sodiumLabel: "< 400 mg (very low)",              notes: "Very low water and sodium. No added salt, no processed food.",          carbsG: 30,                                  targetCalories: Math.round(bmr * 1.0) },
+    2: { waterIntake: "< 1 L",                                                                   sodiumMg: 200,  sodiumLabel: "< 200 mg (minimal)",               notes: "Minimal water. Stop all intake 10–12h before weigh-in.",                carbsG: 20,                                  targetCalories: Math.round(bmr * 0.85) },
+    1: { waterIntake: "0 until after weigh-in",                                                  sodiumMg: 0,    sodiumLabel: "0 until post weigh-in",             notes: "Nothing until weigh-in. Post weigh-in: 500ml electrolyte drink immediately.", carbsG: 0,                              targetCalories: Math.round(bmr * 0.75) },
+  };
+
   const plans: MeetPlan[] = [];
   for (let i = 7; i >= 1; i--) {
-    let targetCalories: number, carbsG: number, waterIntake: string, notes: string;
-    if (i === 7) { targetCalories = Math.round(bmr * 1.4); carbsG = Math.round((targetCalories * 0.45) / 4); waterIntake = "4–5 L"; notes = "Normal training week. Begin hydrating consistently."; }
-    else if (i >= 5) { targetCalories = Math.round(bmr * 1.2); carbsG = Math.round((targetCalories * 0.35) / 4); waterIntake = i === 6 ? "5–6 L" : "6–7 L"; notes = i === 6 ? "Begin water + sodium loading together." : "Peak water + sodium loading (both high today)."; }
-    else if (i >= 3) { targetCalories = Math.round(bmr * 1.0); carbsG = i === 4 ? Math.round(weightKg * 1.5) : 30; waterIntake = i === 4 ? "3–4 L (begin taper)" : "1–2 L"; notes = i === 4 ? "Cut both water AND sodium abruptly today." : "Very low water and sodium."; }
-    else if (i === 2) { targetCalories = Math.round(bmr * 0.85); carbsG = 20; waterIntake = "< 1 L"; notes = "Minimal water and food. Stop all water 10–12h before weigh-in."; }
-    else { targetCalories = Math.round(bmr * 0.75); carbsG = 0; waterIntake = "0 until after weigh-in"; notes = "Nothing until weigh-in. Post weigh-in: 500ml electrolyte drink immediately."; }
-    plans.push({ daysOut: i, targetCalories, waterIntake, carbsG, notes });
+    const d = dayMap[i];
+    plans.push({ daysOut: i, targetCalories: d.targetCalories, waterIntake: d.waterIntake, sodiumMg: d.sodiumMg, sodiumLabel: d.sodiumLabel, carbsG: d.carbsG, notes: d.notes });
   }
   return plans;
 }
