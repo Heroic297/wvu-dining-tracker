@@ -188,18 +188,23 @@ export function computeDailyTargets(
     // The diet only needs to get the athlete to the point where the cut method
     // covers the remainder — so we don\'t over-diet unnecessarily close to the meet.
     //
-    // Buffer by tier:
-    //   Tier 0 (<0.5%):  No buffer — essentially already at weight
-    //   Tier 1 (0.5-2%): Reserve 1.5% BW for gut cut
-    //   Tier 2 (2-4%):   Reserve 1% BW for water/sodium cut
-    //   Tier 3+ (4%+):   Reserve 1% BW for water cut
+    // Buffer = total weight the PROTOCOL removes from the scale.
+    // The diet only needs to reach (targetWeight + buffer).
+    // If current weight is already below that diet target, eat at maintenance.
+    //
+    //   Tier 0 (<0.5%):  No protocol — buffer = 0
+    //   Tier 1 (0.5-2%): Gut cut only     = 1.5% BW
+    //   Tier 2 (2-4%):   Gut cut (1.5%) + water/sodium (1.0%) = 2.5% BW combined
+    //   Tier 3 (4-6%):   Gut + water + glycogen depletion      = 4.0% BW combined
+    //   Tier 4+ (6%+):   Full aggressive protocol              = 4.5% BW combined
     const analysis = isLossGoal && user.targetWeightKg
       ? analyzeWaterCut(user, currentWeightKg)
       : null;
     const tier = analysis?.tier ?? 0;
     const cutBufferKg = isLossGoal
-      ? tier === 1 ? currentWeightKg * 0.015   // gut cut: 1.5% BW
-      : tier >= 2 ? currentWeightKg * 0.01     // water cut: 1% BW
+      ? tier === 1 ? currentWeightKg * 0.015   // gut cut only: 1.5% BW
+      : tier === 2 ? currentWeightKg * 0.025   // gut + water/sodium: 2.5% BW
+      : tier >= 3  ? currentWeightKg * 0.040   // gut + water + depletion: 4.0% BW
       : 0
       : 0;
     const dietTargetKg = (user.targetWeightKg ?? 0) + cutBufferKg;
