@@ -690,7 +690,9 @@ function renderMarkdown(content: string): React.ReactNode {
 }
 
 const MODEL_LABELS: Record<string, string> = {
-  "qwen/qwen3.6-plus-preview:free":            "Qwen 3.6 Plus",
+  "qwen/qwen3.6-plus:free":                     "Qwen 3.6 Plus",
+  "qwen/qwen3-coder:free":                      "Qwen3 Coder 480B",
+  "qwen/qwen3-next-80b-a3b-instruct:free":      "Qwen3 80B",
   "minimax/minimax-m2.5:free":                 "MiniMax M2.5",
   "stepfun/step-3.5-flash:free":               "Step 3.5 Flash",
   "nousresearch/hermes-3-llama-3.1-405b:free": "Hermes 3 405B",
@@ -937,9 +939,10 @@ export default function CoachPage() {
                   { id: "gemini-1.5-flash-8b",  label: "Gemini 1.5 Flash 8B" },
                 ],
                 openrouter: [
-                  { id: "qwen/qwen3.6-plus-preview:free",            label: "Qwen 3.6 Plus (recommended)" },
+                  { id: "qwen/qwen3.6-plus:free",                    label: "Qwen 3.6 Plus (recommended)" },
+                  { id: "qwen/qwen3-coder:free",                     label: "Qwen3 Coder 480B" },
                   { id: "minimax/minimax-m2.5:free",                 label: "MiniMax M2.5" },
-                  { id: "stepfun/step-3.5-flash:free",               label: "Step 3.5 Flash" },
+                  { id: "qwen/qwen3-next-80b-a3b-instruct:free",     label: "Qwen3 80B" },
                   { id: "nousresearch/hermes-3-llama-3.1-405b:free", label: "Hermes 3 405B" },
                   { id: "google/gemma-3-27b-it:free",                label: "Gemma 3 27B" },
                 ],
