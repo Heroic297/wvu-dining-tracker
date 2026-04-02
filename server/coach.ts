@@ -262,10 +262,10 @@ async function buildLiveContext(userId: string, rawUser: any): Promise<string> {
   } catch { /* non-fatal */ }
 
   try {
-    // Use the latest logged weight for the most accurate target calculation
-    const weightForCalc = latestWeight?.weight_kg ?? user.weightKg;
-    const userForCalc = { ...user, weightKg: weightForCalc };
-    targets = computeDailyTargets(userForCalc, undefined, today);
+    // Pass recentWeightKg explicitly so computeDailyTargets uses the logged weight
+    // not user.weightKg (profile weight which may be the target weight or outdated)
+    const recentKg = latestWeight?.weight_kg ?? user.weight_kg ?? user.weightKg;
+    targets = computeDailyTargets(user, undefined, today, recentKg);
   } catch { /* non-fatal */ }
 
   // Meet countdown
