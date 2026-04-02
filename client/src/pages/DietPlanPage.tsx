@@ -703,10 +703,13 @@ export default function DietPlanPage() {
                     {day.daysOut === 1 ? "Meet day −1" : `${day.daysOut} days out`}
                   </span>
                   <div className="flex gap-3 text-xs">
-                    <span className="text-primary">{day.targetCalories} kcal</span>
-                    <span className="text-blue-400 flex items-center gap-0.5">
+                    <span className="text-blue-400 flex items-center gap-1">
                       <Droplets className="w-3 h-3" />
                       {day.waterIntake}
+                    </span>
+                    <span className="text-amber-400 flex items-center gap-1">
+                      <span className="font-mono text-[10px] font-bold">Na</span>
+                      {day.sodiumLabel ?? `${day.sodiumMg?.toLocaleString() ?? "—"} mg`}
                     </span>
                   </div>
                 </div>
