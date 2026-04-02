@@ -335,17 +335,29 @@ export default function DietPlanPage() {
   const currentLbs = latestWeight ? r1(kgToLbs(latestWeight)) : null;
   const targetLbs = user?.targetWeightKg ? r1(kgToLbs(user.targetWeightKg)) : null;
 
-  // Compute the buffer reserved for the cut method (gut cut or water cut).
-  // Tier 1 (gut cut): reserve 1.5% BW — gut cut removes 1.5–2.5% BW
-  // Tier 2+ (water cut): reserve 1% BW
-  // Tier 0: no buffer
+  // Protocol breakdown — how much each component removes from scale weight
+  // These match the buffer values in tdee.ts computeDailyTargets exactly
   const cutTier = waterCutAnalysis?.tier ?? 0;
-  const bufferPct = cutTier === 1 ? 0.015 : cutTier >= 2 ? 0.01 : 0;
-  const bufferLbs = currentLbs ? r1(currentLbs * bufferPct) : 0;
-  const cutMethodLabel = cutTier === 1 ? "gut cut" : cutTier >= 2 ? "water cut" : "";
-  const hasBuffer = bufferPct > 0 && bufferLbs > 0;
-  const dietTargetLbs =
-    targetLbs !== null && hasBuffer ? r1(targetLbs + bufferLbs) : targetLbs;
+  const useGutCut   = waterCutAnalysis?.useGutCut        ?? false;
+  const useWaterCut = waterCutAnalysis?.useWaterSodiumLoad ?? false;
+  const useDepletion = waterCutAnalysis?.useGlycogenDepletion ?? false;
+
+  // Per-component estimates (conservative lower bounds)
+  const gutCutPct        = useGutCut   ? 0.015 : 0;  // 1.5% BW (range: 1.5–2.5%)
+  const waterCutPct      = useWaterCut ? 0.010 : 0;  // 1.0% BW
+  const depletionPct     = useDepletion ? 0.015 : 0;  // 1.5% BW
+  const totalBufferPct   = gutCutPct + waterCutPct + depletionPct;
+
+  const gutCutLbs        = currentLbs ? r1(currentLbs * gutCutPct)    : 0;
+  const waterCutLbs      = currentLbs ? r1(currentLbs * waterCutPct)  : 0;
+  const depletionLbs     = currentLbs ? r1(currentLbs * depletionPct) : 0;
+  const bufferLbs        = currentLbs ? r1(currentLbs * totalBufferPct) : 0;
+  const hasBuffer        = totalBufferPct > 0 && bufferLbs > 0;
+  const dietTargetLbs    = targetLbs !== null && hasBuffer ? r1(targetLbs + bufferLbs) : targetLbs;
+
+  // How much the DIET needs to cover (current → diet target)
+  const dietLbs = currentLbs !== null && dietTargetLbs !== null
+    ? r1(Math.max(0, currentLbs - dietTargetLbs)) : 0;
   const lbsRemaining =
     currentLbs !== null && dietTargetLbs !== null
       ? r1(Math.abs(dietTargetLbs - currentLbs))
@@ -488,8 +500,8 @@ export default function DietPlanPage() {
                 <p className="text-sm font-semibold text-primary">{lbsRemaining} lbs</p>
                 <p className="text-xs text-muted-foreground">to go</p>
                 {hasBuffer && (
-                  <p className="text-xs text-blue-400 mt-0.5 flex items-center justify-center gap-0.5">
-                    <Waves className="w-3 h-3" />+{bufferLbs} {cutMethodLabel}
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    +{bufferLbs} protocol
                   </p>
                 )}
               </div>
@@ -501,16 +513,87 @@ export default function DietPlanPage() {
           </div>
 
           {hasBuffer && (
-            <div className="mt-3 pt-3 border-t border-border">
-              <p className="text-xs text-blue-400 flex items-start gap-1.5">
-                <Waves className="w-3 h-3 mt-0.5 flex-shrink-0" />
-                Diet to{" "}
-                <span className="font-semibold text-foreground">{dietTargetLbs} lbs</span>
-                {" — the final "}
-                <span className="font-semibold text-foreground">{bufferLbs} lbs</span>
-                {cutTier === 1
-                  ? " will be dropped via gut cut (low-residue eating 3 days before weigh-in)."
-                  : " is reserved for the water cut."}
+            <div className="mt-3 pt-3 border-t border-border space-y-2">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Weight loss breakdown</p>
+
+              {/* Visual bar */}
+              <div className="flex h-2.5 rounded-full overflow-hidden gap-px">
+                {dietLbs > 0 && (
+                  <div
+                    className="bg-primary h-full rounded-l-full"
+                    style={{ width: `${(dietLbs / ((waterCutAnalysis?.cutKg ?? 0) * 2.20462 || 1)) * 100}%` }}
+                    title={`Diet: ${dietLbs} lbs`}
+                  />
+                )}
+                {gutCutLbs > 0 && (
+                  <div
+                    className="bg-emerald-500 h-full"
+                    style={{ width: `${(gutCutLbs / ((waterCutAnalysis?.cutKg ?? 0) * 2.20462 || 1)) * 100}%` }}
+                    title={`Gut cut: ${gutCutLbs} lbs`}
+                  />
+                )}
+                {waterCutLbs > 0 && (
+                  <div
+                    className="bg-blue-400 h-full"
+                    style={{ width: `${(waterCutLbs / ((waterCutAnalysis?.cutKg ?? 0) * 2.20462 || 1)) * 100}%` }}
+                    title={`Water cut: ${waterCutLbs} lbs`}
+                  />
+                )}
+                {depletionLbs > 0 && (
+                  <div
+                    className="bg-purple-400 h-full rounded-r-full"
+                    style={{ width: `${(depletionLbs / ((waterCutAnalysis?.cutKg ?? 0) * 2.20462 || 1)) * 100}%` }}
+                    title={`Glycogen depletion: ${depletionLbs} lbs`}
+                  />
+                )}
+              </div>
+
+              {/* Legend rows */}
+              <div className="space-y-1">
+                {dietLbs > 0 && (
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-sm bg-primary flex-shrink-0" />
+                      <span className="text-muted-foreground">Diet (tissue weight)</span>
+                    </span>
+                    <span className="font-semibold">{dietLbs} lbs</span>
+                  </div>
+                )}
+                {gutCutLbs > 0 && (
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-sm bg-emerald-500 flex-shrink-0" />
+                      <span className="text-muted-foreground">Gut cut <span className="text-foreground/50">(low-residue 3 days out, ~1.5–2.5% BW)</span></span>
+                    </span>
+                    <span className="font-semibold text-emerald-400">{gutCutLbs} lbs</span>
+                  </div>
+                )}
+                {waterCutLbs > 0 && (
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-sm bg-blue-400 flex-shrink-0" />
+                      <span className="text-muted-foreground">Water/sodium cut <span className="text-foreground/50">(load days 4–3, cut day 2)</span></span>
+                    </span>
+                    <span className="font-semibold text-blue-400">{waterCutLbs} lbs</span>
+                  </div>
+                )}
+                {depletionLbs > 0 && (
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-sm bg-purple-400 flex-shrink-0" />
+                      <span className="text-muted-foreground">Glycogen depletion <span className="text-foreground/50">(days 5–6)</span></span>
+                    </span>
+                    <span className="font-semibold text-purple-400">{depletionLbs} lbs</span>
+                  </div>
+                )}
+                <div className="flex items-center justify-between text-xs pt-1 border-t border-border">
+                  <span className="text-muted-foreground font-medium">Total to lose</span>
+                  <span className="font-bold">{r1((waterCutAnalysis?.cutKg ?? 0) * 2.20462)} lbs</span>
+                </div>
+              </div>
+
+              <p className="text-xs text-muted-foreground">
+                Diet to <span className="font-semibold text-foreground">{dietTargetLbs} lbs</span> — the protocol handles the rest mechanically.
               </p>
             </div>
           )}
