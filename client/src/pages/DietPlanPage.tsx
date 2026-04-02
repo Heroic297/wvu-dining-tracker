@@ -686,10 +686,10 @@ export default function DietPlanPage() {
       {waterCutPlan && waterCutPlan.length > 0 && (
         <div className="bg-card border border-border rounded-xl p-4">
           <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-1 flex items-center gap-2">
-            <Droplets className="w-4 h-4 text-blue-400" /> 7-Day Water Cut
+            <Droplets className="w-4 h-4 text-blue-400" /> Water & Sodium Protocol
           </h2>
           <p className="text-xs text-muted-foreground mb-3">
-            Educational guidance only — consult a sports dietitian.
+            2-hr weigh-in protocol: 2 load days → sodium cut → 10–12h dry window. Educational guidance only.
           </p>
           <div className="space-y-2">
             {waterCutPlan.map((day: any) => (
