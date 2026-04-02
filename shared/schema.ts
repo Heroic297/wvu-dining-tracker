@@ -99,7 +99,7 @@ export const users = pgTable("users", {
   // Column kept as groq_api_key_encrypted for backwards compat; now stores any provider key
   groqApiKeyEncrypted: text("groq_api_key_encrypted"),
   // AI provider preference
-  aiProvider: text("ai_provider").default("groq"), // "groq" | "gemini" | "openrouter"
+  aiProvider: text("ai_provider").default("groq"), // "groq" | "openrouter"
   // Model preference (provider-specific string)
   aiModel: text("ai_model"),
   // AI Coach daily usage counter (resets each day, only used when no own key)

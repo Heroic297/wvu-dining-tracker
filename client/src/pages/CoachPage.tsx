@@ -589,7 +589,7 @@ function CoachKnows({
               </div>
               <p className="text-xs text-muted-foreground">
                 {profile.dailyUsage} / {profile.dailyCap} used
-                {profile.dailyUsage >= profile.dailyCap && " — add your Groq key in Settings for unlimited"}
+                {profile.dailyUsage >= profile.dailyCap && " — add your API key in Settings for unlimited"}
               </p>
             </div>
           )}
@@ -690,24 +690,15 @@ function renderMarkdown(content: string): React.ReactNode {
 }
 
 const MODEL_LABELS: Record<string, string> = {
+  "openrouter/free":                             "Auto (Free)",
   "qwen/qwen3.6-plus:free":                     "Qwen 3.6 Plus",
-  "qwen/qwen3-coder:free":                      "Qwen3 Coder 480B",
-  "qwen/qwen3-next-80b-a3b-instruct:free":      "Qwen3 80B",
-  "minimax/minimax-m2.5:free":                 "MiniMax M2.5",
-  "stepfun/step-3.5-flash:free":               "Step 3.5 Flash",
-  "nousresearch/hermes-3-llama-3.1-405b:free": "Hermes 3 405B",
-  "google/gemma-3-27b-it:free":                "Gemma 3 27B",
-  "meta-llama/llama-3.3-70b-instruct:free":    "Llama 3.3 70B",
-  "openai/gpt-oss-120b:free":                  "GPT OSS 120B",
-  "nvidia/nemotron-3-super-120b-a12b:free":    "Nemotron 120B",
-  "llama-3.3-70b-versatile":                   "Llama 3.3 70B",
-  "llama-3.1-8b-instant":                      "Llama 3.1 8B",
-  "gemma2-9b-it":                              "Gemma 2 9B",
-  "mixtral-8x7b-32768":                        "Mixtral 8x7B",
-  "gemini-2.0-flash":                          "Gemini 2.0 Flash",
-  "gemini-1.5-flash":                          "Gemini 1.5 Flash",
+  "meta-llama/llama-3.3-70b-instruct:free":      "Llama 3.3 70B",
+  "nvidia/nemotron-3-super-120b-a12b:free":      "Nemotron 120B",
+  "stepfun/step-3.5-flash:free":                 "Step 3.5 Flash",
+  "llama-3.3-70b-versatile":                     "Llama 3.3 70B",
+  "llama-3.1-8b-instant":                        "Llama 3.1 8B",
 };
-const PROVIDER_LABELS: Record<string, string> = { groq: "Groq", gemini: "Gemini", openrouter: "OpenRouter" };
+const PROVIDER_LABELS: Record<string, string> = { groq: "Groq", openrouter: "OpenRouter" };
 
 function MessageBubble({ msg }: { msg: Message }) {
   const isUser = msg.role === "user";
@@ -750,7 +741,7 @@ function NoKeyBanner() {
       <div className="text-xs space-y-1">
         <p className="font-semibold text-amber-400">Add a free API key for unlimited messages</p>
         <p className="text-muted-foreground">
-          Go to <strong>Settings → AI Coach</strong> to pick a provider (Groq, Google Gemini, or OpenRouter) and add your free key. All providers are free.
+          Go to <strong>Settings → AI Coach</strong> to pick a provider (Groq or OpenRouter) and add your free key. Both providers offer free tiers.
         </p>
       </div>
     </div>
@@ -932,19 +923,14 @@ export default function CoachPage() {
               const FALLBACK: Record<string, Array<{id:string;label:string}>> = {
                 groq: [
                   { id: "llama-3.1-8b-instant",    label: "Llama 3.1 8B Instant (recommended)" },
-                  { id: "mixtral-8x7b-32768",       label: "Mixtral 8x7B" },
-                ],
-                gemini: [
-                  { id: "gemini-2.0-flash",     label: "Gemini 2.0 Flash" },
-                  { id: "gemini-1.5-flash",     label: "Gemini 1.5 Flash" },
-                  { id: "gemini-1.5-flash-8b",  label: "Gemini 1.5 Flash 8B" },
+                  { id: "llama-3.3-70b-versatile",  label: "Llama 3.3 70B Versatile" },
                 ],
                 openrouter: [
+                  { id: "openrouter/free",                            label: "Auto (Free)" },
                   { id: "qwen/qwen3.6-plus:free",                    label: "Qwen 3.6 Plus (recommended)" },
-                  { id: "qwen/qwen3-coder:free",                     label: "Qwen3 Coder 480B" },
-                  { id: "minimax/minimax-m2.5:free",                 label: "MiniMax M2.5" },
-                  { id: "qwen/qwen3-next-80b-a3b-instruct:free",     label: "Qwen3 80B" },
-                  { id: "google/gemma-3-27b-it:free",                label: "Gemma 3 27B" },
+                  { id: "meta-llama/llama-3.3-70b-instruct:free",     label: "Llama 3.3 70B" },
+                  { id: "nvidia/nemotron-3-super-120b-a12b:free",     label: "Nemotron 120B" },
+                  { id: "stepfun/step-3.5-flash:free",                label: "Step 3.5 Flash" },
                 ],
               };
               // Use server catalog (authoritative), fall back to local. Only show models for current provider.

@@ -26,45 +26,42 @@ const COMPACT_THRESHOLD = 20;
 // Default models per provider (all free)
 export const DEFAULT_MODELS: Record<string, string> = {
   groq:       "llama-3.1-8b-instant",   // 8B instant is fastest + least rate-limited on Groq free tier
-  gemini:     "gemini-2.0-flash",
   openrouter: "qwen/qwen3.6-plus:free",
 };
 
 // Curated free model catalog shown in the UI
 // Models removed from free tiers — getAiConfig auto-migrates users stuck on these
 const DEAD_MODELS = new Set([
-  // Groq models that hit persistent rate limits or were deprecated on the free tier
-  "llama-3.3-70b-versatile",  // frequently rate-limited — migrate to 8b-instant
-  "gemma2-9b-it",             // deprecated on Groq free tier — no longer available
+  // Groq models that were deprecated
+  "gemma2-9b-it",             // deprecated on Groq — replaced by llama-3.1-8b-instant
+  "mixtral-8x7b-32768",       // deprecated on Groq 2025-03-20
+  // Gemini models — provider removed entirely
+  "gemini-2.0-flash",
+  "gemini-1.5-flash",
+  "gemini-1.5-flash-8b",
   // Old IDs / removed from OpenRouter free tier — auto-migrate to provider default
   "deepseek/deepseek-r1:free",
   "microsoft/phi-4:free",
   "qwen/qwen-2.5-72b-instruct:free",
   "google/gemini-2.0-flash-exp:free",
   "qwen/qwen3.6-plus-preview:free",         // renamed — use qwen3.6-plus:free
-  "stepfun/step-3.5-flash:free",            // removed from free tier
   "openai/gpt-oss-120b:free",               // removed from free tier
-  "nvidia/nemotron-3-super-120b-a12b:free", // removed from free tier
-  "meta-llama/llama-3.3-70b-instruct:free", // rate-limited / removed
   "nousresearch/hermes-3-llama-3.1-405b:free", // removed from free tier
+  "qwen/qwen3-coder:free",                  // removed from catalog
+  "google/gemma-3-27b-it:free",             // removed from catalog (no tool calling)
 ]);
 
 export const FREE_MODEL_CATALOG: Record<string, Array<{ id: string; label: string; description: string }>> = {
   groq: [
-    { id: "llama-3.1-8b-instant",    label: "Llama 3.1 8B Instant", description: "Fastest — almost never rate-limited, great for coaching (recommended)" },
-    { id: "mixtral-8x7b-32768",      label: "Mixtral 8x7B",         description: "Stronger reasoning, 32k context window" },
-  ],
-  gemini: [
-    { id: "gemini-2.0-flash",        label: "Gemini 2.0 Flash",    description: "Best free Gemini — 1,500 req/day, fast, excellent coaching" },
-    { id: "gemini-1.5-flash",        label: "Gemini 1.5 Flash",    description: "Proven model, great at following complex instructions" },
-    { id: "gemini-1.5-flash-8b",     label: "Gemini 1.5 Flash 8B", description: "Lighter and faster, good for quick questions" },
+    { id: "llama-3.1-8b-instant",    label: "Llama 3.1 8B Instant",    description: "Fastest — almost never rate-limited, great for coaching (recommended)" },
+    { id: "llama-3.3-70b-versatile", label: "Llama 3.3 70B Versatile", description: "Stronger reasoning, may hit rate limits on free tier" },
   ],
   openrouter: [
-    { id: "qwen/qwen3.6-plus:free",                label: "Qwen 3.6 Plus",    description: "1M context, tool calling — best all-around free model (recommended)" },
-    { id: "qwen/qwen3-coder:free",                 label: "Qwen3 Coder 480B", description: "262k context, tool calling — 480B model, excellent reasoning" },
-    { id: "minimax/minimax-m2.5:free",             label: "MiniMax M2.5",     description: "196k context, tool calling — fast and capable" },
-    { id: "qwen/qwen3-next-80b-a3b-instruct:free", label: "Qwen3 80B",        description: "262k context, tool calling — strong instruction following" },
-    { id: "google/gemma-3-27b-it:free",            label: "Gemma 3 27B",      description: "131k context — no tool calling" },
+    { id: "openrouter/free",                        label: "Auto (Free)",       description: "OpenRouter picks the best available free model automatically" },
+    { id: "qwen/qwen3.6-plus:free",                 label: "Qwen 3.6 Plus",    description: "1M context, tool calling — best all-around free model (recommended)" },
+    { id: "meta-llama/llama-3.3-70b-instruct:free", label: "Llama 3.3 70B",    description: "Strong instruction following, tool calling" },
+    { id: "nvidia/nemotron-3-super-120b-a12b:free",  label: "Nemotron 120B",    description: "120B parameter model, tool calling — powerful reasoning" },
+    { id: "stepfun/step-3.5-flash:free",             label: "Step 3.5 Flash",   description: "Fast and capable, tool calling" },
   ],
 };
 
@@ -99,7 +96,7 @@ function containsInjection(text: string): boolean {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-type Provider = "groq" | "gemini" | "openrouter";
+type Provider = "groq" | "openrouter";
 
 interface AiConfig {
   provider: Provider;
@@ -114,7 +111,9 @@ async function getAiConfig(userId: string): Promise<AiConfig> {
     [userId]
   );
   const row = res.rows[0];
-  const provider: Provider = (row?.ai_provider as Provider) || "groq";
+  const rawProvider = row?.ai_provider || "groq";
+  // Migrate Gemini users to Groq — Gemini integration has been removed
+  const provider: Provider = rawProvider === "gemini" ? "groq" : (rawProvider as Provider);
   const savedModel = row?.ai_model || "";
 
   // Auto-fallback: dead model OR model that doesn't belong to the current provider
@@ -125,10 +124,11 @@ async function getAiConfig(userId: string): Promise<AiConfig> {
     : DEFAULT_MODELS[provider] || DEFAULT_MODELS.groq;
 
   // If model was dead or mismatched, update the DB silently so it stays fixed
-  if (isDead || isMismatch) {
-    const reason = isDead ? "dead" : "provider-mismatch";
-    console.log(`[coach] auto-migrating ${reason} model ${savedModel} → ${model} for user ${userId}`);
-    pool.query("UPDATE users SET ai_model=$1 WHERE id=$2", [model, userId]).catch(() => {});
+  const providerChanged = rawProvider === "gemini";
+  if (isDead || isMismatch || providerChanged) {
+    const reason = providerChanged ? "gemini-removed" : isDead ? "dead" : "provider-mismatch";
+    console.log(`[coach] auto-migrating ${reason} model ${savedModel} → ${model} provider ${rawProvider} → ${provider} for user ${userId}`);
+    pool.query("UPDATE users SET ai_model=$1, ai_provider=$2 WHERE id=$3", [model, provider, userId]).catch(() => {});
   }
 
   const enc = row?.groq_api_key_encrypted;
@@ -581,10 +581,9 @@ async function executeTool(name: string, args: any, userId: string, profile: any
 
 // OpenRouter free models that do NOT support tool/function calling
 // For these we strip tools and let the model answer from context alone
-// (most small/specialized models don't support tools)
-// Verified from OpenRouter API: models that do NOT support tool calling
+// openrouter/free auto-routes and may pick a model without tool support
 const OPENROUTER_NO_TOOLS = new Set([
-  "nousresearch/hermes-3-llama-3.1-405b:free",
+  "openrouter/free",
   "google/gemma-3-27b-it:free",
   "google/gemma-3-12b-it:free",
   "google/gemma-3-4b-it:free",
@@ -638,84 +637,6 @@ async function callOpenAICompat(
   return res.json();
 }
 
-/** Gemini uses a different REST API — translate to/from OpenAI format */
-async function callGemini(
-  apiKey: string,
-  model: string,
-  messages: any[],
-  tools: any[]
-): Promise<any> {
-  // Convert OpenAI message format to Gemini contents format
-  const systemMsg = messages.find((m: any) => m.role === "system");
-  const chatMsgs = messages.filter((m: any) => m.role !== "system");
-
-  const contents = chatMsgs.map((m: any) => ({
-    role: m.role === "assistant" ? "model" : "user",
-    parts: [{ text: m.content ?? "" }],
-  }));
-
-  // Convert OpenAI tool definitions to Gemini function declarations
-  const functionDeclarations = tools.map((t: any) => ({
-    name: t.function.name,
-    description: t.function.description,
-    parameters: t.function.parameters,
-  }));
-
-  const requestBody: any = {
-    contents,
-    generationConfig: { maxOutputTokens: 1024, temperature: 0.7 },
-  };
-  if (systemMsg) {
-    requestBody.systemInstruction = { parts: [{ text: systemMsg.content }] };
-  }
-  if (functionDeclarations.length > 0) {
-    requestBody.tools = [{ functionDeclarations }];
-    requestBody.toolConfig = { functionCallingConfig: { mode: "AUTO" } };
-  }
-
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(requestBody),
-  });
-  if (!res.ok) throw new Error(`Gemini API error ${res.status}: ${await res.text()}`);
-  const geminiRes = await res.json();
-
-  // Translate Gemini response back to OpenAI format
-  const candidate = geminiRes.candidates?.[0];
-  const part = candidate?.content?.parts?.[0];
-
-  // Check for function call
-  if (part?.functionCall) {
-    return {
-      choices: [{
-        message: {
-          role: "assistant",
-          content: null,
-          tool_calls: [{
-            id: `gemini-${Date.now()}`,
-            type: "function",
-            function: {
-              name: part.functionCall.name,
-              arguments: JSON.stringify(part.functionCall.args ?? {}),
-            },
-          }],
-        },
-      }],
-    };
-  }
-
-  return {
-    choices: [{
-      message: {
-        role: "assistant",
-        content: part?.text ?? "",
-        tool_calls: [],
-      },
-    }],
-  };
-}
 
 /**
  * Normalize raw provider error messages into user-friendly text.
@@ -740,7 +661,7 @@ function normalizeProviderError(msg: string): string | null {
   if (msg.includes("timeout") || msg.includes("ETIMEDOUT") || msg.includes("ECONNREFUSED")) {
     return "The AI provider is not responding. Please try again in a moment.";
   }
-  if (msg.includes("API error") || msg.includes("Gemini API error")) {
+  if (msg.includes("API error")) {
     // Extract the meaningful part after the status code
     const detail = msg.replace(/^.*?API error \d+:\s*/i, "").slice(0, 200);
     return `Provider error: ${detail || msg}. Try switching models in the Coach tab header.`;
@@ -755,9 +676,6 @@ async function callAI(
   tools: any[]
 ): Promise<any> {
   console.log(`[coach] callAI: provider=${config.provider} model=${config.model} key=${config.key.slice(0,8)}...`);
-  if (config.provider === "gemini") {
-    return callGemini(config.key, config.model, messages, tools);
-  }
   if (config.provider === "openrouter") {
     return callOpenAICompat(
       "https://openrouter.ai/api/v1",
@@ -862,7 +780,9 @@ export function registerCoachRoutes(app: Express): void {
       );
       const row = keyRes.rows[0];
       const hasOwnKey = !!row?.groq_api_key_encrypted;
-      const provider: Provider = (row?.ai_provider as Provider) || "groq";
+      const rawProvider = row?.ai_provider || "groq";
+      // Migrate Gemini users to Groq — Gemini integration has been removed
+      const provider: Provider = rawProvider === "gemini" ? "groq" : (rawProvider as Provider);
       const savedModel = row?.ai_model || "";
 
       // Apply same dead-model / provider-mismatch resolution as getAiConfig
@@ -874,8 +794,9 @@ export function registerCoachRoutes(app: Express): void {
         : DEFAULT_MODELS[provider] || DEFAULT_MODELS.groq;
 
       // Persist the migration so DB stays in sync
-      if (isDead || isMismatch) {
-        pool.query("UPDATE users SET ai_model=$1 WHERE id=$2", [aiModel, userId]).catch(() => {});
+      const providerChanged = rawProvider === "gemini";
+      if (isDead || isMismatch || providerChanged) {
+        pool.query("UPDATE users SET ai_model=$1, ai_provider=$2 WHERE id=$3", [aiModel, provider, userId]).catch(() => {});
       }
 
       const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
@@ -963,7 +884,7 @@ export function registerCoachRoutes(app: Express): void {
       const userId = req.user!.id;
       const schema = z.object({
         apiKey:   z.string().min(6).max(300),
-        provider: z.enum(["groq", "gemini", "openrouter"]).default("groq"),
+        provider: z.enum(["groq", "openrouter"]).default("groq"),
         model:    z.string().max(120).optional(),
       });
       const { apiKey, provider, model } = schema.parse(req.body);
@@ -994,7 +915,7 @@ export function registerCoachRoutes(app: Express): void {
     try {
       const userId = req.user!.id;
       const schema = z.object({
-        provider: z.enum(["groq", "gemini", "openrouter"]),
+        provider: z.enum(["groq", "openrouter"]),
         model:    z.string().max(120).optional(),
       });
       const { provider, model } = schema.parse(req.body);

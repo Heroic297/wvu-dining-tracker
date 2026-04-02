@@ -76,7 +76,7 @@ export default function SettingsPage() {
   const [showAiKey, setShowAiKey] = useState(false);
   const [aiKeySaving, setAiKeySaving] = useState(false);
   // selectedProvider tracks which tab is active in the UI right now
-  const [selectedProvider, setSelectedProvider] = useState<"groq"|"gemini"|"openrouter">("groq");
+  const [selectedProvider, setSelectedProvider] = useState<"groq"|"openrouter">("groq");
   const { data: coachProfile, refetch: refetchCoachProfile } = useQuery({
     queryKey: ["coachProfile"],
     queryFn: () => api.coachProfile().then((r) => r.json()),
@@ -87,9 +87,8 @@ export default function SettingsPage() {
   const hasOwnKey: boolean   = !!(coachProfile as any)?.hasOwnKey;
 
   const PROVIDERS = [
-    { id: "groq"       as const, label: "Groq",          placeholder: "gsk_...",    url: "https://console.groq.com",             note: "Free tier — fast Llama 3.1 8B" },
-    { id: "gemini"     as const, label: "Google Gemini",  placeholder: "AIza...",    url: "https://aistudio.google.com/apikey",  note: "Free — 1,500 requests/day" },
-    { id: "openrouter" as const, label: "OpenRouter",     placeholder: "sk-or-v1-...", url: "https://openrouter.ai/keys",         note: "Free — access to many models" },
+    { id: "groq"       as const, label: "Groq",        placeholder: "gsk_...",      url: "https://console.groq.com",    note: "Free tier — fast Llama models" },
+    { id: "openrouter" as const, label: "OpenRouter",   placeholder: "sk-or-v1-...", url: "https://openrouter.ai/keys",  note: "BYOK — many free models" },
   ];
   const activeProvider = PROVIDERS.find(p => p.id === selectedProvider) ?? PROVIDERS[0];
 
@@ -532,7 +531,7 @@ export default function SettingsPage() {
         {/* Step 1: pick provider */}
         <div className="space-y-1.5">
           <p className="text-xs font-semibold">1. Select provider</p>
-          <div className="grid grid-cols-3 gap-1.5">
+          <div className="grid grid-cols-2 gap-1.5">
             {PROVIDERS.map(p => (
               <button
                 key={p.id}
@@ -576,7 +575,7 @@ export default function SettingsPage() {
             </Button>
           </div>
           <p className="text-xs text-muted-foreground">
-            Without a key you get {(coachProfile as any)?.dailyCap ?? 15} free messages/day using Groq. Pick your AI model in the Coach tab after saving.
+            Without a key you get {(coachProfile as any)?.dailyCap ?? 15} free messages/day via Groq. Pick your AI model in the Coach tab after saving.
           </p>
         </div>
       </section>
