@@ -33,19 +33,17 @@ export const DEFAULT_MODELS: Record<string, string> = {
 // Curated free model catalog shown in the UI
 // Models removed from free tiers — getAiConfig auto-migrates users stuck on these
 const DEAD_MODELS = new Set([
+  // Old IDs / removed from OpenRouter free tier — auto-migrate to provider default
   "deepseek/deepseek-r1:free",
   "microsoft/phi-4:free",
   "qwen/qwen-2.5-72b-instruct:free",
   "google/gemini-2.0-flash-exp:free",
-  "qwen/qwen3.6-plus-preview:free",  // renamed to qwen3.6-plus:free
-  "stepfun/step-3.5-flash:free",     // removed from free tier
-  "openai/gpt-oss-120b:free",        // removed from free tier
+  "qwen/qwen3.6-plus-preview:free",         // renamed — use qwen3.6-plus:free
+  "stepfun/step-3.5-flash:free",            // removed from free tier
+  "openai/gpt-oss-120b:free",               // removed from free tier
   "nvidia/nemotron-3-super-120b-a12b:free", // removed from free tier
-  // Previously-set defaults that are rate-limited—migrate to qwen3.6
-  "meta-llama/llama-3.3-70b-instruct:free",
-  "nousresearch/hermes-3-llama-3.1-405b:free",
-  "openai/gpt-oss-120b:free",
-  "nvidia/nemotron-3-super-120b-a12b:free",
+  "meta-llama/llama-3.3-70b-instruct:free", // rate-limited / removed
+  "nousresearch/hermes-3-llama-3.1-405b:free", // removed from free tier
 ]);
 
 export const FREE_MODEL_CATALOG: Record<string, Array<{ id: string; label: string; description: string }>> = {
@@ -61,12 +59,11 @@ export const FREE_MODEL_CATALOG: Record<string, Array<{ id: string; label: strin
     { id: "gemini-1.5-flash-8b",     label: "Gemini 1.5 Flash 8B", description: "Lighter and faster, good for quick questions" },
   ],
   openrouter: [
-    { id: "qwen/qwen3.6-plus:free",                    label: "Qwen 3.6 Plus",      description: "1M context, tools — best all-around free model (recommended)" },
-    { id: "qwen/qwen3-coder:free",                     label: "Qwen3 Coder 480B",   description: "262k context, tools — massive 480B model, excellent reasoning" },
-    { id: "minimax/minimax-m2.5:free",                 label: "MiniMax M2.5",       description: "196k context, tools — fast and capable" },
-    { id: "qwen/qwen3-next-80b-a3b-instruct:free",     label: "Qwen3 80B",          description: "262k context, tools — strong instruction following" },
-    { id: "nousresearch/hermes-3-llama-3.1-405b:free", label: "Hermes 3 405B",      description: "131k context — largest free model, no tool calling" },
-    { id: "google/gemma-3-27b-it:free",                label: "Gemma 3 27B",        description: "131k context — Google model, no tool calling" },
+    { id: "qwen/qwen3.6-plus:free",                label: "Qwen 3.6 Plus",    description: "1M context, tool calling — best all-around free model (recommended)" },
+    { id: "qwen/qwen3-coder:free",                 label: "Qwen3 Coder 480B", description: "262k context, tool calling — 480B model, excellent reasoning" },
+    { id: "minimax/minimax-m2.5:free",             label: "MiniMax M2.5",     description: "196k context, tool calling — fast and capable" },
+    { id: "qwen/qwen3-next-80b-a3b-instruct:free", label: "Qwen3 80B",        description: "262k context, tool calling — strong instruction following" },
+    { id: "google/gemma-3-27b-it:free",            label: "Gemma 3 27B",      description: "131k context — no tool calling" },
   ],
 };
 
