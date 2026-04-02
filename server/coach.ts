@@ -25,7 +25,7 @@ const COMPACT_THRESHOLD = 20;
 
 // Default models per provider (all free)
 export const DEFAULT_MODELS: Record<string, string> = {
-  groq:       "llama-3.3-70b-versatile",
+  groq:       "llama-3.1-8b-instant",   // 8B instant is fastest + least rate-limited on Groq free tier
   gemini:     "gemini-2.0-flash",
   openrouter: "qwen/qwen3.6-plus:free",
 };
@@ -33,6 +33,8 @@ export const DEFAULT_MODELS: Record<string, string> = {
 // Curated free model catalog shown in the UI
 // Models removed from free tiers — getAiConfig auto-migrates users stuck on these
 const DEAD_MODELS = new Set([
+  // Groq models that hit persistent rate limits on the free tier
+  "llama-3.3-70b-versatile",  // frequently rate-limited — migrate to 8b-instant
   // Old IDs / removed from OpenRouter free tier — auto-migrate to provider default
   "deepseek/deepseek-r1:free",
   "microsoft/phi-4:free",
@@ -48,10 +50,10 @@ const DEAD_MODELS = new Set([
 
 export const FREE_MODEL_CATALOG: Record<string, Array<{ id: string; label: string; description: string }>> = {
   groq: [
-    { id: "llama-3.3-70b-versatile", label: "Llama 3.3 70B",       description: "Best all-around — fast reasoning, strong nutrition knowledge" },
-    { id: "llama-3.1-8b-instant",    label: "Llama 3.1 8B",        description: "Fastest responses, lighter model" },
-    { id: "gemma2-9b-it",            label: "Gemma 2 9B",          description: "Google compact model, good for Q&A" },
-    { id: "mixtral-8x7b-32768",      label: "Mixtral 8x7B",        description: "Strong reasoning, 32k context window" },
+    { id: "llama-3.1-8b-instant",    label: "Llama 3.1 8B Instant", description: "Fastest — almost never rate-limited, great for coaching (recommended)" },
+    { id: "gemma2-9b-it",            label: "Gemma 2 9B",           description: "Google compact model, reliable and fast" },
+    { id: "mixtral-8x7b-32768",      label: "Mixtral 8x7B",         description: "Stronger reasoning, 32k context window" },
+    { id: "llama-3.3-70b-versatile", label: "Llama 3.3 70B",        description: "Most capable but frequently rate-limited on free tier" },
   ],
   gemini: [
     { id: "gemini-2.0-flash",        label: "Gemini 2.0 Flash",    description: "Best free Gemini — 1,500 req/day, fast, excellent coaching" },
