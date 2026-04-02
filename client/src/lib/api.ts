@@ -92,7 +92,8 @@ export const api = {
   coachClearMemory: () => apiRequest("DELETE", "/api/coach/memory"),
   coachSaveApiKey: (apiKey: string, provider: string, model: string) =>
     apiRequest("PATCH", "/api/coach/apikey", { apiKey, provider, model }),
-  coachDeleteApiKey: () => apiRequest("DELETE", "/api/coach/apikey"),
+  coachDeleteApiKey: (provider?: string) =>
+    apiRequest("DELETE", provider ? `/api/coach/apikey?provider=${provider}` : "/api/coach/apikey"),
   coachUpdateProvider: (provider: string, model: string) =>
     apiRequest("PATCH", "/api/coach/provider", { provider, model }),
 };

@@ -85,20 +85,23 @@ export default function SettingsPage() {
   const savedProvider: string = (coachProfile as any)?.provider ?? "groq";
   const savedModel: string   = (coachProfile as any)?.aiModel ?? "";
   const hasOwnKey: boolean   = !!(coachProfile as any)?.hasOwnKey;
+  const savedKeys: Record<string, string | null> = (coachProfile as any)?.savedKeys ?? { groq: null, openrouter: null };
+  const hasGroqKey: boolean = !!(coachProfile as any)?.hasGroqKey;
+  const hasOpenrouterKey: boolean = !!(coachProfile as any)?.hasOpenrouterKey;
 
   const PROVIDERS = [
     { id: "groq"       as const, label: "Groq",        placeholder: "gsk_...",      url: "https://console.groq.com",    note: "Free tier — fast Llama models" },
     { id: "openrouter" as const, label: "OpenRouter",   placeholder: "sk-or-v1-...", url: "https://openrouter.ai/keys",  note: "BYOK — many free models" },
   ];
   const activeProvider = PROVIDERS.find(p => p.id === selectedProvider) ?? PROVIDERS[0];
+  const providerHasKey = (id: string) => id === "groq" ? hasGroqKey : hasOpenrouterKey;
 
   const saveAiKey = async () => {
     const key = aiKeyInput.trim();
     if (!key) return;
     setAiKeySaving(true);
     try {
-      // Always save provider = selectedProvider (the active tab when Save is clicked)
-      // No model sent here — provider default is used; user picks model in Coach tab
+      // Save key for the selected provider only — does not touch the other provider's key
       const res = await api.coachSaveApiKey(key, selectedProvider, "");
       const data = await res.json();
       if (!res.ok) { toast({ title: "Error", description: data.error ?? "Save failed", variant: "destructive" }); return; }
@@ -108,9 +111,9 @@ export default function SettingsPage() {
     } catch { toast({ title: "Failed to save key", variant: "destructive" }); }
     finally { setAiKeySaving(false); }
   };
-  const removeAiKey = async () => {
-    await api.coachDeleteApiKey();
-    toast({ title: "API key removed" });
+  const removeAiKey = async (provider: "groq" | "openrouter") => {
+    await api.coachDeleteApiKey(provider);
+    toast({ title: `${PROVIDERS.find(p => p.id === provider)?.label} key removed` });
     refetchCoachProfile();
   };
 
@@ -511,20 +514,33 @@ export default function SettingsPage() {
           <h2 className="text-sm font-semibold">AI Coach</h2>
         </div>
 
-        {/* Active key badge */}
-        {hasOwnKey && (
-          <div className="flex items-center justify-between bg-secondary rounded-xl px-3 py-2">
-            <div className="flex items-center gap-2">
-              <CheckCircle className="w-4 h-4 text-green-400" />
-              <div>
-                <p className="text-xs font-semibold">
-                  {PROVIDERS.find(p => p.id === savedProvider)?.label ?? savedProvider}
-                  {savedModel && <span className="text-muted-foreground font-normal"> — {savedModel.split("/").pop()?.replace(":free","") ?? savedModel}</span>}
-                </p>
-                <p className="text-xs text-muted-foreground">Unlimited messages — select your model in the Coach tab</p>
-              </div>
-            </div>
-            <Button size="sm" variant="destructive" onClick={removeAiKey} className="h-7 text-xs">Remove</Button>
+        {/* Per-provider saved key badges */}
+        {(hasGroqKey || hasOpenrouterKey) && (
+          <div className="space-y-1.5">
+            {PROVIDERS.map(p => {
+              if (!providerHasKey(p.id)) return null;
+              const isActive = savedProvider === p.id;
+              return (
+                <div key={p.id} className="flex items-center justify-between bg-secondary rounded-xl px-3 py-2">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle className={`w-4 h-4 ${isActive ? "text-green-400" : "text-muted-foreground"}`} />
+                    <div>
+                      <p className="text-xs font-semibold">
+                        {p.label}
+                        {savedKeys[p.id] && <span className="text-muted-foreground font-normal"> — {savedKeys[p.id]}</span>}
+                        {isActive && <span className="text-green-400 font-normal"> (active)</span>}
+                      </p>
+                      {isActive && savedModel && (
+                        <p className="text-xs text-muted-foreground">
+                          Model: {savedModel.split("/").pop()?.replace(":free","") ?? savedModel} — select in Coach tab
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  <Button size="sm" variant="destructive" onClick={() => removeAiKey(p.id)} className="h-7 text-xs">Remove</Button>
+                </div>
+              );
+            })}
           </div>
         )}
 
@@ -542,7 +558,7 @@ export default function SettingsPage() {
                     : "border-border bg-secondary hover:border-primary/40"
                 }`}
               >
-                <span>{p.label}</span>
+                <span>{p.label}{providerHasKey(p.id) ? " ✓" : ""}</span>
                 <span className={`text-[10px] font-normal ${ selectedProvider === p.id ? "text-primary/70" : "text-muted-foreground"}`}>{p.note}</span>
               </button>
             ))}
@@ -575,7 +591,10 @@ export default function SettingsPage() {
             </Button>
           </div>
           <p className="text-xs text-muted-foreground">
-            Without a key you get {(coachProfile as any)?.dailyCap ?? 15} free messages/day via Groq. Pick your AI model in the Coach tab after saving.
+            {providerHasKey(selectedProvider)
+              ? `${activeProvider.label} key saved — paste a new key to replace it.`
+              : `Without a key you get ${(coachProfile as any)?.dailyCap ?? 15} free messages/day via Groq.`}
+            {" "}Pick your AI model in the Coach tab after saving.
           </p>
         </div>
       </section>

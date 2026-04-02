@@ -84,6 +84,16 @@ async function runMigrations() {
     `);
     // AI Coach columns on users
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS groq_api_key_encrypted TEXT`);
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS openrouter_api_key_encrypted TEXT`);
+    // Migrate: move OpenRouter keys from the shared groq column to the dedicated openrouter column
+    await pool.query(`
+      UPDATE users
+      SET openrouter_api_key_encrypted = groq_api_key_encrypted,
+          groq_api_key_encrypted = NULL
+      WHERE ai_provider = 'openrouter'
+        AND groq_api_key_encrypted IS NOT NULL
+        AND openrouter_api_key_encrypted IS NULL
+    `);
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_daily_usage INTEGER NOT NULL DEFAULT 0`);
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_daily_usage_date DATE`);
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_provider TEXT NOT NULL DEFAULT 'groq'`);

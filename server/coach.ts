@@ -107,7 +107,7 @@ interface AiConfig {
 
 async function getAiConfig(userId: string): Promise<AiConfig> {
   const res = await pool.query(
-    "SELECT groq_api_key_encrypted, ai_provider, ai_model FROM users WHERE id=$1",
+    "SELECT groq_api_key_encrypted, openrouter_api_key_encrypted, ai_provider, ai_model FROM users WHERE id=$1",
     [userId]
   );
   const row = res.rows[0];
@@ -131,7 +131,10 @@ async function getAiConfig(userId: string): Promise<AiConfig> {
     pool.query("UPDATE users SET ai_model=$1, ai_provider=$2 WHERE id=$3", [model, provider, userId]).catch(() => {});
   }
 
-  const enc = row?.groq_api_key_encrypted;
+  // Pick the encrypted key column for the active provider
+  const enc = provider === "openrouter"
+    ? row?.openrouter_api_key_encrypted
+    : row?.groq_api_key_encrypted;
   if (enc) {
     try {
       const key = decryptString(enc);
@@ -143,9 +146,9 @@ async function getAiConfig(userId: string): Promise<AiConfig> {
       return { provider: "groq", model: DEFAULT_MODELS.groq, key: "", isOwn: false };
     }
   }
-  // No own key — fall back to master Groq key
+  // No own key for this provider — fall back to master Groq key
   const master = process.env.GROQ_API_KEY ?? "";
-  console.log(`[coach] getAiConfig: no own key, using master Groq key, provider=groq`);
+  console.log(`[coach] getAiConfig: no own key for ${provider}, using master Groq key, provider=groq`);
   return { provider: "groq", model: DEFAULT_MODELS.groq, key: master, isOwn: false };
 }
 
@@ -775,15 +778,20 @@ export function registerCoachRoutes(app: Express): void {
       const profile = await getOrCreateProfile(userId);
 
       const keyRes = await pool.query(
-        "SELECT groq_api_key_encrypted, ai_daily_usage, ai_daily_usage_date, ai_provider, ai_model FROM users WHERE id=$1",
+        "SELECT groq_api_key_encrypted, openrouter_api_key_encrypted, ai_daily_usage, ai_daily_usage_date, ai_provider, ai_model FROM users WHERE id=$1",
         [userId]
       );
       const row = keyRes.rows[0];
-      const hasOwnKey = !!row?.groq_api_key_encrypted;
       const rawProvider = row?.ai_provider || "groq";
       // Migrate Gemini users to Groq — Gemini integration has been removed
       const provider: Provider = rawProvider === "gemini" ? "groq" : (rawProvider as Provider);
       const savedModel = row?.ai_model || "";
+
+      // Per-provider key status
+      const hasGroqKey = !!row?.groq_api_key_encrypted;
+      const hasOpenrouterKey = !!row?.openrouter_api_key_encrypted;
+      // hasOwnKey = the active provider has a saved key
+      const hasOwnKey = provider === "openrouter" ? hasOpenrouterKey : hasGroqKey;
 
       // Apply same dead-model / provider-mismatch resolution as getAiConfig
       // so the profile always reflects the effective model the chat endpoint will use.
@@ -804,15 +812,24 @@ export function registerCoachRoutes(app: Express): void {
         ? new Date(row.ai_daily_usage_date).toISOString().slice(0, 10)
         : null;
       const dailyUsage = usageDate === today ? (row?.ai_daily_usage ?? 0) : 0;
-      // Return masked key if set
-      let maskedKey: string | null = null;
+
+      // Build per-provider masked keys
+      const savedKeys: Record<string, string | null> = { groq: null, openrouter: null };
       if (row?.groq_api_key_encrypted) {
-        try { maskedKey = maskApiKey(decryptString(row.groq_api_key_encrypted)); } catch { /* ignore */ }
+        try { savedKeys.groq = maskApiKey(decryptString(row.groq_api_key_encrypted)); } catch { /* ignore */ }
       }
+      if (row?.openrouter_api_key_encrypted) {
+        try { savedKeys.openrouter = maskApiKey(decryptString(row.openrouter_api_key_encrypted)); } catch { /* ignore */ }
+      }
+      // maskedKey for backward compat: the active provider's masked key
+      const maskedKey = savedKeys[provider] ?? null;
 
       res.json({
         ...profile,
         hasOwnKey,
+        hasGroqKey,
+        hasOpenrouterKey,
+        savedKeys,
         provider,
         aiModel,
         maskedKey,
@@ -878,7 +895,7 @@ export function registerCoachRoutes(app: Express): void {
     }
   });
 
-  // PATCH /api/coach/apikey  — save provider + model + encrypted key
+  // PATCH /api/coach/apikey  — save encrypted key for a specific provider (without touching the other)
   app.patch("/api/coach/apikey", requireAuth, async (req: AuthRequest, res) => {
     try {
       const userId = req.user!.id;
@@ -899,8 +916,12 @@ export function registerCoachRoutes(app: Express): void {
         });
       }
 
+      // Save key to the provider-specific column only; switch active provider + model
+      const keyColumn = provider === "openrouter"
+        ? "openrouter_api_key_encrypted"
+        : "groq_api_key_encrypted";
       await pool.query(
-        "UPDATE users SET groq_api_key_encrypted=$1, ai_provider=$2, ai_model=$3 WHERE id=$4",
+        `UPDATE users SET ${keyColumn}=$1, ai_provider=$2, ai_model=$3 WHERE id=$4`,
         [encrypted, provider, resolvedModel, userId]
       );
       res.json({ ok: true, masked: maskApiKey(apiKey), provider, model: resolvedModel });
@@ -910,7 +931,7 @@ export function registerCoachRoutes(app: Express): void {
     }
   });
 
-  // PATCH /api/coach/provider  — update provider/model without changing key
+  // PATCH /api/coach/provider  — switch active provider/model (uses saved key for that provider)
   app.patch("/api/coach/provider", requireAuth, async (req: AuthRequest, res) => {
     try {
       const userId = req.user!.id;
@@ -932,20 +953,41 @@ export function registerCoachRoutes(app: Express): void {
         "UPDATE users SET ai_provider=$1, ai_model=$2 WHERE id=$3",
         [provider, resolvedModel, userId]
       );
-      res.json({ ok: true, provider, model: resolvedModel });
+
+      // Check if the target provider has a saved key
+      const keyColumn = provider === "openrouter"
+        ? "openrouter_api_key_encrypted"
+        : "groq_api_key_encrypted";
+      const keyRes = await pool.query(
+        `SELECT ${keyColumn} FROM users WHERE id=$1`,
+        [userId]
+      );
+      const hasKey = !!keyRes.rows[0]?.[keyColumn];
+
+      res.json({ ok: true, provider, model: resolvedModel, hasOwnKey: hasKey });
     } catch (err: any) {
       if (err.name === "ZodError") return res.status(400).json({ error: err.errors[0].message });
       res.status(500).json({ error: "Failed to update provider" });
     }
   });
 
-  // DELETE /api/coach/apikey
+  // DELETE /api/coach/apikey  — remove key for a specific provider (query ?provider=groq|openrouter)
   app.delete("/api/coach/apikey", requireAuth, async (req: AuthRequest, res) => {
     try {
-      await pool.query(
-        "UPDATE users SET groq_api_key_encrypted=NULL WHERE id=$1",
-        [req.user!.id]
-      );
+      const provider = (req.query.provider as string) || "";
+      const userId = req.user!.id;
+
+      if (provider === "groq") {
+        await pool.query("UPDATE users SET groq_api_key_encrypted=NULL WHERE id=$1", [userId]);
+      } else if (provider === "openrouter") {
+        await pool.query("UPDATE users SET openrouter_api_key_encrypted=NULL WHERE id=$1", [userId]);
+      } else {
+        // No provider specified — clear both (backward compat / "remove all")
+        await pool.query(
+          "UPDATE users SET groq_api_key_encrypted=NULL, openrouter_api_key_encrypted=NULL WHERE id=$1",
+          [userId]
+        );
+      }
       res.json({ ok: true });
     } catch (err: any) {
       res.status(500).json({ error: "Failed to remove API key" });
