@@ -932,7 +932,6 @@ export default function CoachPage() {
               const FALLBACK: Record<string, Array<{id:string;label:string}>> = {
                 groq: [
                   { id: "llama-3.1-8b-instant",    label: "Llama 3.1 8B Instant (recommended)" },
-                  { id: "gemma2-9b-it",             label: "Gemma 2 9B" },
                   { id: "mixtral-8x7b-32768",       label: "Mixtral 8x7B" },
                 ],
                 gemini: [

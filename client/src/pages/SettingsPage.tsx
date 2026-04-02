@@ -87,7 +87,7 @@ export default function SettingsPage() {
   const hasOwnKey: boolean   = !!(coachProfile as any)?.hasOwnKey;
 
   const PROVIDERS = [
-    { id: "groq"       as const, label: "Groq",          placeholder: "gsk_...",    url: "https://console.groq.com",             note: "Free tier — fast Llama 3.3 70B" },
+    { id: "groq"       as const, label: "Groq",          placeholder: "gsk_...",    url: "https://console.groq.com",             note: "Free tier — fast Llama 3.1 8B" },
     { id: "gemini"     as const, label: "Google Gemini",  placeholder: "AIza...",    url: "https://aistudio.google.com/apikey",  note: "Free — 1,500 requests/day" },
     { id: "openrouter" as const, label: "OpenRouter",     placeholder: "sk-or-v1-...", url: "https://openrouter.ai/keys",         note: "Free — access to many models" },
   ];

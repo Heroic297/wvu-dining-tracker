@@ -33,8 +33,9 @@ export const DEFAULT_MODELS: Record<string, string> = {
 // Curated free model catalog shown in the UI
 // Models removed from free tiers — getAiConfig auto-migrates users stuck on these
 const DEAD_MODELS = new Set([
-  // Groq models that hit persistent rate limits on the free tier
+  // Groq models that hit persistent rate limits or were deprecated on the free tier
   "llama-3.3-70b-versatile",  // frequently rate-limited — migrate to 8b-instant
+  "gemma2-9b-it",             // deprecated on Groq free tier — no longer available
   // Old IDs / removed from OpenRouter free tier — auto-migrate to provider default
   "deepseek/deepseek-r1:free",
   "microsoft/phi-4:free",
@@ -51,7 +52,6 @@ const DEAD_MODELS = new Set([
 export const FREE_MODEL_CATALOG: Record<string, Array<{ id: string; label: string; description: string }>> = {
   groq: [
     { id: "llama-3.1-8b-instant",    label: "Llama 3.1 8B Instant", description: "Fastest — almost never rate-limited, great for coaching (recommended)" },
-    { id: "gemma2-9b-it",            label: "Gemma 2 9B",           description: "Google compact model, reliable and fast" },
     { id: "mixtral-8x7b-32768",      label: "Mixtral 8x7B",         description: "Stronger reasoning, 32k context window" },
   ],
   gemini: [
@@ -863,7 +863,21 @@ export function registerCoachRoutes(app: Express): void {
       const row = keyRes.rows[0];
       const hasOwnKey = !!row?.groq_api_key_encrypted;
       const provider: Provider = (row?.ai_provider as Provider) || "groq";
-      const aiModel = row?.ai_model || DEFAULT_MODELS[provider];
+      const savedModel = row?.ai_model || "";
+
+      // Apply same dead-model / provider-mismatch resolution as getAiConfig
+      // so the profile always reflects the effective model the chat endpoint will use.
+      const isDead = savedModel && DEAD_MODELS.has(savedModel);
+      const isMismatch = savedModel && !isDead && !isValidModelForProvider(provider, savedModel);
+      const aiModel = (savedModel && !isDead && !isMismatch)
+        ? savedModel
+        : DEFAULT_MODELS[provider] || DEFAULT_MODELS.groq;
+
+      // Persist the migration so DB stays in sync
+      if (isDead || isMismatch) {
+        pool.query("UPDATE users SET ai_model=$1 WHERE id=$2", [aiModel, userId]).catch(() => {});
+      }
+
       const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
       const usageDate = row?.ai_daily_usage_date
         ? new Date(row.ai_daily_usage_date).toISOString().slice(0, 10)
