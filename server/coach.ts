@@ -27,7 +27,7 @@ const COMPACT_THRESHOLD = 20;
 export const DEFAULT_MODELS: Record<string, string> = {
   groq:       "llama-3.3-70b-versatile",
   gemini:     "gemini-2.0-flash",
-  openrouter: "qwen/qwen3.6-plus-preview:free",
+  openrouter: "qwen/qwen3.6-plus:free",
 };
 
 // Curated free model catalog shown in the UI
@@ -37,6 +37,10 @@ const DEAD_MODELS = new Set([
   "microsoft/phi-4:free",
   "qwen/qwen-2.5-72b-instruct:free",
   "google/gemini-2.0-flash-exp:free",
+  "qwen/qwen3.6-plus-preview:free",  // renamed to qwen3.6-plus:free
+  "stepfun/step-3.5-flash:free",     // removed from free tier
+  "openai/gpt-oss-120b:free",        // removed from free tier
+  "nvidia/nemotron-3-super-120b-a12b:free", // removed from free tier
   // Previously-set defaults that are rate-limited—migrate to qwen3.6
   "meta-llama/llama-3.3-70b-instruct:free",
   "nousresearch/hermes-3-llama-3.1-405b:free",
@@ -57,12 +61,10 @@ export const FREE_MODEL_CATALOG: Record<string, Array<{ id: string; label: strin
     { id: "gemini-1.5-flash-8b",     label: "Gemini 1.5 Flash 8B", description: "Lighter and faster, good for quick questions" },
   ],
   openrouter: [
-    { id: "qwen/qwen3.6-plus-preview:free",            label: "Qwen 3.6 Plus",      description: "1M context, tool calling — excellent reasoning (recommended)" },
-    { id: "minimax/minimax-m2.5:free",                 label: "MiniMax M2.5",       description: "196k context, tool calling — fast and capable" },
-    { id: "meta-llama/llama-3.3-70b-instruct:free",    label: "Llama 3.3 70B",      description: "65k context, tool calling — proven reliable" },
-    { id: "openai/gpt-oss-120b:free",                  label: "GPT OSS 120B",       description: "131k context, tool calling — OpenAI open-source" },
-    { id: "nvidia/nemotron-3-super-120b-a12b:free",    label: "Nemotron 120B",      description: "262k context, tool calling — NVIDIA large model" },
-    { id: "stepfun/step-3.5-flash:free",               label: "Step 3.5 Flash",     description: "256k context, tool calling — fast inference" },
+    { id: "qwen/qwen3.6-plus:free",                    label: "Qwen 3.6 Plus",      description: "1M context, tools — best all-around free model (recommended)" },
+    { id: "qwen/qwen3-coder:free",                     label: "Qwen3 Coder 480B",   description: "262k context, tools — massive 480B model, excellent reasoning" },
+    { id: "minimax/minimax-m2.5:free",                 label: "MiniMax M2.5",       description: "196k context, tools — fast and capable" },
+    { id: "qwen/qwen3-next-80b-a3b-instruct:free",     label: "Qwen3 80B",          description: "262k context, tools — strong instruction following" },
     { id: "nousresearch/hermes-3-llama-3.1-405b:free", label: "Hermes 3 405B",      description: "131k context — largest free model, no tool calling" },
     { id: "google/gemma-3-27b-it:free",                label: "Gemma 3 27B",        description: "131k context — Google model, no tool calling" },
   ],
@@ -586,7 +588,12 @@ async function callOpenAICompat(
   const effectiveTools = (isOpenRouter && OPENROUTER_NO_TOOLS.has(model)) ? [] : tools;
 
   const body: any = { model, messages, max_tokens: 1024, temperature: 0.7 };
-  if (effectiveTools.length > 0) { body.tools = effectiveTools; body.tool_choice = "auto"; }
+  // Some models (e.g. MiniMax) support tools but not tool_choice — send tools without it for those
+  const NO_TOOL_CHOICE = new Set(["minimax/minimax-m2.5:free", "minimax/minimax-m2.5"]);
+  if (effectiveTools.length > 0) {
+    body.tools = effectiveTools;
+    if (!NO_TOOL_CHOICE.has(model)) body.tool_choice = "auto";
+  }
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
