@@ -117,11 +117,18 @@ async function getAiConfig(userId: string): Promise<AiConfig> {
   const enc = row?.groq_api_key_encrypted;
   if (enc) {
     try {
-      return { provider, model, key: decryptString(enc), isOwn: true };
-    } catch { /* fall through */ }
+      const key = decryptString(enc);
+      console.log(`[coach] getAiConfig: provider=${provider} model=${model} key=${key.slice(0,8)}... isOwn=true`);
+      return { provider, model, key, isOwn: true };
+    } catch (decryptErr: any) {
+      console.error(`[coach] DECRYPTION FAILED for user ${userId}:`, decryptErr.message);
+      // Key is corrupt — treat as no key so user gets a clear error
+      return { provider: "groq", model: DEFAULT_MODELS.groq, key: "", isOwn: false };
+    }
   }
   // No own key — fall back to master Groq key
   const master = process.env.GROQ_API_KEY ?? "";
+  console.log(`[coach] getAiConfig: no own key, using master Groq key, provider=groq`);
   return { provider: "groq", model: DEFAULT_MODELS.groq, key: master, isOwn: false };
 }
 
@@ -699,6 +706,7 @@ async function callAI(
   messages: any[],
   tools: any[]
 ): Promise<any> {
+  console.log(`[coach] callAI: provider=${config.provider} model=${config.model} key=${config.key.slice(0,8)}...`);
   if (config.provider === "gemini") {
     return callGemini(config.key, config.model, messages, tools);
   }
