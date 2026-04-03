@@ -362,6 +362,8 @@ export const weightLog = pgTable(
     date: date("date").notNull(),
     weightKg: real("weight_kg").notNull(),
     notes: text("notes"),
+    /** "manual" (user-entered) or "garmin" (synced from Garmin) */
+    source: text("source").default("manual"),
     loggedAt: timestamp("logged_at").default(sql`now()`),
   },
   (t) => [uniqueIndex("weight_log_user_date").on(t.userId, t.date)]
@@ -473,6 +475,84 @@ export const chatMessages = pgTable(
 );
 
 export type ChatMessage = typeof chatMessages.$inferSelect;
+
+// ─── Garmin Session Tokens (unofficial garmin-connect library) ───────────────
+// Stores encrypted OAuth1/OAuth2 tokens from the garmin-connect library so
+// the user doesn't need to re-enter credentials on every visit.
+
+export const garminSessions = pgTable("garmin_sessions", {
+  id: varchar("id", { length: 36 })
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  userId: varchar("user_id", { length: 36 })
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" })
+    .unique(),
+  /** AES-256-GCM encrypted JSON blob of { oauth1, oauth2 } tokens */
+  encryptedTokens: text("encrypted_tokens").notNull(),
+  /** Status: connected | error | expired */
+  status: text("status").notNull().default("connected"),
+  lastSyncAt: timestamp("last_sync_at"),
+  lastError: text("last_error"),
+  createdAt: timestamp("created_at").default(sql`now()`),
+  updatedAt: timestamp("updated_at").default(sql`now()`),
+});
+
+export type GarminSession = typeof garminSessions.$inferSelect;
+
+// ─── Garmin Daily Summary (normalized wearable data) ─────────────────────────
+// One row per user per date. Stores the most useful fields from all Garmin
+// categories for display and coach context.
+
+export const garminDailySummary = pgTable(
+  "garmin_daily_summary",
+  {
+    id: varchar("id", { length: 36 })
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    userId: varchar("user_id", { length: 36 })
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    date: date("date").notNull(),
+    // Activity
+    totalSteps: integer("total_steps"),
+    caloriesBurned: integer("calories_burned"),
+    activeMinutes: integer("active_minutes"),
+    // Sleep
+    sleepDurationMin: integer("sleep_duration_min"),
+    deepSleepMin: integer("deep_sleep_min"),
+    lightSleepMin: integer("light_sleep_min"),
+    remSleepMin: integer("rem_sleep_min"),
+    awakeSleepMin: integer("awake_sleep_min"),
+    sleepScore: integer("sleep_score"),
+    // Heart rate
+    restingHeartRate: integer("resting_heart_rate"),
+    maxHeartRate: integer("max_heart_rate"),
+    // Stress / Body Battery / HRV
+    avgStress: integer("avg_stress"),
+    bodyBatteryHigh: integer("body_battery_high"),
+    bodyBatteryLow: integer("body_battery_low"),
+    avgOvernightHrv: real("avg_overnight_hrv"),
+    hrvStatus: text("hrv_status"),
+    // Weight / Body composition
+    weightKg: real("weight_kg"),
+    bodyFatPct: real("body_fat_pct"),
+    // Recent activities summary (JSON array of {name, type, durationMin, calories})
+    recentActivities: jsonb("recent_activities").$type<Array<{
+      name: string;
+      type: string;
+      durationMin: number;
+      calories: number;
+    }>>(),
+    // Raw payloads for debugging
+    rawPayload: jsonb("raw_payload"),
+    syncedAt: timestamp("synced_at").default(sql`now()`),
+  },
+  (t) => [uniqueIndex("garmin_daily_user_date").on(t.userId, t.date)]
+);
+
+export type GarminDailySummary = typeof garminDailySummary.$inferSelect;
+export type InsertGarminDailySummary = typeof garminDailySummary.$inferInsert;
 
 // ─── Sessions (express-session via pg) ───────────────────────────────────────
 

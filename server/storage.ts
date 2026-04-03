@@ -512,6 +512,7 @@ export class PgStorage implements IStorage {
         set: {
           weightKg: entry.weightKg,
           notes: entry.notes,
+          source: entry.source ?? "manual",
           loggedAt: sql`now()`,
         },
       })

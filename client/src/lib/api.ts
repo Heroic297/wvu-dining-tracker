@@ -82,6 +82,18 @@ export const api = {
   getActivity: (days?: number) =>
     apiRequest("GET", `/api/activity${days ? `?days=${days}` : ""}`),
 
+  // Garmin MVP
+  garminConnect: (email: string, password: string) =>
+    apiRequest("POST", "/api/garmin/connect", { email, password }),
+  garminStatus: (date?: string) =>
+    apiRequest("GET", `/api/garmin/status${date ? `?date=${date}` : ""}`),
+  garminSync: () =>
+    apiRequest("POST", "/api/garmin/sync"),
+  garminDisconnect: () =>
+    apiRequest("DELETE", "/api/garmin/disconnect"),
+  getEffectiveWeight: () =>
+    apiRequest("GET", "/api/weight/effective"),
+
   // AI Coach
   coachChat: (message: string) =>
     apiRequest("POST", "/api/coach/chat", { message }),

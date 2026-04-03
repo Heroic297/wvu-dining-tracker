@@ -138,6 +138,53 @@ async function runMigrations() {
     try {
       await pool.query(`ALTER TYPE nutrition_source ADD VALUE IF NOT EXISTS 'open_food_facts'`);
     } catch { /* already exists */ }
+
+    // ── Garmin MVP tables ──────────────────────────────────────────────────
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS garmin_sessions (
+        id              VARCHAR(36) PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id         VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE UNIQUE,
+        encrypted_tokens TEXT NOT NULL,
+        status          TEXT NOT NULL DEFAULT 'connected',
+        last_sync_at    TIMESTAMPTZ,
+        last_error      TEXT,
+        created_at      TIMESTAMPTZ DEFAULT now(),
+        updated_at      TIMESTAMPTZ DEFAULT now()
+      )
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS garmin_daily_summary (
+        id                  VARCHAR(36) PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id             VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        date                DATE NOT NULL,
+        total_steps         INTEGER,
+        calories_burned     INTEGER,
+        active_minutes      INTEGER,
+        sleep_duration_min  INTEGER,
+        deep_sleep_min      INTEGER,
+        light_sleep_min     INTEGER,
+        rem_sleep_min       INTEGER,
+        awake_sleep_min     INTEGER,
+        sleep_score         INTEGER,
+        resting_heart_rate  INTEGER,
+        max_heart_rate      INTEGER,
+        avg_stress          INTEGER,
+        body_battery_high   INTEGER,
+        body_battery_low    INTEGER,
+        avg_overnight_hrv   REAL,
+        hrv_status          TEXT,
+        weight_kg           REAL,
+        body_fat_pct        REAL,
+        recent_activities   JSONB,
+        raw_payload         JSONB,
+        synced_at           TIMESTAMPTZ DEFAULT now(),
+        UNIQUE(user_id, date)
+      )
+    `);
+    // Add source column to weight_log if missing
+    await pool.query(`
+      ALTER TABLE weight_log ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'manual'
+    `);
     console.log("[db] migrations complete");
   } catch (err: any) {
     console.error("[db] Migration error:", err.message);

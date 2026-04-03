@@ -15,6 +15,7 @@ import { scrapeLocationDate } from "./scraper.js";
 import { lookupNutrition } from "./nutrition.js";
 import { computeDailyTargets, analyzeWaterCut } from "./tdee.js";
 import { storage } from "./storage.js";
+import { getGarminCoachContext } from "./garmin.js";
 import { z } from "zod";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -337,7 +338,14 @@ async function buildLiveContext(userId: string, rawUser: any): Promise<string> {
     `--- END LIVE CONTEXT ---`,
   ].filter(Boolean).join("\n");
 
-  return lines;
+  // Append Garmin wearable data if connected and available (gated — only when detected)
+  let garminContext = "";
+  try {
+    const gc = await getGarminCoachContext(userId);
+    if (gc) garminContext = "\n" + gc;
+  } catch { /* non-fatal — coach works fine without wearable data */ }
+
+  return lines + garminContext;
 }
 
 // ─── System Prompt ────────────────────────────────────────────────────────────

@@ -5,19 +5,20 @@ import { useAuth } from "@/contexts/AuthContext";
 import { api } from "@/lib/api";
 import {
   LayoutDashboard, UtensilsCrossed, Clock, Target, Settings,
-  LogOut, Menu, X, Sun, Moon, Users, Brain,
+  LogOut, Menu, X, Sun, Moon, Users, Brain, Watch,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const OWNER_EMAIL = "owengidusko@gmail.com";
 
 const BASE_NAV = [
-  { href: "/",        label: "Dashboard", icon: LayoutDashboard },
-  { href: "/log",     label: "Log Meal",  icon: UtensilsCrossed  },
-  { href: "/history", label: "History",   icon: Clock            },
-  { href: "/plan",    label: "Diet Plan", icon: Target           },
-  { href: "/coach",   label: "Coach",     icon: Brain            },
-  { href: "/settings",label: "Settings",  icon: Settings         },
+  { href: "/",          label: "Dashboard",  icon: LayoutDashboard },
+  { href: "/log",       label: "Log Meal",   icon: UtensilsCrossed  },
+  { href: "/history",   label: "History",    icon: Clock            },
+  { href: "/plan",      label: "Diet Plan",  icon: Target           },
+  { href: "/wearables", label: "Wearables",  icon: Watch            },
+  { href: "/coach",     label: "Coach",      icon: Brain            },
+  { href: "/settings",  label: "Settings",   icon: Settings         },
 ];
 
 const OWNER_NAV = [
