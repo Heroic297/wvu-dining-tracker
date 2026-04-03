@@ -383,14 +383,6 @@ export default function WearablesPage() {
               />
             )}
 
-            {/* Body Battery */}
-            {summary.bodyBatteryHigh != null && (
-              <DataCard
-                icon={Battery} label="Body Battery" iconColor="text-cyan-400"
-                value={`${summary.bodyBatteryLow ?? "?"} – ${summary.bodyBatteryHigh}`}
-              />
-            )}
-
             {/* Stress */}
             {summary.avgStress != null && (
               <DataCard
@@ -419,29 +411,34 @@ export default function WearablesPage() {
             )}
           </div>
 
-          {/* Sleep breakdown */}
+          {/* Body Battery gauge */}
+          {summary.bodyBatteryHigh != null && (
+            <section className="bg-card border border-border rounded-xl p-4 space-y-2">
+              <h3 className="text-sm font-semibold flex items-center gap-2">
+                <Battery className="w-4 h-4 text-cyan-400" />
+                Body Battery
+              </h3>
+              <BodyBatteryGauge
+                low={summary.bodyBatteryLow ?? 0}
+                high={summary.bodyBatteryHigh}
+              />
+            </section>
+          )}
+
+          {/* Sleep breakdown — hypnogram */}
           {summary.sleepDurationMin != null && (summary.deepSleepMin || summary.remSleepMin || summary.lightSleepMin) && (
             <section className="bg-card border border-border rounded-xl p-4 space-y-3">
               <h3 className="text-sm font-semibold flex items-center gap-2">
                 <Moon className="w-4 h-4 text-indigo-400" />
                 Sleep Breakdown
               </h3>
-              <div className="flex gap-2">
-                {[
-                  { label: "Deep", min: summary.deepSleepMin, color: "bg-indigo-500" },
-                  { label: "Light", min: summary.lightSleepMin, color: "bg-blue-400" },
-                  { label: "REM", min: summary.remSleepMin, color: "bg-purple-400" },
-                  { label: "Awake", min: summary.awakeSleepMin, color: "bg-orange-300" },
-                ].filter(s => s.min && s.min > 0).map(stage => (
-                  <div key={stage.label} className="flex-1 text-center">
-                    <div className={`h-2 rounded-full ${stage.color} mb-1`} />
-                    <p className="text-xs font-medium">{stage.label}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {Math.floor((stage.min ?? 0) / 60)}h {(stage.min ?? 0) % 60}m
-                    </p>
-                  </div>
-                ))}
-              </div>
+              <SleepHypnogram
+                deepMin={summary.deepSleepMin ?? 0}
+                lightMin={summary.lightSleepMin ?? 0}
+                remMin={summary.remSleepMin ?? 0}
+                awakeMin={summary.awakeSleepMin ?? 0}
+                totalMin={summary.sleepDurationMin}
+              />
             </section>
           )}
 
@@ -513,5 +510,341 @@ function DataCard({
       <p className="text-lg font-semibold">{value}</p>
       {sub && <p className="text-[11px] text-muted-foreground">{sub}</p>}
     </div>
+  );
+}
+
+// --- Sleep Hypnogram ---
+
+type SleepStage = "awake" | "rem" | "light" | "deep";
+
+interface SleepSegment {
+  stage: SleepStage;
+  durationMin: number;
+}
+
+const STAGE_Y: Record<SleepStage, number> = { awake: 0, rem: 1, light: 2, deep: 3 };
+const STAGE_COLOR: Record<SleepStage, string> = {
+  awake: "#F59E0B",
+  rem: "#A78BFA",
+  light: "#60A5FA",
+  deep: "#7C3AED",
+};
+
+function generateSleepSegments(
+  deepMin: number,
+  lightMin: number,
+  remMin: number,
+  awakeMin: number,
+): SleepSegment[] {
+  const totalMin = deepMin + lightMin + remMin + awakeMin;
+  if (totalMin <= 0) return [];
+
+  // Number of ~90 min cycles
+  const numCycles = Math.max(1, Math.round(totalMin / 90));
+
+  // Distribute durations across cycles proportionally
+  const perCycle = {
+    deep: deepMin / numCycles,
+    light: lightMin / numCycles,
+    rem: remMin / numCycles,
+    awake: awakeMin / Math.max(1, numCycles - 1), // awake between cycles, not after last
+  };
+
+  const segments: SleepSegment[] = [];
+  let usedDeep = 0, usedLight = 0, usedRem = 0, usedAwake = 0;
+
+  for (let c = 0; c < numCycles; c++) {
+    const isLast = c === numCycles - 1;
+
+    // Each cycle: Light → Deep → Light → REM
+    // Deep sleep is more prominent in early cycles, REM in later cycles
+    const earlyFactor = 1 + (numCycles - 1 - c) * 0.3;
+    const lateFactor = 1 + c * 0.3;
+
+    const cycleLight1 = Math.round(perCycle.light * 0.4);
+    const cycleDeep = isLast
+      ? deepMin - usedDeep
+      : Math.round(perCycle.deep * earlyFactor);
+    const cycleLight2 = isLast
+      ? lightMin - usedLight - cycleLight1
+      : Math.round(perCycle.light * 0.6);
+    const cycleRem = isLast
+      ? remMin - usedRem
+      : Math.round(perCycle.rem * lateFactor);
+
+    if (cycleLight1 > 0) segments.push({ stage: "light", durationMin: cycleLight1 });
+    if (cycleDeep > 0) segments.push({ stage: "deep", durationMin: Math.max(1, cycleDeep) });
+    if (cycleLight2 > 0) segments.push({ stage: "light", durationMin: Math.max(1, cycleLight2) });
+    if (cycleRem > 0) segments.push({ stage: "rem", durationMin: Math.max(1, cycleRem) });
+
+    usedDeep += cycleDeep;
+    usedLight += cycleLight1 + cycleLight2;
+    usedRem += cycleRem;
+
+    // Brief awake between cycles (not after the last cycle)
+    if (!isLast && awakeMin > 0) {
+      const cycleAwake = isLast
+        ? awakeMin - usedAwake
+        : Math.round(perCycle.awake);
+      if (cycleAwake > 0) {
+        segments.push({ stage: "awake", durationMin: Math.max(1, cycleAwake) });
+        usedAwake += cycleAwake;
+      }
+    }
+  }
+
+  return segments;
+}
+
+function SleepHypnogram({
+  deepMin,
+  lightMin,
+  remMin,
+  awakeMin,
+  totalMin,
+}: {
+  deepMin: number;
+  lightMin: number;
+  remMin: number;
+  awakeMin: number;
+  totalMin: number;
+}) {
+  const segments = generateSleepSegments(deepMin, lightMin, remMin, awakeMin);
+  const sleepTotalMin = segments.reduce((s, seg) => s + seg.durationMin, 0);
+  if (sleepTotalMin <= 0) return null;
+
+  const svgW = 400;
+  const svgH = 120;
+  const padLeft = 42;
+  const padRight = 10;
+  const padTop = 8;
+  const padBottom = 22;
+  const chartW = svgW - padLeft - padRight;
+  const chartH = svgH - padTop - padBottom;
+
+  const stageLabels: { stage: SleepStage; label: string }[] = [
+    { stage: "awake", label: "Awake" },
+    { stage: "rem", label: "REM" },
+    { stage: "light", label: "Light" },
+    { stage: "deep", label: "Deep" },
+  ];
+
+  const yForStage = (stage: SleepStage) =>
+    padTop + (STAGE_Y[stage] / 3) * chartH;
+
+  // Build the stepped path + filled area
+  let pathD = "";
+  let fillD = "";
+  let x = padLeft;
+
+  segments.forEach((seg, i) => {
+    const w = (seg.durationMin / sleepTotalMin) * chartW;
+    const y = yForStage(seg.stage);
+    if (i === 0) {
+      pathD += `M ${x} ${y}`;
+      fillD += `M ${x} ${padTop + chartH}`;
+      fillD += ` L ${x} ${y}`;
+    } else {
+      pathD += ` L ${x} ${y}`;
+      fillD += ` L ${x} ${y}`;
+    }
+    pathD += ` L ${x + w} ${y}`;
+    fillD += ` L ${x + w} ${y}`;
+    x += w;
+  });
+  fillD += ` L ${x} ${padTop + chartH} Z`;
+
+  // Time labels along x-axis
+  // Assume sleep starts around 11PM for display purposes
+  const startHour = 23; // 11 PM
+  const timeLabels: { label: string; x: number }[] = [];
+  const hourSpan = sleepTotalMin / 60;
+  // Show labels every ~2 hours
+  const step = hourSpan > 8 ? 2 : hourSpan > 4 ? 1.5 : 1;
+  for (let h = 0; h <= hourSpan; h += step) {
+    const absHour = (startHour + h) % 24;
+    const ampm = absHour >= 12 ? "AM" : (absHour < 12 && absHour >= 0 ? "AM" : "PM");
+    const displayHour = absHour === 0 ? 12 : absHour > 12 ? absHour - 12 : absHour;
+    // Correctly determine AM/PM
+    const isPM = absHour >= 12 && absHour < 24;
+    const label = `${displayHour}${isPM ? "PM" : "AM"}`;
+    const px = padLeft + (h / (sleepTotalMin / 60)) * chartW;
+    timeLabels.push({ label, x: px });
+  }
+
+  const fmtDur = (m: number) => `${Math.floor(m / 60)}h ${m % 60}m`;
+
+  return (
+    <div className="space-y-3">
+      <svg
+        viewBox={`0 0 ${svgW} ${svgH}`}
+        className="w-full"
+        style={{ height: 140 }}
+        preserveAspectRatio="none"
+      >
+        {/* Gradient fill under the step line */}
+        <defs>
+          <linearGradient id="sleepFillGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#A78BFA" stopOpacity="0.25" />
+            <stop offset="100%" stopColor="#7C3AED" stopOpacity="0.05" />
+          </linearGradient>
+        </defs>
+        <path d={fillD} fill="url(#sleepFillGrad)" />
+
+        {/* Colored segments */}
+        {(() => {
+          let sx = padLeft;
+          return segments.map((seg, i) => {
+            const w = (seg.durationMin / sleepTotalMin) * chartW;
+            const y = yForStage(seg.stage);
+            const prevY = i > 0 ? yForStage(segments[i - 1].stage) : y;
+            const el = (
+              <g key={i}>
+                {/* Vertical transition line */}
+                {i > 0 && prevY !== y && (
+                  <line
+                    x1={sx} y1={prevY} x2={sx} y2={y}
+                    stroke={STAGE_COLOR[seg.stage]} strokeWidth="2" strokeOpacity="0.7"
+                  />
+                )}
+                {/* Horizontal stage line */}
+                <line
+                  x1={sx} y1={y} x2={sx + w} y2={y}
+                  stroke={STAGE_COLOR[seg.stage]} strokeWidth="2.5"
+                />
+              </g>
+            );
+            sx += w;
+            return el;
+          });
+        })()}
+
+        {/* Y-axis labels */}
+        {stageLabels.map(({ stage, label }) => (
+          <text
+            key={stage}
+            x={padLeft - 4}
+            y={yForStage(stage) + 3.5}
+            textAnchor="end"
+            fontSize="8"
+            fill="#9CA3AF"
+          >
+            {label}
+          </text>
+        ))}
+
+        {/* X-axis time labels */}
+        {timeLabels.map((t, i) => (
+          <text
+            key={i}
+            x={t.x}
+            y={svgH - 4}
+            textAnchor="middle"
+            fontSize="8"
+            fill="#9CA3AF"
+          >
+            {t.label}
+          </text>
+        ))}
+
+        {/* Subtle horizontal grid lines */}
+        {stageLabels.map(({ stage }) => (
+          <line
+            key={stage}
+            x1={padLeft} y1={yForStage(stage)}
+            x2={padLeft + chartW} y2={yForStage(stage)}
+            stroke="#374151" strokeWidth="0.5" strokeDasharray="3 3"
+          />
+        ))}
+      </svg>
+
+      {/* Duration labels below chart */}
+      <div className="flex gap-4 flex-wrap">
+        {[
+          { label: "Deep", min: deepMin, color: "bg-violet-600" },
+          { label: "Light", min: lightMin, color: "bg-blue-400" },
+          { label: "REM", min: remMin, color: "bg-purple-400" },
+          { label: "Awake", min: awakeMin, color: "bg-amber-400" },
+        ]
+          .filter((s) => s.min > 0)
+          .map((s) => (
+            <div key={s.label} className="flex items-center gap-1.5">
+              <span className={`w-2 h-2 rounded-full ${s.color}`} />
+              <span className="text-xs text-muted-foreground">
+                {s.label}: {fmtDur(s.min)}
+              </span>
+            </div>
+          ))}
+      </div>
+    </div>
+  );
+}
+
+// --- Body Battery Gauge ---
+
+function BodyBatteryGauge({ low, high }: { low: number; high: number }) {
+  const svgW = 320;
+  const svgH = 48;
+  const barY = 16;
+  const barH = 10;
+  const barX = 10;
+  const barW = svgW - 20;
+
+  const pctLow = Math.max(0, Math.min(100, low)) / 100;
+  const pctHigh = Math.max(0, Math.min(100, high)) / 100;
+
+  const lowX = barX + pctLow * barW;
+  const highX = barX + pctHigh * barW;
+
+  return (
+    <svg
+      viewBox={`0 0 ${svgW} ${svgH}`}
+      className="w-full"
+      style={{ height: 52 }}
+      preserveAspectRatio="xMidYMid meet"
+    >
+      <defs>
+        <linearGradient id="bbGrad" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%" stopColor="#EF4444" />
+          <stop offset="35%" stopColor="#F59E0B" />
+          <stop offset="65%" stopColor="#84CC16" />
+          <stop offset="100%" stopColor="#22C55E" />
+        </linearGradient>
+        <clipPath id="bbClip">
+          <rect x={barX} y={barY} width={barW} height={barH} rx={5} />
+        </clipPath>
+      </defs>
+
+      {/* Background bar (dimmed) */}
+      <rect
+        x={barX} y={barY} width={barW} height={barH} rx={5}
+        fill="url(#bbGrad)" opacity={0.2}
+      />
+
+      {/* Highlighted range segment */}
+      <rect
+        x={lowX} y={barY}
+        width={Math.max(0, highX - lowX)} height={barH}
+        fill="url(#bbGrad)"
+        clipPath="url(#bbClip)"
+        rx={0}
+      />
+
+      {/* Low marker */}
+      <circle cx={lowX} cy={barY + barH / 2} r={5} fill="#1F2937" stroke="#9CA3AF" strokeWidth={1.5} />
+      <text x={lowX} y={barY + barH + 14} textAnchor="middle" fontSize="9" fontWeight="600" fill="#F87171">
+        {low}
+      </text>
+
+      {/* High marker */}
+      <circle cx={highX} cy={barY + barH / 2} r={5} fill="#1F2937" stroke="#9CA3AF" strokeWidth={1.5} />
+      <text x={highX} y={barY + barH + 14} textAnchor="middle" fontSize="9" fontWeight="600" fill="#4ADE80">
+        {high}
+      </text>
+
+      {/* Scale labels 0 and 100 */}
+      <text x={barX} y={barY - 4} textAnchor="start" fontSize="8" fill="#6B7280">0</text>
+      <text x={barX + barW} y={barY - 4} textAnchor="end" fontSize="8" fill="#6B7280">100</text>
+    </svg>
   );
 }
