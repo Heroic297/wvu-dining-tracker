@@ -527,26 +527,16 @@ function DataCard({
 
 // --- Sleep Hypnogram ---
 
-import {
-  AreaChart,
-  Area,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-} from "recharts";
+import { ResponsiveContainer } from "recharts";
+import { useCallback, useRef } from "react";
 
 type SleepStage = "awake" | "rem" | "light" | "deep";
 
-/** Numeric value for Y-axis: higher = lighter sleep (awake on top, deep on bottom) */
-const STAGE_VALUE: Record<SleepStage, number> = { deep: 0, light: 1, rem: 2, awake: 3 };
-const STAGE_LABEL: Record<number, string> = { 0: "Deep", 1: "Light", 2: "REM", 3: "Awake" };
 const STAGE_COLOR: Record<SleepStage, string> = {
-  deep: "#7C3AED",
-  light: "#60A5FA",
-  rem: "#A78BFA",
-  awake: "#F59E0B",
+  deep: "#6D28D9",
+  light: "#818CF8",
+  rem: "#2DD4BF",
+  awake: "#F472B6",
 };
 
 /** Map Garmin activityLevel to a sleep stage */
@@ -585,18 +575,20 @@ function fmtLocalTime(epochMs: number): string {
   });
 }
 
+interface SleepSegment {
+  startMs: number;
+  endMs: number;
+  stage: SleepStage;
+}
+
 /**
- * Build chart data points from real sleepLevels.
- * Converts GMT ISO timestamps to local epoch ms for proper display.
- * The Garmin startGMT strings like "2026-04-03T02:07:32.0" are UTC.
+ * Build segment data from real sleepLevels.
+ * The Garmin startGMT strings like "2026-04-03T02:07:32.0" are UTC but LACK "Z".
  */
-function buildRealChartData(
-  sleepLevels: SleepLevel[],
-): { time: number; stage: SleepStage; value: number }[] {
-  const points: { time: number; stage: SleepStage; value: number }[] = [];
+function buildRealSegments(sleepLevels: SleepLevel[]): SleepSegment[] {
+  const segments: SleepSegment[] = [];
 
   for (const level of sleepLevels) {
-    // Parse as UTC — these are GMT timestamps
     const startStr = level.startGMT.endsWith("Z") ? level.startGMT : level.startGMT + "Z";
     const endStr = level.endGMT.endsWith("Z") ? level.endGMT : level.endGMT + "Z";
     const startMs = new Date(startStr).getTime();
@@ -604,30 +596,24 @@ function buildRealChartData(
     if (isNaN(startMs) || isNaN(endMs) || endMs <= startMs) continue;
 
     const stage = activityLevelToStage(level.activityLevel);
-    const value = STAGE_VALUE[stage];
-
-    // Add start and end points for this segment (step-after style)
-    points.push({ time: startMs, stage, value });
-    points.push({ time: endMs, stage, value });
+    segments.push({ startMs, endMs, stage });
   }
 
-  points.sort((a, b) => a.time - b.time);
-  return points;
+  segments.sort((a, b) => a.startMs - b.startMs);
+  return segments;
 }
 
 /**
- * Build simulated chart data from duration totals (fallback).
- * Uses sleepStartLocal/sleepEndLocal if available, otherwise estimates.
+ * Build simulated segments from duration totals (fallback when sleepLevels is null/empty).
  */
-function buildSimulatedChartData(
+function buildSimulatedSegments(
   deepMin: number,
   lightMin: number,
   remMin: number,
   awakeMin: number,
   totalMin: number,
   sleepStartLocal?: number,
-  sleepEndLocal?: number,
-): { time: number; stage: SleepStage; value: number }[] {
+): SleepSegment[] {
   const sumMin = deepMin + lightMin + remMin + awakeMin;
   if (sumMin <= 0) return [];
 
@@ -639,7 +625,7 @@ function buildSimulatedChartData(
     awake: awakeMin / Math.max(1, numCycles - 1),
   };
 
-  const segments: { stage: SleepStage; durationMin: number }[] = [];
+  const rawSegs: { stage: SleepStage; durationMin: number }[] = [];
   let usedDeep = 0, usedLight = 0, usedRem = 0;
 
   for (let c = 0; c < numCycles; c++) {
@@ -652,10 +638,10 @@ function buildSimulatedChartData(
     const cycleLight2 = isLast ? lightMin - usedLight - cycleLight1 : Math.round(perCycle.light * 0.6);
     const cycleRem = isLast ? remMin - usedRem : Math.round(perCycle.rem * lateFactor);
 
-    if (cycleLight1 > 0) segments.push({ stage: "light", durationMin: cycleLight1 });
-    if (cycleDeep > 0) segments.push({ stage: "deep", durationMin: Math.max(1, cycleDeep) });
-    if (cycleLight2 > 0) segments.push({ stage: "light", durationMin: Math.max(1, cycleLight2) });
-    if (cycleRem > 0) segments.push({ stage: "rem", durationMin: Math.max(1, cycleRem) });
+    if (cycleLight1 > 0) rawSegs.push({ stage: "light", durationMin: cycleLight1 });
+    if (cycleDeep > 0) rawSegs.push({ stage: "deep", durationMin: Math.max(1, cycleDeep) });
+    if (cycleLight2 > 0) rawSegs.push({ stage: "light", durationMin: Math.max(1, cycleLight2) });
+    if (cycleRem > 0) rawSegs.push({ stage: "rem", durationMin: Math.max(1, cycleRem) });
 
     usedDeep += cycleDeep;
     usedLight += cycleLight1 + cycleLight2;
@@ -663,47 +649,33 @@ function buildSimulatedChartData(
 
     if (!isLast && awakeMin > 0) {
       const cycleAwake = Math.round(perCycle.awake);
-      if (cycleAwake > 0) segments.push({ stage: "awake", durationMin: Math.max(1, cycleAwake) });
+      if (cycleAwake > 0) rawSegs.push({ stage: "awake", durationMin: Math.max(1, cycleAwake) });
     }
   }
 
-  // Convert segments to timestamped points
   let startMs: number;
   if (sleepStartLocal) {
     startMs = sleepStartLocal;
   } else {
-    // Estimate: assume wake at 7AM today, backtrack by totalMin
     const now = new Date();
     const wake = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 7, 0, 0);
     startMs = wake.getTime() - totalMin * 60000;
   }
 
-  const points: { time: number; stage: SleepStage; value: number }[] = [];
+  const segments: SleepSegment[] = [];
   let cursor = startMs;
-  for (const seg of segments) {
+  for (const seg of rawSegs) {
     const endMs = cursor + seg.durationMin * 60000;
-    points.push({ time: cursor, stage: seg.stage, value: STAGE_VALUE[seg.stage] });
-    points.push({ time: endMs, stage: seg.stage, value: STAGE_VALUE[seg.stage] });
+    segments.push({ startMs: cursor, endMs, stage: seg.stage });
     cursor = endMs;
   }
-  return points;
+  return segments;
 }
 
-/** Custom tooltip for the sleep chart */
-function SleepTooltipContent({ active, payload }: any) {
-  if (!active || !payload?.[0]) return null;
-  const data = payload[0].payload;
-  const stage = data.stage as SleepStage;
-  return (
-    <div className="bg-card border border-border rounded-lg px-3 py-2 shadow-lg">
-      <p className="text-xs text-muted-foreground">{fmtLocalTime(data.time)}</p>
-      <p className="text-sm font-medium" style={{ color: STAGE_COLOR[stage] }}>
-        {stage.charAt(0).toUpperCase() + stage.slice(1)}
-        {stage === "rem" ? " Sleep" : stage === "awake" ? "" : " Sleep"}
-      </p>
-    </div>
-  );
-}
+/** Stage row index: Awake=0 (top), REM=1, Light=2, Deep=3 (bottom) */
+const STAGE_ROW: Record<SleepStage, number> = { awake: 0, rem: 1, light: 2, deep: 3 };
+const ROW_LABELS = ["Awake", "REM", "Light", "Deep"];
+const NUM_ROWS = 4;
 
 function SleepHypnogram({
   deepMin,
@@ -713,7 +685,6 @@ function SleepHypnogram({
   totalMin,
   sleepLevels,
   sleepStartLocal,
-  sleepEndLocal,
 }: {
   deepMin: number;
   lightMin: number;
@@ -724,111 +695,138 @@ function SleepHypnogram({
   sleepStartLocal?: number;
   sleepEndLocal?: number;
 }) {
-  // Build chart data from real or simulated sources
-  let chartData: { time: number; stage: SleepStage; value: number }[] = [];
+  const [tooltip, setTooltip] = useState<{
+    x: number;
+    y: number;
+    stage: SleepStage;
+    startMs: number;
+    endMs: number;
+  } | null>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
+
+  // Build segments from real data or simulated fallback
+  let segments: SleepSegment[] = [];
 
   if (sleepLevels && sleepLevels.length > 0) {
-    chartData = buildRealChartData(sleepLevels);
+    segments = buildRealSegments(sleepLevels);
   }
 
-  if (chartData.length === 0) {
-    chartData = buildSimulatedChartData(
-      deepMin, lightMin, remMin, awakeMin, totalMin,
-      sleepStartLocal, sleepEndLocal,
+  if (segments.length === 0) {
+    segments = buildSimulatedSegments(
+      deepMin, lightMin, remMin, awakeMin, totalMin, sleepStartLocal,
     );
   }
 
-  if (chartData.length === 0) return null;
+  if (segments.length === 0) return null;
 
-  // Compute X-axis tick values (hourly clock times)
-  const minTime = chartData[0].time;
-  const maxTime = chartData[chartData.length - 1].time;
-  const floorHour = new Date(minTime);
+  const timeMin = segments[0].startMs;
+  const timeMax = segments[segments.length - 1].endMs;
+  const timeSpan = timeMax - timeMin;
+
+  // X-axis ticks (hourly)
+  const floorHour = new Date(timeMin);
   floorHour.setMinutes(0, 0, 0);
-  const ceilHour = new Date(maxTime);
+  const ceilHour = new Date(timeMax);
   if (ceilHour.getMinutes() > 0 || ceilHour.getSeconds() > 0) {
     ceilHour.setHours(ceilHour.getHours() + 1, 0, 0, 0);
   }
-
   const spanHrs = (ceilHour.getTime() - floorHour.getTime()) / 3600000;
   const hourStep = spanHrs > 9 ? 2 : 1;
   const ticks: number[] = [];
   for (let h = 0; h <= spanHrs; h += hourStep) {
     const t = floorHour.getTime() + h * 3600000;
-    if (t >= minTime - 1800000 && t <= maxTime + 1800000) ticks.push(t);
+    if (t >= timeMin - 1800000 && t <= timeMax + 1800000) ticks.push(t);
   }
+
+  // Layout constants
+  const marginLeft = 48;
+  const marginRight = 8;
+  const marginTop = 4;
+  const marginBottom = 20;
+  const chartHeight = 136;
+  const rowHeight = chartHeight / NUM_ROWS;
+
+  const handleMouseMove = useCallback(
+    (e: React.MouseEvent<SVGSVGElement>) => {
+      const svg = svgRef.current;
+      if (!svg) return;
+      const rect = svg.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const chartW = rect.width - marginLeft - marginRight;
+      const relX = x - marginLeft;
+      if (relX < 0 || relX > chartW) { setTooltip(null); return; }
+      const hoverMs = timeMin + (relX / chartW) * timeSpan;
+      const seg = segments.find((s) => hoverMs >= s.startMs && hoverMs < s.endMs);
+      if (seg) {
+        setTooltip({ x, y, stage: seg.stage, startMs: seg.startMs, endMs: seg.endMs });
+      } else {
+        setTooltip(null);
+      }
+    },
+    [segments, timeMin, timeSpan],
+  );
+
+  const handleMouseLeave = useCallback(() => setTooltip(null), []);
 
   return (
     <div className="space-y-3">
-      <div style={{ width: "100%", height: 160 }}>
+      <div style={{ width: "100%", height: 160, position: "relative" }}>
         <ResponsiveContainer width="100%" height="100%">
-          <AreaChart
-            data={chartData}
-            margin={{ top: 4, right: 8, left: -12, bottom: 0 }}
-          >
-            <defs>
-              <linearGradient id="sleepGradient" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#A78BFA" stopOpacity={0.3} />
-                <stop offset="50%" stopColor="#7C3AED" stopOpacity={0.15} />
-                <stop offset="100%" stopColor="#7C3AED" stopOpacity={0.05} />
-              </linearGradient>
-            </defs>
-            <CartesianGrid
-              strokeDasharray="3 3"
-              stroke="#374151"
-              strokeOpacity={0.4}
-              horizontal={true}
-              vertical={false}
-            />
-            <XAxis
-              dataKey="time"
-              type="number"
-              domain={[minTime, maxTime]}
-              ticks={ticks}
-              tickFormatter={(v: number) => fmtLocalHour(v)}
-              tick={{ fontSize: 11, fill: "#9CA3AF" }}
-              axisLine={{ stroke: "#374151" }}
-              tickLine={false}
-            />
-            <YAxis
-              type="number"
-              domain={[-0.2, 3.2]}
-              ticks={[0, 1, 2, 3]}
-              tickFormatter={(v: number) => STAGE_LABEL[v] ?? ""}
-              tick={{ fontSize: 11, fill: "#9CA3AF" }}
-              axisLine={false}
-              tickLine={false}
-              width={44}
-              reversed
-            />
-            <Tooltip
-              content={<SleepTooltipContent />}
-              cursor={{ stroke: "#6B7280", strokeWidth: 1, strokeDasharray: "3 3" }}
-            />
-            <Area
-              type="stepAfter"
-              dataKey="value"
-              stroke="#A78BFA"
-              strokeWidth={2}
-              fill="url(#sleepGradient)"
-              isAnimationActive={false}
-            />
-          </AreaChart>
+          {/* Use a wrapper to get the rendered dimensions */}
+          <SleepSvgChart
+            segments={segments}
+            timeMin={timeMin}
+            timeMax={timeMax}
+            timeSpan={timeSpan}
+            ticks={ticks}
+            marginLeft={marginLeft}
+            marginRight={marginRight}
+            marginTop={marginTop}
+            marginBottom={marginBottom}
+            chartHeight={chartHeight}
+            rowHeight={rowHeight}
+            svgRef={svgRef}
+            onMouseMove={handleMouseMove}
+            onMouseLeave={handleMouseLeave}
+          />
         </ResponsiveContainer>
+        {tooltip && (
+          <div
+            className="bg-card border border-border rounded-lg px-3 py-2 shadow-lg pointer-events-none"
+            style={{
+              position: "absolute",
+              left: Math.min(tooltip.x + 12, 220),
+              top: Math.max(tooltip.y - 48, 0),
+              zIndex: 50,
+            }}
+          >
+            <p className="text-xs text-muted-foreground">
+              {fmtLocalTime(tooltip.startMs)} – {fmtLocalTime(tooltip.endMs)}
+            </p>
+            <p className="text-sm font-medium" style={{ color: STAGE_COLOR[tooltip.stage] }}>
+              {tooltip.stage === "rem" ? "REM" : tooltip.stage.charAt(0).toUpperCase() + tooltip.stage.slice(1)}
+              {tooltip.stage === "rem" ? " Sleep" : tooltip.stage === "awake" ? "" : " Sleep"}
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Duration labels below chart */}
       <div className="flex gap-4 flex-wrap">
-        {[
-          { label: "Deep", min: deepMin, color: "bg-violet-600" },
-          { label: "Light", min: lightMin, color: "bg-blue-400" },
-          { label: "REM", min: remMin, color: "bg-purple-400" },
-          { label: "Awake", min: awakeMin, color: "bg-amber-400" },
-        ]
+        {([
+          { label: "Deep", min: deepMin, stage: "deep" as SleepStage },
+          { label: "Light", min: lightMin, stage: "light" as SleepStage },
+          { label: "REM", min: remMin, stage: "rem" as SleepStage },
+          { label: "Awake", min: awakeMin, stage: "awake" as SleepStage },
+        ])
           .filter((s) => s.min > 0)
           .map((s) => (
             <div key={s.label} className="flex items-center gap-1.5">
-              <span className={`w-2 h-2 rounded-full ${s.color}`} />
+              <span
+                className="w-2 h-2 rounded-full"
+                style={{ backgroundColor: STAGE_COLOR[s.stage] }}
+              />
               <span className="text-xs text-muted-foreground">
                 {s.label}: {fmtDur(s.min)}
               </span>
@@ -836,6 +834,133 @@ function SleepHypnogram({
           ))}
       </div>
     </div>
+  );
+}
+
+/** Inner SVG chart rendered inside ResponsiveContainer */
+function SleepSvgChart({
+  segments,
+  timeMin,
+  timeSpan,
+  ticks,
+  marginLeft,
+  marginRight,
+  marginTop,
+  marginBottom,
+  chartHeight,
+  rowHeight,
+  svgRef,
+  onMouseMove,
+  onMouseLeave,
+  width,
+  height,
+}: {
+  segments: SleepSegment[];
+  timeMin: number;
+  timeMax: number;
+  timeSpan: number;
+  ticks: number[];
+  marginLeft: number;
+  marginRight: number;
+  marginTop: number;
+  marginBottom: number;
+  chartHeight: number;
+  rowHeight: number;
+  svgRef: React.Ref<SVGSVGElement>;
+  onMouseMove: (e: React.MouseEvent<SVGSVGElement>) => void;
+  onMouseLeave: () => void;
+  width?: number;
+  height?: number;
+}) {
+  const svgW = width ?? 300;
+  const svgH = height ?? 160;
+  const plotW = svgW - marginLeft - marginRight;
+
+  return (
+    <svg
+      ref={svgRef}
+      width={svgW}
+      height={svgH}
+      onMouseMove={onMouseMove}
+      onMouseLeave={onMouseLeave}
+      style={{ overflow: "visible" }}
+    >
+      <defs>
+        <clipPath id="chart-clip">
+          <rect x={marginLeft} y={marginTop} width={plotW} height={chartHeight} />
+        </clipPath>
+      </defs>
+
+      {/* Horizontal grid lines between rows */}
+      {[0, 1, 2, 3, 4].map((i) => (
+        <line
+          key={`grid-${i}`}
+          x1={marginLeft}
+          y1={marginTop + i * rowHeight}
+          x2={marginLeft + plotW}
+          y2={marginTop + i * rowHeight}
+          stroke="#374151"
+          strokeOpacity={0.4}
+          strokeDasharray="3 3"
+        />
+      ))}
+
+      {/* Y-axis labels: Awake, REM, Light, Deep */}
+      {ROW_LABELS.map((label, i) => (
+        <text
+          key={`ylabel-${i}`}
+          x={marginLeft - 6}
+          y={marginTop + i * rowHeight + rowHeight / 2}
+          textAnchor="end"
+          dominantBaseline="central"
+          fill="#9CA3AF"
+          fontSize={11}
+        >
+          {label}
+        </text>
+      ))}
+
+      {/* Sleep segment bars — cascading: bar fills from stage row DOWN to bottom */}
+      <g clipPath="url(#chart-clip)">
+        {segments.map((seg, i) => {
+          const x = marginLeft + ((seg.startMs - timeMin) / timeSpan) * plotW;
+          const w = Math.max(1, ((seg.endMs - seg.startMs) / timeSpan) * plotW);
+          const topRow = STAGE_ROW[seg.stage]; // 0=awake, 1=rem, 2=light, 3=deep
+          const barY = marginTop + topRow * rowHeight;
+          const barH = (NUM_ROWS - topRow) * rowHeight;
+          return (
+            <rect
+              key={i}
+              x={x}
+              y={barY}
+              width={w}
+              height={barH + 3}
+              rx={3}
+              ry={3}
+              fill={STAGE_COLOR[seg.stage]}
+            />
+          );
+        })}
+      </g>
+
+      {/* X-axis tick labels */}
+      {ticks.map((t) => {
+        const x = marginLeft + ((t - timeMin) / timeSpan) * plotW;
+        if (x < marginLeft || x > marginLeft + plotW) return null;
+        return (
+          <text
+            key={`xtick-${t}`}
+            x={x}
+            y={marginTop + chartHeight + 14}
+            textAnchor="middle"
+            fill="#9CA3AF"
+            fontSize={11}
+          >
+            {fmtLocalHour(t)}
+          </text>
+        );
+      })}
+    </svg>
   );
 }
 
