@@ -300,6 +300,15 @@ async function syncGarminDataDI(
       summary.avgStress = s.avgSleepStress ? Math.round(s.avgSleepStress) : null;
       categories.push("sleep");
       rawPayload.sleep = s;
+      // Store sleepLevels (timestamped stage transitions) — lives at root, not inside dailySleepDTO
+      if (Array.isArray(data.sleepLevels) && data.sleepLevels.length > 0) {
+        rawPayload.sleepLevels = data.sleepLevels;
+      }
+      // Store sleep start/end timestamps for accurate time display
+      if (s.sleepStartTimestampGMT) rawPayload.sleepStartGMT = s.sleepStartTimestampGMT;
+      if (s.sleepEndTimestampGMT) rawPayload.sleepEndGMT = s.sleepEndTimestampGMT;
+      if (s.sleepStartTimestampLocal) rawPayload.sleepStartLocal = s.sleepStartTimestampLocal;
+      if (s.sleepEndTimestampLocal) rawPayload.sleepEndLocal = s.sleepEndTimestampLocal;
     }
     // HRV from sleep
     if (data?.avgOvernightHrv) {
@@ -551,6 +560,15 @@ export async function syncGarminData(
       summary.avgStress = s.avgSleepStress ? Math.round(s.avgSleepStress) : null;
       categories.push("sleep");
       rawPayload.sleep = s;
+      // Store sleepLevels (timestamped stage transitions) — lives at root, not inside dailySleepDTO
+      if (Array.isArray(sleep.sleepLevels) && sleep.sleepLevels.length > 0) {
+        rawPayload.sleepLevels = sleep.sleepLevels;
+      }
+      // Store sleep start/end timestamps for accurate time display
+      if (s.sleepStartTimestampGMT) rawPayload.sleepStartGMT = s.sleepStartTimestampGMT;
+      if (s.sleepEndTimestampGMT) rawPayload.sleepEndGMT = s.sleepEndTimestampGMT;
+      if (s.sleepStartTimestampLocal) rawPayload.sleepStartLocal = s.sleepStartTimestampLocal;
+      if (s.sleepEndTimestampLocal) rawPayload.sleepEndLocal = s.sleepEndTimestampLocal;
     }
     // HRV and body battery from sleep data
     if (sleep?.avgOvernightHrv) {
@@ -813,15 +831,27 @@ export async function getGarminSummary(
   const row = res.rows[0];
   if (!row) return null;
 
-  // Extract sleepLevels from raw_payload for the hypnogram
+  // Extract sleepLevels and sleep timestamps from raw_payload for the hypnogram
   let sleepLevels: Array<{ startGMT: string; endGMT: string; activityLevel: number }> | null = null;
+  let sleepStartLocal: number | null = null;
+  let sleepEndLocal: number | null = null;
   try {
     const raw = typeof row.raw_payload === "string" ? JSON.parse(row.raw_payload) : row.raw_payload;
-    if (raw?.sleep?.sleepLevels && Array.isArray(raw.sleep.sleepLevels)) {
+    // sleepLevels is stored at raw_payload.sleepLevels (root-level, sibling of sleep/dailySleepDTO)
+    if (raw?.sleepLevels && Array.isArray(raw.sleepLevels) && raw.sleepLevels.length > 0) {
+      sleepLevels = raw.sleepLevels;
+    }
+    // Fallback: check inside sleep object (older payloads may have stored it there)
+    if (!sleepLevels && raw?.sleep?.sleepLevels && Array.isArray(raw.sleep.sleepLevels)) {
       sleepLevels = raw.sleep.sleepLevels;
     }
+    // Sleep start/end local timestamps (epoch ms)
+    if (raw?.sleepStartLocal) sleepStartLocal = raw.sleepStartLocal;
+    else if (raw?.sleep?.sleepStartTimestampLocal) sleepStartLocal = raw.sleep.sleepStartTimestampLocal;
+    if (raw?.sleepEndLocal) sleepEndLocal = raw.sleepEndLocal;
+    else if (raw?.sleep?.sleepEndTimestampLocal) sleepEndLocal = raw.sleep.sleepEndTimestampLocal;
   } catch {
-    // raw_payload missing or malformed — sleepLevels stays null
+    // raw_payload missing or malformed
   }
 
   return {
@@ -846,6 +876,8 @@ export async function getGarminSummary(
     bodyFatPct: row.body_fat_pct,
     recentActivities: row.recent_activities,
     sleepLevels,
+    sleepStartLocal,
+    sleepEndLocal,
     syncedAt: row.synced_at?.toISOString() ?? null,
   };
 }
