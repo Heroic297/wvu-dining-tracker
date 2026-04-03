@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { Link } from "wouter";
 import { useAuth } from "@/contexts/AuthContext";
 import { api, lbsToKg, kgToLbs } from "@/lib/api";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -9,13 +10,13 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { CheckCircle, XCircle, Loader2, Dumbbell, Activity, Scale, RefreshCw, Droplets, Plus, Trash2, Brain, Eye, EyeOff, Globe } from "lucide-react";
+import { CheckCircle, XCircle, Loader2, Dumbbell, Activity, Scale, RefreshCw, Droplets, Plus, Trash2, Brain, Eye, EyeOff, Globe, Sun, Moon, LogOut, Target, Users } from "lucide-react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 export default function SettingsPage() {
-  const { user, updateUser } = useAuth();
+  const { user, updateUser, logout } = useAuth();
   const { toast } = useToast();
   const [saving, setSaving] = useState(false);
 
@@ -206,6 +207,22 @@ export default function SettingsPage() {
   };
 
   const isPowerlifting = goalType.includes("powerlifting");
+
+  const OWNER_EMAIL = "owengidusko@gmail.com";
+  const isOwner = user?.email === OWNER_EMAIL;
+
+  // Theme toggle
+  const [dark, setDark] = useState(() => document.documentElement.classList.contains("dark"));
+  useEffect(() => {
+    const root = document.documentElement;
+    if (dark) { root.classList.add("dark"); root.classList.remove("light"); }
+    else      { root.classList.remove("dark"); root.classList.add("light"); }
+  }, [dark]);
+
+  const handleLogout = async () => {
+    try { await api.logout(); } catch {}
+    logout();
+  };
 
   return (
     <div className="p-4 md:p-6 max-w-xl space-y-6">
@@ -624,8 +641,59 @@ export default function SettingsPage() {
         </div>
       </section>
 
+      {/* Quick links */}
+      <section className="bg-card border border-border rounded-xl p-4 space-y-2">
+        <h2 className="font-semibold text-sm mb-2">Quick links</h2>
+        <Link
+          href="/plan"
+          className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+        >
+          <Target className="w-4 h-4" />
+          Diet Plan &amp; TDEE Calculator
+        </Link>
+        <Link
+          href="/history"
+          className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+        >
+          <Scale className="w-4 h-4" />
+          Meal History
+        </Link>
+        {isOwner && (
+          <Link
+            href="/invites"
+            className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+          >
+            <Users className="w-4 h-4" />
+            Invite Codes
+          </Link>
+        )}
+      </section>
+
+      {/* Appearance */}
+      <section className="bg-card border border-border rounded-xl p-4 space-y-3">
+        <h2 className="font-semibold text-sm">Appearance</h2>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            {dark ? <Moon className="w-4 h-4 text-primary" /> : <Sun className="w-4 h-4 text-primary" />}
+            <span className="text-sm">{dark ? "Dark mode" : "Light mode"}</span>
+          </div>
+          <Switch checked={dark} onCheckedChange={setDark} />
+        </div>
+      </section>
+
       <Button onClick={saveProfile} disabled={saving} className="w-full" data-testid="button-save-settings">
         {saving ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Saving...</> : "Save settings"}
+      </Button>
+
+      {/* Sign out */}
+      <Button
+        variant="outline"
+        onClick={handleLogout}
+        className="w-full text-muted-foreground hover:text-destructive hover:border-destructive/50"
+        data-testid="button-logout"
+      >
+        <LogOut className="w-4 h-4 mr-2" />
+        Sign out
       </Button>
 
       <p className="text-center text-xs text-muted-foreground">
