@@ -19,6 +19,7 @@ import type { InsertGarminDailySummary } from "../shared/schema.js";
 // ─── DI Token Constants ─────────────────────────────────────────────────────
 
 const GARMIN_CONNECT_BASE = "https://connect.garmin.com";
+const GARMIN_API_BASE = "https://connectapi.garmin.com";
 const DI_GATED_EMAIL = "owengidusko@gmail.com";
 
 // ─── Session management ──────────────────────────────────────────────────────
@@ -169,27 +170,49 @@ interface DiTokens {
 
 /**
  * Fetch JSON from a Garmin Connect endpoint using the DI bearer token.
+ * Tries connectapi.garmin.com first (matches garmin-connect library), then
+ * falls back to connect.garmin.com/modern/proxy/ and connect.garmin.com.
  * Returns null on failure (non-2xx or network error).
  */
 async function diApiFetch(path: string, diToken: string): Promise<any | null> {
-  try {
-    const url = `${GARMIN_CONNECT_BASE}${path}`;
-    const res = await fetch(url, {
-      headers: {
-        "Authorization": `Bearer ${diToken}`,
-        "DI-Backend": diToken,
-        "Accept": "application/json",
-      },
-    });
-    if (!res.ok) {
-      console.warn(`[garmin-di] ${path} returned ${res.status}`);
-      return null;
+  // Try multiple base URLs — the DI token may work with different API gateways
+  const bases = [
+    GARMIN_API_BASE,                            // connectapi.garmin.com (library uses this)
+    `${GARMIN_CONNECT_BASE}/modern/proxy`,      // connect.garmin.com/modern/proxy/ (web session)
+    GARMIN_CONNECT_BASE,                        // connect.garmin.com (original)
+  ];
+
+  for (const base of bases) {
+    try {
+      const url = `${base}${path}`;
+      console.log(`[garmin-di] Trying: ${url}`);
+      const res = await fetch(url, {
+        headers: {
+          "Authorization": `Bearer ${diToken}`,
+          "DI-Backend": diToken,
+          "Accept": "application/json",
+        },
+      });
+
+      const bodyText = await res.text();
+      console.log(`[garmin-di] ${url} → ${res.status} | body: ${bodyText.substring(0, 500)}`);
+
+      if (!res.ok) continue; // Try next base URL
+
+      try {
+        return JSON.parse(bodyText);
+      } catch {
+        console.warn(`[garmin-di] ${url} returned non-JSON response`);
+        continue;
+      }
+    } catch (err: any) {
+      console.warn(`[garmin-di] ${base}${path} fetch error:`, err.message);
+      continue;
     }
-    return await res.json();
-  } catch (err: any) {
-    console.warn(`[garmin-di] ${path} fetch error:`, err.message);
-    return null;
   }
+
+  console.warn(`[garmin-di] All base URLs failed for path: ${path}`);
+  return null;
 }
 
 /**
@@ -214,30 +237,58 @@ async function syncGarminDataDI(
   const diToken = tokens.di_token;
 
   // ── Steps (daily summary endpoint) ────────────────────────────────────────
+  // Try the stats endpoint first (matches garmin-connect library: /usersummary-service/stats/steps/daily/{date}/{date})
+  // then fall back to the daily summary endpoint
   try {
-    const data = await diApiFetch(
-      `/usersummary-service/usersummary/daily/${dateStr}`,
+    let stepsData = await diApiFetch(
+      `/usersummary-service/stats/steps/daily/${dateStr}/${dateStr}`,
       diToken
     );
-    if (data?.totalSteps && data.totalSteps > 0) {
-      summary.totalSteps = data.totalSteps;
-      categories.push("steps");
-      rawPayload.dailySummary = data;
+    // The stats endpoint returns an array of [{calendarDate, totalSteps, ...}]
+    if (Array.isArray(stepsData) && stepsData.length > 0) {
+      const dayStats = stepsData[0];
+      if (dayStats?.totalSteps && dayStats.totalSteps > 0) {
+        summary.totalSteps = dayStats.totalSteps;
+        categories.push("steps");
+        rawPayload.dailySummary = dayStats;
+      }
+      if (dayStats?.activeSeconds) {
+        summary.activeMinutes = Math.round(dayStats.activeSeconds / 60);
+      }
     }
-    // Also grab active minutes and calories from daily summary
-    if (data?.activeSeconds) {
-      summary.activeMinutes = Math.round(data.activeSeconds / 60);
+    // Fallback: try the original daily summary endpoint
+    if (!summary.totalSteps) {
+      const data = await diApiFetch(
+        `/usersummary-service/usersummary/daily/${dateStr}`,
+        diToken
+      );
+      if (data?.totalSteps && data.totalSteps > 0) {
+        summary.totalSteps = data.totalSteps;
+        categories.push("steps");
+        rawPayload.dailySummary = data;
+      }
+      if (data?.activeSeconds) {
+        summary.activeMinutes = Math.round(data.activeSeconds / 60);
+      }
     }
   } catch (err: any) {
     console.warn(`[garmin-di] Steps fetch failed for ${userId}:`, err.message);
   }
 
   // ── Sleep ─────────────────────────────────────────────────────────────────
+  // Library uses /sleep-service/sleep/dailySleepData?date={date} (NOT wellness-service, NOT path param)
   try {
-    const data = await diApiFetch(
-      `/wellness-service/wellness/dailySleepData/${dateStr}`,
+    let data = await diApiFetch(
+      `/sleep-service/sleep/dailySleepData?date=${dateStr}`,
       diToken
     );
+    // Fallback: try the original wellness-service path
+    if (!data?.dailySleepDTO) {
+      data = await diApiFetch(
+        `/wellness-service/wellness/dailySleepData/${dateStr}`,
+        diToken
+      );
+    }
     if (data?.dailySleepDTO) {
       const s = data.dailySleepDTO;
       summary.sleepDurationMin = s.sleepTimeSeconds ? Math.round(s.sleepTimeSeconds / 60) : null;
@@ -273,11 +324,19 @@ async function syncGarminDataDI(
   }
 
   // ── Heart Rate ────────────────────────────────────────────────────────────
+  // Library uses /wellness-service/wellness/dailyHeartRate?date={date} (query param, not path param)
   try {
-    const data = await diApiFetch(
-      `/wellness-service/wellness/dailyHeartRate/${dateStr}`,
+    let data = await diApiFetch(
+      `/wellness-service/wellness/dailyHeartRate?date=${dateStr}`,
       diToken
     );
+    // Fallback: try with path param
+    if (!data) {
+      data = await diApiFetch(
+        `/wellness-service/wellness/dailyHeartRate/${dateStr}`,
+        diToken
+      );
+    }
     if (data) {
       if (data.restingHeartRate) summary.restingHeartRate = data.restingHeartRate;
       if (data.maxHeartRate) summary.maxHeartRate = data.maxHeartRate;
@@ -289,11 +348,19 @@ async function syncGarminDataDI(
   }
 
   // ── Weight / Body Composition ─────────────────────────────────────────────
+  // Library uses /weight-service/weight/dayview/{date}
   try {
-    const data = await diApiFetch(
-      `/weight-service/weight/dateRange?startDate=${dateStr}&endDate=${dateStr}`,
+    let data = await diApiFetch(
+      `/weight-service/weight/dayview/${dateStr}`,
       diToken
     );
+    // Fallback: try the dateRange endpoint
+    if (!data?.dateWeightList?.length) {
+      data = await diApiFetch(
+        `/weight-service/weight/dateRange?startDate=${dateStr}&endDate=${dateStr}`,
+        diToken
+      );
+    }
     if (data?.dateWeightList?.length) {
       const w = data.dateWeightList[0];
       const weightKg = w.weight ? Math.round((w.weight / 1000) * 10) / 10 : null;
