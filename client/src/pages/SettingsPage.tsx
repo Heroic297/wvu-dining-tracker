@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { api, lbsToKg, kgToLbs } from "@/lib/api";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -44,7 +44,8 @@ export default function SettingsPage() {
   const [trainingDays, setTrainingDays] = useState<number[]>(user?.trainingDays as number[] ?? [1, 3, 5]);
   const [meetDate, setMeetDate] = useState(user?.meetDate ?? "");
   const [enableWaterTracking, setEnableWaterTracking] = useState(user?.enableWaterTracking ?? false);
-  const [timezone, setTimezone] = useState(user?.timezone ?? "America/New_York");
+  const [timezone, setTimezone] = useState(() => localStorage.getItem("macro_timezone") ?? "America/New_York");
+  useEffect(() => { localStorage.setItem("macro_timezone", timezone); }, [timezone]);
   const [waterUnit, setWaterUnit] = useState<"ml"|"oz"|"L"|"gal">((user as any)?.waterUnit ?? "oz");
   const [waterBottles, setWaterBottles] = useState<Array<{id:string;name:string;mlSize:number}>>((user as any)?.waterBottles ?? []);
   const [newBottleName, setNewBottleName] = useState("");
@@ -136,7 +137,7 @@ export default function SettingsPage() {
       const payload: Record<string, any> = {
         sex, dateOfBirth: dob, heightCm, activityLevel, goalType,
         burnMode, trainingDays, enableWaterTracking,
-        waterUnit, waterBottles, timezone,
+        waterUnit, waterBottles,
         // targetDate and targetWeightKg must be omitted (not null) when empty
         // — the server schema does not accept null for these fields
         ...(targetWeightLbs ? { targetWeightKg: lbsToKg(parseFloat(targetWeightLbs)) } : {}),

@@ -183,7 +183,7 @@ export default function WearablesPage() {
     }
   };
 
-  const userTz = user?.timezone ?? "America/New_York";
+  const userTz = localStorage.getItem("macro_timezone") ?? "America/New_York";
 
   const fmtTime = (iso: string | null) => {
     if (!iso) return null;
