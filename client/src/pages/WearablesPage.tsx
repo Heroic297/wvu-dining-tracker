@@ -43,6 +43,8 @@ interface GarminSummary {
   sleepLevels: SleepLevel[] | null;
   sleepStartLocal: number | null;
   sleepEndLocal: number | null;
+  sleepStartGMT: number | null;
+  sleepEndGMT: number | null;
   syncedAt: string | null;
 }
 
@@ -181,12 +183,14 @@ export default function WearablesPage() {
     }
   };
 
+  const userTz = user?.timezone ?? "America/New_York";
+
   const fmtTime = (iso: string | null) => {
     if (!iso) return null;
     return new Date(iso).toLocaleString("en-US", {
       month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
-      timeZone: "America/New_York",
-    }) + " ET";
+      timeZone: userTz,
+    });
   };
 
   return (
@@ -448,8 +452,11 @@ export default function WearablesPage() {
                 awakeMin={summary.awakeSleepMin ?? 0}
                 totalMin={summary.sleepDurationMin}
                 sleepLevels={summary.sleepLevels ?? undefined}
+                sleepStartGMT={summary.sleepStartGMT ?? undefined}
+                sleepEndGMT={summary.sleepEndGMT ?? undefined}
                 sleepStartLocal={summary.sleepStartLocal ?? undefined}
                 sleepEndLocal={summary.sleepEndLocal ?? undefined}
+                timezone={userTz}
               />
             </section>
           )}
@@ -554,22 +561,23 @@ function fmtDur(m: number): string {
 }
 
 /** Format epoch ms as local clock time: "10PM", "12AM", "4AM" */
-function fmtLocalHour(epochMs: number): string {
+function fmtLocalHour(epochMs: number, tz?: string): string {
   const d = new Date(epochMs);
-  let h = d.getHours();
-  const ampm = h >= 12 ? "PM" : "AM";
-  h = h % 12;
-  if (h === 0) h = 12;
-  return `${h}${ampm}`;
+  return d.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    hour12: true,
+    ...(tz ? { timeZone: tz } : {}),
+  }).replace(/\s/g, "");
 }
 
 /** Format epoch ms as "10:07 PM" for tooltip */
-function fmtLocalTime(epochMs: number): string {
+function fmtLocalTime(epochMs: number, tz?: string): string {
   const d = new Date(epochMs);
   return d.toLocaleTimeString("en-US", {
     hour: "numeric",
     minute: "2-digit",
     hour12: true,
+    ...(tz ? { timeZone: tz } : {}),
   });
 }
 
@@ -580,8 +588,11 @@ function SleepHypnogram({
   remMin,
   awakeMin,
   totalMin,
+  sleepStartGMT,
+  sleepEndGMT,
   sleepStartLocal,
   sleepEndLocal,
+  timezone,
 }: {
   deepMin: number;
   lightMin: number;
@@ -589,9 +600,16 @@ function SleepHypnogram({
   awakeMin: number;
   totalMin: number;
   sleepLevels?: SleepLevel[];
+  sleepStartGMT?: number;
+  sleepEndGMT?: number;
   sleepStartLocal?: number;
   sleepEndLocal?: number;
+  timezone?: string;
 }) {
+  // Prefer GMT timestamps formatted with user timezone; fall back to Local
+  const startEpoch = sleepStartGMT ?? sleepStartLocal;
+  const endEpoch = sleepEndGMT ?? sleepEndLocal;
+  const tz = sleepStartGMT ? timezone : undefined; // only pass tz when using GMT values
   const stages: { label: string; min: number; stage: SleepStage }[] = [
     { label: "Deep", min: deepMin, stage: "deep" },
     { label: "Light", min: lightMin, stage: "light" },
@@ -606,9 +624,9 @@ function SleepHypnogram({
 
       {/* Stacked bar with flanking times */}
       <div className="flex items-center gap-2">
-        {sleepStartLocal != null && (
+        {startEpoch != null && (
           <span className="text-xs text-muted-foreground whitespace-nowrap">
-            {fmtLocalTime(sleepStartLocal)}
+            {fmtLocalTime(startEpoch, tz)}
           </span>
         )}
         <div className="flex-1 flex h-3 rounded-full overflow-hidden">
@@ -624,9 +642,9 @@ function SleepHypnogram({
               />
             ))}
         </div>
-        {sleepEndLocal != null && (
+        {endEpoch != null && (
           <span className="text-xs text-muted-foreground whitespace-nowrap">
-            {fmtLocalTime(sleepEndLocal)}
+            {fmtLocalTime(endEpoch, tz)}
           </span>
         )}
       </div>

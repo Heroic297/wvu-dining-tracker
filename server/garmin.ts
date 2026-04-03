@@ -835,6 +835,8 @@ export async function getGarminSummary(
   let sleepLevels: Array<{ startGMT: string; endGMT: string; activityLevel: number }> | null = null;
   let sleepStartLocal: number | null = null;
   let sleepEndLocal: number | null = null;
+  let sleepStartGMT: number | null = null;
+  let sleepEndGMT: number | null = null;
   try {
     const raw = typeof row.raw_payload === "string" ? JSON.parse(row.raw_payload) : row.raw_payload;
     // sleepLevels is stored at raw_payload.sleepLevels (root-level, sibling of sleep/dailySleepDTO)
@@ -850,6 +852,11 @@ export async function getGarminSummary(
     else if (raw?.sleep?.sleepStartTimestampLocal) sleepStartLocal = raw.sleep.sleepStartTimestampLocal;
     if (raw?.sleepEndLocal) sleepEndLocal = raw.sleepEndLocal;
     else if (raw?.sleep?.sleepEndTimestampLocal) sleepEndLocal = raw.sleep.sleepEndTimestampLocal;
+    // Sleep start/end GMT timestamps (true UTC epoch ms)
+    if (raw?.sleepStartGMT) sleepStartGMT = raw.sleepStartGMT;
+    else if (raw?.sleep?.sleepStartTimestampGMT) sleepStartGMT = raw.sleep.sleepStartTimestampGMT;
+    if (raw?.sleepEndGMT) sleepEndGMT = raw.sleepEndGMT;
+    else if (raw?.sleep?.sleepEndTimestampGMT) sleepEndGMT = raw.sleep.sleepEndTimestampGMT;
   } catch {
     // raw_payload missing or malformed
   }
@@ -878,6 +885,8 @@ export async function getGarminSummary(
     sleepLevels,
     sleepStartLocal,
     sleepEndLocal,
+    sleepStartGMT,
+    sleepEndGMT,
     syncedAt: row.synced_at?.toISOString() ?? null,
   };
 }

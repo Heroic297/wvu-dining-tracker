@@ -124,10 +124,10 @@ export function getToken(): string | null {
   return _token;
 }
 
-/** Today's date in YYYY-MM-DD, expressed in Eastern Time (America/New_York) */
-export function todayStr(): string {
+/** Today's date in YYYY-MM-DD, expressed in the given timezone (defaults to Eastern) */
+export function todayStr(tz: string = "America/New_York"): string {
   return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/New_York",
+    timeZone: tz,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",

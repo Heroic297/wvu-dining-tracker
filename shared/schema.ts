@@ -93,6 +93,8 @@ export const users = pgTable("users", {
   waterBottles: jsonb("water_bottles").$type<Array<{id: string; name: string; mlSize: number}>>(),
   /** Preferred display unit for water */
   waterUnit: text("water_unit").$type<"ml" | "oz" | "L" | "gal">().default("oz"),
+  /** IANA timezone string for display formatting */
+  timezone: text("timezone").default("America/New_York"),
   // Onboarding
   onboardingComplete: boolean("onboarding_complete").default(false),
   // AI Coach — per-provider encrypted API keys (AES-256-GCM, hex-encoded iv:tag:ciphertext)

@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { CheckCircle, XCircle, Loader2, Dumbbell, Activity, Scale, RefreshCw, Droplets, Plus, Trash2, Brain, Eye, EyeOff } from "lucide-react";
+import { CheckCircle, XCircle, Loader2, Dumbbell, Activity, Scale, RefreshCw, Droplets, Plus, Trash2, Brain, Eye, EyeOff, Globe } from "lucide-react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -44,6 +44,7 @@ export default function SettingsPage() {
   const [trainingDays, setTrainingDays] = useState<number[]>(user?.trainingDays as number[] ?? [1, 3, 5]);
   const [meetDate, setMeetDate] = useState(user?.meetDate ?? "");
   const [enableWaterTracking, setEnableWaterTracking] = useState(user?.enableWaterTracking ?? false);
+  const [timezone, setTimezone] = useState(user?.timezone ?? "America/New_York");
   const [waterUnit, setWaterUnit] = useState<"ml"|"oz"|"L"|"gal">((user as any)?.waterUnit ?? "oz");
   const [waterBottles, setWaterBottles] = useState<Array<{id:string;name:string;mlSize:number}>>((user as any)?.waterBottles ?? []);
   const [newBottleName, setNewBottleName] = useState("");
@@ -135,7 +136,7 @@ export default function SettingsPage() {
       const payload: Record<string, any> = {
         sex, dateOfBirth: dob, heightCm, activityLevel, goalType,
         burnMode, trainingDays, enableWaterTracking,
-        waterUnit, waterBottles,
+        waterUnit, waterBottles, timezone,
         // targetDate and targetWeightKg must be omitted (not null) when empty
         // — the server schema does not accept null for these fields
         ...(targetWeightLbs ? { targetWeightKg: lbsToKg(parseFloat(targetWeightLbs)) } : {}),
@@ -208,6 +209,29 @@ export default function SettingsPage() {
   return (
     <div className="p-4 md:p-6 max-w-xl space-y-6">
       <h1 className="text-xl font-bold">Settings</h1>
+
+      {/* Timezone */}
+      <section className="bg-card border border-border rounded-xl p-4 space-y-3">
+        <h2 className="font-semibold flex items-center gap-2"><Globe className="w-4 h-4 text-primary" />Timezone</h2>
+        <p className="text-xs text-muted-foreground">Used for displaying sleep times, sync timestamps, and daily date boundaries.</p>
+        <Select value={timezone} onValueChange={setTimezone}>
+          <SelectTrigger data-testid="select-timezone"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="America/New_York">Eastern Time (ET)</SelectItem>
+            <SelectItem value="America/Chicago">Central Time (CT)</SelectItem>
+            <SelectItem value="America/Denver">Mountain Time (MT)</SelectItem>
+            <SelectItem value="America/Los_Angeles">Pacific Time (PT)</SelectItem>
+            <SelectItem value="America/Anchorage">Alaska Time (AKT)</SelectItem>
+            <SelectItem value="Pacific/Honolulu">Hawaii Time (HST)</SelectItem>
+            <SelectItem value="America/Phoenix">Arizona (no DST)</SelectItem>
+            <SelectItem value="Europe/London">London (GMT/BST)</SelectItem>
+            <SelectItem value="Europe/Paris">Central European (CET)</SelectItem>
+            <SelectItem value="Asia/Tokyo">Japan (JST)</SelectItem>
+            <SelectItem value="Australia/Sydney">Sydney (AEST)</SelectItem>
+            <SelectItem value="UTC">UTC</SelectItem>
+          </SelectContent>
+        </Select>
+      </section>
 
       {/* Weight log */}
       <section className="bg-card border border-border rounded-xl p-4 space-y-3">

@@ -217,6 +217,7 @@ export async function registerRoutes(
           mlSize: z.number().positive(),
         })).optional(),
         waterUnit: z.enum(["ml", "oz", "L", "gal"]).optional(),
+        timezone: z.string().optional(),
         onboardingComplete: z.boolean().optional(),
       });
       const data = updateSchema.parse(req.body);
