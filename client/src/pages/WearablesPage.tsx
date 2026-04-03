@@ -13,6 +13,12 @@ import {
   Eye, EyeOff, Unplug,
 } from "lucide-react";
 
+interface SleepLevel {
+  startGMT: string;
+  endGMT: string;
+  activityLevel: number;
+}
+
 interface GarminSummary {
   date: string;
   totalSteps: number | null;
@@ -34,6 +40,7 @@ interface GarminSummary {
   weightKg: number | null;
   bodyFatPct: number | null;
   recentActivities: Array<{ name: string; type: string; durationMin: number; calories: number }> | null;
+  sleepLevels: SleepLevel[] | null;
   syncedAt: string | null;
 }
 
@@ -438,6 +445,7 @@ export default function WearablesPage() {
                 remMin={summary.remSleepMin ?? 0}
                 awakeMin={summary.awakeSleepMin ?? 0}
                 totalMin={summary.sleepDurationMin}
+                sleepLevels={summary.sleepLevels ?? undefined}
               />
             </section>
           )}
@@ -517,9 +525,10 @@ function DataCard({
 
 type SleepStage = "awake" | "rem" | "light" | "deep";
 
-interface SleepSegment {
+interface TimestampedSegment {
   stage: SleepStage;
-  durationMin: number;
+  startMs: number;
+  endMs: number;
 }
 
 const STAGE_Y: Record<SleepStage, number> = { awake: 0, rem: 1, light: 2, deep: 3 };
@@ -530,70 +539,31 @@ const STAGE_COLOR: Record<SleepStage, string> = {
   deep: "#7C3AED",
 };
 
-function generateSleepSegments(
-  deepMin: number,
-  lightMin: number,
-  remMin: number,
-  awakeMin: number,
-): SleepSegment[] {
-  const totalMin = deepMin + lightMin + remMin + awakeMin;
-  if (totalMin <= 0) return [];
+/** Map Garmin activityLevel to a sleep stage */
+function activityLevelToStage(level: number): SleepStage {
+  // Garmin activityLevel mapping:
+  // 0 = deep, 1 = light, 2 = REM, higher = awake
+  if (level <= 0) return "deep";
+  if (level <= 1) return "light";
+  if (level <= 2) return "rem";
+  return "awake";
+}
 
-  // Number of ~90 min cycles
-  const numCycles = Math.max(1, Math.round(totalMin / 90));
+/** Format clock time from a Date: e.g. "11PM", "12AM", "3AM" */
+function fmtClockHour(d: Date): string {
+  let h = d.getHours();
+  const ampm = h >= 12 ? "PM" : "AM";
+  h = h % 12;
+  if (h === 0) h = 12;
+  return `${h}${ampm}`;
+}
 
-  // Distribute durations across cycles proportionally
-  const perCycle = {
-    deep: deepMin / numCycles,
-    light: lightMin / numCycles,
-    rem: remMin / numCycles,
-    awake: awakeMin / Math.max(1, numCycles - 1), // awake between cycles, not after last
-  };
-
-  const segments: SleepSegment[] = [];
-  let usedDeep = 0, usedLight = 0, usedRem = 0, usedAwake = 0;
-
-  for (let c = 0; c < numCycles; c++) {
-    const isLast = c === numCycles - 1;
-
-    // Each cycle: Light → Deep → Light → REM
-    // Deep sleep is more prominent in early cycles, REM in later cycles
-    const earlyFactor = 1 + (numCycles - 1 - c) * 0.3;
-    const lateFactor = 1 + c * 0.3;
-
-    const cycleLight1 = Math.round(perCycle.light * 0.4);
-    const cycleDeep = isLast
-      ? deepMin - usedDeep
-      : Math.round(perCycle.deep * earlyFactor);
-    const cycleLight2 = isLast
-      ? lightMin - usedLight - cycleLight1
-      : Math.round(perCycle.light * 0.6);
-    const cycleRem = isLast
-      ? remMin - usedRem
-      : Math.round(perCycle.rem * lateFactor);
-
-    if (cycleLight1 > 0) segments.push({ stage: "light", durationMin: cycleLight1 });
-    if (cycleDeep > 0) segments.push({ stage: "deep", durationMin: Math.max(1, cycleDeep) });
-    if (cycleLight2 > 0) segments.push({ stage: "light", durationMin: Math.max(1, cycleLight2) });
-    if (cycleRem > 0) segments.push({ stage: "rem", durationMin: Math.max(1, cycleRem) });
-
-    usedDeep += cycleDeep;
-    usedLight += cycleLight1 + cycleLight2;
-    usedRem += cycleRem;
-
-    // Brief awake between cycles (not after the last cycle)
-    if (!isLast && awakeMin > 0) {
-      const cycleAwake = isLast
-        ? awakeMin - usedAwake
-        : Math.round(perCycle.awake);
-      if (cycleAwake > 0) {
-        segments.push({ stage: "awake", durationMin: Math.max(1, cycleAwake) });
-        usedAwake += cycleAwake;
-      }
-    }
-  }
-
-  return segments;
+/** Format duration — drop "0h" prefix when under 1 hour */
+function fmtDur(m: number): string {
+  const hrs = Math.floor(m / 60);
+  const mins = m % 60;
+  if (hrs === 0) return `${mins}m`;
+  return `${hrs}h ${mins}m`;
 }
 
 function SleepHypnogram({
@@ -602,16 +572,44 @@ function SleepHypnogram({
   remMin,
   awakeMin,
   totalMin,
+  sleepLevels,
 }: {
   deepMin: number;
   lightMin: number;
   remMin: number;
   awakeMin: number;
   totalMin: number;
+  sleepLevels?: SleepLevel[];
 }) {
-  const segments = generateSleepSegments(deepMin, lightMin, remMin, awakeMin);
-  const sleepTotalMin = segments.reduce((s, seg) => s + seg.durationMin, 0);
-  if (sleepTotalMin <= 0) return null;
+  // Build segments from real timestamped data if available
+  const segments: TimestampedSegment[] = [];
+  let sleepStartMs = 0;
+  let sleepEndMs = 0;
+
+  if (sleepLevels && sleepLevels.length > 0) {
+    for (const level of sleepLevels) {
+      const startMs = new Date(level.startGMT).getTime();
+      const endMs = new Date(level.endGMT).getTime();
+      if (isNaN(startMs) || isNaN(endMs) || endMs <= startMs) continue;
+      segments.push({
+        stage: activityLevelToStage(level.activityLevel),
+        startMs,
+        endMs,
+      });
+    }
+    // Sort by start time
+    segments.sort((a, b) => a.startMs - b.startMs);
+    if (segments.length > 0) {
+      sleepStartMs = segments[0].startMs;
+      sleepEndMs = segments[segments.length - 1].endMs;
+    }
+  }
+
+  // If no real data, we can't render an accurate hypnogram — show nothing
+  if (segments.length === 0) return null;
+
+  const totalSpanMs = sleepEndMs - sleepStartMs;
+  if (totalSpanMs <= 0) return null;
 
   const svgW = 400;
   const svgH = 120;
@@ -632,47 +630,50 @@ function SleepHypnogram({
   const yForStage = (stage: SleepStage) =>
     padTop + (STAGE_Y[stage] / 3) * chartH;
 
-  // Build the stepped path + filled area
-  let pathD = "";
-  let fillD = "";
-  let x = padLeft;
+  const xForTime = (ms: number) =>
+    padLeft + ((ms - sleepStartMs) / totalSpanMs) * chartW;
+
+  // Build the stepped path + filled area from real timestamps
+  let fillD = `M ${padLeft} ${padTop + chartH}`;
 
   segments.forEach((seg, i) => {
-    const w = (seg.durationMin / sleepTotalMin) * chartW;
+    const x1 = xForTime(seg.startMs);
+    const x2 = xForTime(seg.endMs);
     const y = yForStage(seg.stage);
     if (i === 0) {
-      pathD += `M ${x} ${y}`;
-      fillD += `M ${x} ${padTop + chartH}`;
-      fillD += ` L ${x} ${y}`;
+      fillD += ` L ${x1} ${y}`;
     } else {
-      pathD += ` L ${x} ${y}`;
-      fillD += ` L ${x} ${y}`;
+      fillD += ` L ${x1} ${y}`;
     }
-    pathD += ` L ${x + w} ${y}`;
-    fillD += ` L ${x + w} ${y}`;
-    x += w;
+    fillD += ` L ${x2} ${y}`;
   });
-  fillD += ` L ${x} ${padTop + chartH} Z`;
+  fillD += ` L ${xForTime(sleepEndMs)} ${padTop + chartH} Z`;
 
-  // Time labels along x-axis
-  // Assume sleep starts around 11PM for display purposes
-  const startHour = 23; // 11 PM
-  const timeLabels: { label: string; x: number }[] = [];
-  const hourSpan = sleepTotalMin / 60;
-  // Show labels every ~2 hours
-  const step = hourSpan > 8 ? 2 : hourSpan > 4 ? 1.5 : 1;
-  for (let h = 0; h <= hourSpan; h += step) {
-    const absHour = (startHour + h) % 24;
-    const ampm = absHour >= 12 ? "AM" : (absHour < 12 && absHour >= 0 ? "AM" : "PM");
-    const displayHour = absHour === 0 ? 12 : absHour > 12 ? absHour - 12 : absHour;
-    // Correctly determine AM/PM
-    const isPM = absHour >= 12 && absHour < 24;
-    const label = `${displayHour}${isPM ? "PM" : "AM"}`;
-    const px = padLeft + (h / (sleepTotalMin / 60)) * chartW;
-    timeLabels.push({ label, x: px });
+  // Generate proper clock-time X-axis labels
+  // Round start down to the nearest hour, end up to the nearest hour
+  const startDate = new Date(sleepStartMs);
+  const floorHour = new Date(startDate);
+  floorHour.setMinutes(0, 0, 0);
+  const endDate = new Date(sleepEndMs);
+  const ceilHour = new Date(endDate);
+  if (ceilHour.getMinutes() > 0 || ceilHour.getSeconds() > 0) {
+    ceilHour.setHours(ceilHour.getHours() + 1, 0, 0, 0);
   }
 
-  const fmtDur = (m: number) => `${Math.floor(m / 60)}h ${m % 60}m`;
+  const totalHourSpan = (ceilHour.getTime() - floorHour.getTime()) / (60 * 60 * 1000);
+  // Determine step: every 1h for short sleeps, every 2h for longer
+  const hourStep = totalHourSpan > 8 ? 2 : 1;
+
+  const timeLabels: { label: string; x: number }[] = [];
+  for (let h = 0; h <= totalHourSpan; h += hourStep) {
+    const tickMs = floorHour.getTime() + h * 60 * 60 * 1000;
+    // Only show labels within the chart range (with small margin)
+    if (tickMs < sleepStartMs - 30 * 60 * 1000) continue;
+    if (tickMs > sleepEndMs + 30 * 60 * 1000) continue;
+    const px = xForTime(tickMs);
+    if (px < padLeft - 5 || px > padLeft + chartW + 5) continue;
+    timeLabels.push({ label: fmtClockHour(new Date(tickMs)), x: px });
+  }
 
   return (
     <div className="space-y-3">
@@ -691,33 +692,29 @@ function SleepHypnogram({
         </defs>
         <path d={fillD} fill="url(#sleepFillGrad)" />
 
-        {/* Colored segments */}
-        {(() => {
-          let sx = padLeft;
-          return segments.map((seg, i) => {
-            const w = (seg.durationMin / sleepTotalMin) * chartW;
-            const y = yForStage(seg.stage);
-            const prevY = i > 0 ? yForStage(segments[i - 1].stage) : y;
-            const el = (
-              <g key={i}>
-                {/* Vertical transition line */}
-                {i > 0 && prevY !== y && (
-                  <line
-                    x1={sx} y1={prevY} x2={sx} y2={y}
-                    stroke={STAGE_COLOR[seg.stage]} strokeWidth="2" strokeOpacity="0.7"
-                  />
-                )}
-                {/* Horizontal stage line */}
+        {/* Colored segments from real timestamps */}
+        {segments.map((seg, i) => {
+          const x1 = xForTime(seg.startMs);
+          const x2 = xForTime(seg.endMs);
+          const y = yForStage(seg.stage);
+          const prevY = i > 0 ? yForStage(segments[i - 1].stage) : y;
+          return (
+            <g key={i}>
+              {/* Vertical transition line */}
+              {i > 0 && prevY !== y && (
                 <line
-                  x1={sx} y1={y} x2={sx + w} y2={y}
-                  stroke={STAGE_COLOR[seg.stage]} strokeWidth="2.5"
+                  x1={x1} y1={prevY} x2={x1} y2={y}
+                  stroke={STAGE_COLOR[seg.stage]} strokeWidth="2" strokeOpacity="0.7"
                 />
-              </g>
-            );
-            sx += w;
-            return el;
-          });
-        })()}
+              )}
+              {/* Horizontal stage line */}
+              <line
+                x1={x1} y1={y} x2={x2} y2={y}
+                stroke={STAGE_COLOR[seg.stage]} strokeWidth="2.5"
+              />
+            </g>
+          );
+        })}
 
         {/* Y-axis labels */}
         {stageLabels.map(({ stage, label }) => (
@@ -733,7 +730,7 @@ function SleepHypnogram({
           </text>
         ))}
 
-        {/* X-axis time labels */}
+        {/* X-axis time labels — real clock times */}
         {timeLabels.map((t, i) => (
           <text
             key={i}

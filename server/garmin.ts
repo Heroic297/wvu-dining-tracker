@@ -812,6 +812,18 @@ export async function getGarminSummary(
   );
   const row = res.rows[0];
   if (!row) return null;
+
+  // Extract sleepLevels from raw_payload for the hypnogram
+  let sleepLevels: Array<{ startGMT: string; endGMT: string; activityLevel: number }> | null = null;
+  try {
+    const raw = typeof row.raw_payload === "string" ? JSON.parse(row.raw_payload) : row.raw_payload;
+    if (raw?.sleep?.sleepLevels && Array.isArray(raw.sleep.sleepLevels)) {
+      sleepLevels = raw.sleep.sleepLevels;
+    }
+  } catch {
+    // raw_payload missing or malformed — sleepLevels stays null
+  }
+
   return {
     date: row.date,
     totalSteps: row.total_steps,
@@ -833,6 +845,7 @@ export async function getGarminSummary(
     weightKg: row.weight_kg,
     bodyFatPct: row.body_fat_pct,
     recentActivities: row.recent_activities,
+    sleepLevels,
     syncedAt: row.synced_at?.toISOString() ?? null,
   };
 }
