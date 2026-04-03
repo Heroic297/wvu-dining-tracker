@@ -181,6 +181,10 @@ async function runMigrations() {
         UNIQUE(user_id, date)
       )
     `);
+    // Add token_type column to garmin_sessions for DI token support
+    await pool.query(`
+      ALTER TABLE garmin_sessions ADD COLUMN IF NOT EXISTS token_type TEXT NOT NULL DEFAULT 'garmin-connect'
+    `);
     // Add source column to weight_log if missing
     await pool.query(`
       ALTER TABLE weight_log ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'manual'

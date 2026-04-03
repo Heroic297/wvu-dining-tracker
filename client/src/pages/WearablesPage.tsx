@@ -43,13 +43,21 @@ interface GarminStatus {
   lastSyncAt: string | null;
   lastError: string | null;
   summary: GarminSummary | null;
+  tokenType: string;
 }
+
+const DI_TOKEN_ALLOWED_EMAIL = "owengidusko@gmail.com";
 
 export default function WearablesPage() {
   const { toast } = useToast();
+  const { user } = useAuth();
   const [garminEmail, setGarminEmail] = useState("");
   const [garminPassword, setGarminPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [diTokenJson, setDiTokenJson] = useState("");
+  const [diTokenError, setDiTokenError] = useState<string | null>(null);
+
+  const isDiUser = user?.email?.toLowerCase() === DI_TOKEN_ALLOWED_EMAIL;
 
   const { data: garminData, isLoading, refetch } = useQuery<GarminStatus>({
     queryKey: ["garmin-status"],
@@ -113,9 +121,40 @@ export default function WearablesPage() {
     },
   });
 
+  const diTokenMutation = useMutation({
+    mutationFn: async () => {
+      setDiTokenError(null);
+      let parsed: any;
+      try {
+        parsed = JSON.parse(diTokenJson);
+      } catch {
+        throw new Error("Invalid JSON — please paste the full token JSON object");
+      }
+      if (!parsed.di_token || !parsed.di_refresh_token || !parsed.di_client_id) {
+        throw new Error("JSON must contain di_token, di_refresh_token, and di_client_id");
+      }
+      const res = await api.garminImportDiToken(parsed.di_token, parsed.di_refresh_token, parsed.di_client_id);
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Import failed");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "DI token imported", description: "Syncing your Garmin data now..." });
+      setDiTokenJson("");
+      setTimeout(() => refetch(), 3000);
+    },
+    onError: (err: Error) => {
+      setDiTokenError(err.message);
+      toast({ title: "Import failed", description: err.message, variant: "destructive" });
+    },
+  });
+
   const connected = garminData?.connected ?? false;
   const summary = garminData?.summary;
   const status = garminData?.status ?? "disconnected";
+  const tokenType = garminData?.tokenType ?? "none";
 
   const StatusIcon = () => {
     switch (status) {
@@ -205,8 +244,48 @@ export default function WearablesPage() {
           </div>
         )}
 
-        {/* Login form — shown when disconnected or error */}
-        {(!connected || status === "error") && (
+        {/* DI Token Import — only for gated user */}
+        {isDiUser && (!connected || status === "error") && (
+          <div className="space-y-3 border-t border-border pt-4">
+            <p className="text-xs text-muted-foreground">
+              Paste your Garmin DI token JSON below. This imports your token directly
+              for API access without username/password login.
+            </p>
+            <div className="space-y-2">
+              <Label className="text-xs">DI Token JSON</Label>
+              <textarea
+                className="w-full h-28 rounded-lg border border-border bg-background px-3 py-2 text-xs font-mono resize-none focus:outline-none focus:ring-2 focus:ring-ring"
+                placeholder={'{\n  "di_token": "...",\n  "di_refresh_token": "...",\n  "di_client_id": "..."\n}'}
+                value={diTokenJson}
+                onChange={(e) => { setDiTokenJson(e.target.value); setDiTokenError(null); }}
+              />
+              {diTokenError && (
+                <p className="text-xs text-destructive">{diTokenError}</p>
+              )}
+              <Button
+                onClick={() => diTokenMutation.mutate()}
+                disabled={!diTokenJson.trim() || diTokenMutation.isPending}
+                className="w-full"
+                size="sm"
+              >
+                {diTokenMutation.isPending
+                  ? <><Loader2 className="w-3.5 h-3.5 animate-spin mr-2" />Importing...</>
+                  : "Import DI Token"}
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {/* Show DI token badge when connected via DI */}
+        {isDiUser && connected && tokenType === "di-token" && (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground bg-blue-500/10 rounded-lg px-3 py-2">
+            <CheckCircle className="w-3.5 h-3.5 text-blue-400" />
+            Connected via DI token (direct API)
+          </div>
+        )}
+
+        {/* Login form — shown when disconnected or error (hidden for DI user) */}
+        {!isDiUser && (!connected || status === "error") && (
           <div className="space-y-3 border-t border-border pt-4">
             <p className="text-xs text-muted-foreground">
               Sign in with your Garmin Connect credentials to sync your wearable data.

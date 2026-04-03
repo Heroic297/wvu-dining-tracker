@@ -488,10 +488,12 @@ export const garminSessions = pgTable("garmin_sessions", {
     .notNull()
     .references(() => users.id, { onDelete: "cascade" })
     .unique(),
-  /** AES-256-GCM encrypted JSON blob of { oauth1, oauth2 } tokens */
+  /** AES-256-GCM encrypted JSON blob of { oauth1, oauth2 } or { di_token, di_refresh_token, di_client_id } */
   encryptedTokens: text("encrypted_tokens").notNull(),
   /** Status: connected | error | expired */
   status: text("status").notNull().default("connected"),
+  /** Token type: garmin-connect (username/password) or di-token (direct API) */
+  tokenType: text("token_type").notNull().default("garmin-connect"),
   lastSyncAt: timestamp("last_sync_at"),
   lastError: text("last_error"),
   createdAt: timestamp("created_at").default(sql`now()`),

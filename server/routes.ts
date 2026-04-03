@@ -22,6 +22,8 @@ import {
   getGarminSummary,
   syncGarminData,
   disconnectGarmin,
+  importDiToken,
+  isDiTokenAllowed,
 } from "./garmin.js";
 import { z } from "zod";
 import { randomUUID } from "crypto";
@@ -1038,6 +1040,38 @@ export async function registerRoutes(
       } catch (err) {
         console.error("[garmin/disconnect]", err);
         res.status(500).json({ error: "Disconnect failed" });
+      }
+    }
+  );
+
+  // Import Garmin DI token (dev-only, gated to specific user)
+  app.post(
+    "/api/garmin/import-di-token",
+    requireAuth as any,
+    async (req: AuthRequest, res) => {
+      try {
+        if (!isDiTokenAllowed(req.user!.email)) {
+          return res.status(403).json({ error: "DI token import is not available for your account" });
+        }
+        const schema = z.object({
+          di_token: z.string().min(1, "di_token is required"),
+          di_refresh_token: z.string().min(1, "di_refresh_token is required"),
+          di_client_id: z.string().min(1, "di_client_id is required"),
+        });
+        const { di_token, di_refresh_token, di_client_id } = schema.parse(req.body);
+        const result = await importDiToken(req.user!.id, di_token, di_refresh_token, di_client_id);
+        if (!result.ok) {
+          return res.status(400).json({ error: result.error });
+        }
+        // Kick off initial sync in background
+        syncGarminData(req.user!.id).catch(console.error);
+        res.json({ ok: true });
+      } catch (err: any) {
+        if (err.name === "ZodError") {
+          return res.status(400).json({ error: err.errors[0].message });
+        }
+        console.error("[garmin/import-di-token]", err);
+        res.status(500).json({ error: "DI token import failed" });
       }
     }
   );

@@ -4,6 +4,7 @@
  * This module handles:
  * - Login with Garmin credentials (email/password)
  * - Token export/reuse so user doesn't re-enter creds every visit
+ * - DI token import for direct Garmin Connect API access (dev-only, gated)
  * - Fetching daily summary data (steps, sleep, HR, stress, body battery, HRV, weight, activities)
  * - Normalizing into garmin_daily_summary rows
  *
@@ -14,6 +15,11 @@ import { encryptString, decryptString } from "./crypto.js";
 import { pool } from "./db.js";
 import { storage } from "./storage.js";
 import type { InsertGarminDailySummary } from "../shared/schema.js";
+
+// ─── DI Token Constants ─────────────────────────────────────────────────────
+
+const GARMIN_CONNECT_BASE = "https://connect.garmin.com";
+const DI_GATED_EMAIL = "owengidusko@gmail.com";
 
 // ─── Session management ──────────────────────────────────────────────────────
 
@@ -111,6 +117,296 @@ async function updateStoredTokens(userId: string, gc: GarminConnect): Promise<vo
   }
 }
 
+// ─── DI Token Import ────────────────────────────────────────────────────────
+
+/** Check whether a user email is allowed to use DI token import */
+export function isDiTokenAllowed(email: string): boolean {
+  return email.toLowerCase() === DI_GATED_EMAIL;
+}
+
+/**
+ * Import a Garmin DI token for direct API access.
+ * Stores the token encrypted with token_type = 'di-token'.
+ */
+export async function importDiToken(
+  userId: string,
+  diToken: string,
+  diRefreshToken: string,
+  diClientId: string
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    const tokenBlob = { di_token: diToken, di_refresh_token: diRefreshToken, di_client_id: diClientId };
+    const encrypted = encryptString(JSON.stringify(tokenBlob));
+
+    await pool.query(
+      `INSERT INTO garmin_sessions (user_id, encrypted_tokens, status, token_type, updated_at)
+       VALUES ($1, $2, 'connected', 'di-token', now())
+       ON CONFLICT (user_id) DO UPDATE SET
+         encrypted_tokens = $2,
+         status = 'connected',
+         token_type = 'di-token',
+         last_error = NULL,
+         updated_at = now()`,
+      [userId, encrypted]
+    );
+
+    console.log(`[garmin] DI token imported for user ${userId}`);
+    return { ok: true };
+  } catch (err: any) {
+    const msg = err.message || "DI token import failed";
+    console.error(`[garmin] DI token import failed for user ${userId}:`, msg);
+    return { ok: false, error: msg };
+  }
+}
+
+// ─── DI Token Direct HTTP Helpers ───────────────────────────────────────────
+
+interface DiTokens {
+  di_token: string;
+  di_refresh_token: string;
+  di_client_id: string;
+}
+
+/**
+ * Fetch JSON from a Garmin Connect endpoint using the DI bearer token.
+ * Returns null on failure (non-2xx or network error).
+ */
+async function diApiFetch(path: string, diToken: string): Promise<any | null> {
+  try {
+    const url = `${GARMIN_CONNECT_BASE}${path}`;
+    const res = await fetch(url, {
+      headers: {
+        "Authorization": `Bearer ${diToken}`,
+        "DI-Backend": diToken,
+        "Accept": "application/json",
+      },
+    });
+    if (!res.ok) {
+      console.warn(`[garmin-di] ${path} returned ${res.status}`);
+      return null;
+    }
+    return await res.json();
+  } catch (err: any) {
+    console.warn(`[garmin-di] ${path} fetch error:`, err.message);
+    return null;
+  }
+}
+
+/**
+ * Sync Garmin data using DI token (direct HTTP to Garmin Connect).
+ * Same normalization as the garmin-connect library path, writing to garmin_daily_summary.
+ */
+async function syncGarminDataDI(
+  userId: string,
+  tokens: DiTokens,
+  targetDate?: Date
+): Promise<{ ok: true; categories: string[] } | { ok: false; error: string }> {
+  const date = targetDate ?? new Date();
+  const dateStr = fmtDate(date);
+  const categories: string[] = [];
+
+  const summary: Partial<InsertGarminDailySummary> = {
+    userId,
+    date: dateStr,
+  };
+  const rawPayload: Record<string, any> = {};
+
+  const diToken = tokens.di_token;
+
+  // ── Steps (daily summary endpoint) ────────────────────────────────────────
+  try {
+    const data = await diApiFetch(
+      `/usersummary-service/usersummary/daily/${dateStr}`,
+      diToken
+    );
+    if (data?.totalSteps && data.totalSteps > 0) {
+      summary.totalSteps = data.totalSteps;
+      categories.push("steps");
+      rawPayload.dailySummary = data;
+    }
+    // Also grab active minutes and calories from daily summary
+    if (data?.activeSeconds) {
+      summary.activeMinutes = Math.round(data.activeSeconds / 60);
+    }
+  } catch (err: any) {
+    console.warn(`[garmin-di] Steps fetch failed for ${userId}:`, err.message);
+  }
+
+  // ── Sleep ─────────────────────────────────────────────────────────────────
+  try {
+    const data = await diApiFetch(
+      `/wellness-service/wellness/dailySleepData/${dateStr}`,
+      diToken
+    );
+    if (data?.dailySleepDTO) {
+      const s = data.dailySleepDTO;
+      summary.sleepDurationMin = s.sleepTimeSeconds ? Math.round(s.sleepTimeSeconds / 60) : null;
+      summary.deepSleepMin = s.deepSleepSeconds ? Math.round(s.deepSleepSeconds / 60) : null;
+      summary.lightSleepMin = s.lightSleepSeconds ? Math.round(s.lightSleepSeconds / 60) : null;
+      summary.remSleepMin = s.remSleepSeconds ? Math.round(s.remSleepSeconds / 60) : null;
+      summary.awakeSleepMin = s.awakeSleepSeconds ? Math.round(s.awakeSleepSeconds / 60) : null;
+      summary.sleepScore = s.sleepScores?.overall?.value ?? null;
+      summary.avgStress = s.avgSleepStress ? Math.round(s.avgSleepStress) : null;
+      categories.push("sleep");
+      rawPayload.sleep = s;
+    }
+    // HRV from sleep
+    if (data?.avgOvernightHrv) {
+      summary.avgOvernightHrv = data.avgOvernightHrv;
+      summary.hrvStatus = data.hrvStatus ?? null;
+      categories.push("hrv");
+    }
+    // Body battery from sleep
+    if (data?.sleepBodyBattery?.length) {
+      const bbs = data.sleepBodyBattery.map((b: any) => b.value).filter((v: number) => v > 0);
+      if (bbs.length > 0) {
+        summary.bodyBatteryHigh = Math.max(...bbs);
+        summary.bodyBatteryLow = Math.min(...bbs);
+        categories.push("body_battery");
+      }
+    }
+    if (data?.restingHeartRate) {
+      summary.restingHeartRate = data.restingHeartRate;
+    }
+  } catch (err: any) {
+    console.warn(`[garmin-di] Sleep fetch failed for ${userId}:`, err.message);
+  }
+
+  // ── Heart Rate ────────────────────────────────────────────────────────────
+  try {
+    const data = await diApiFetch(
+      `/wellness-service/wellness/dailyHeartRate/${dateStr}`,
+      diToken
+    );
+    if (data) {
+      if (data.restingHeartRate) summary.restingHeartRate = data.restingHeartRate;
+      if (data.maxHeartRate) summary.maxHeartRate = data.maxHeartRate;
+      categories.push("heart_rate");
+      rawPayload.heartRate = { resting: data.restingHeartRate, max: data.maxHeartRate };
+    }
+  } catch (err: any) {
+    console.warn(`[garmin-di] Heart rate fetch failed for ${userId}:`, err.message);
+  }
+
+  // ── Weight / Body Composition ─────────────────────────────────────────────
+  try {
+    const data = await diApiFetch(
+      `/weight-service/weight/dateRange?startDate=${dateStr}&endDate=${dateStr}`,
+      diToken
+    );
+    if (data?.dateWeightList?.length) {
+      const w = data.dateWeightList[0];
+      const weightKg = w.weight ? Math.round((w.weight / 1000) * 10) / 10 : null;
+      if (weightKg && weightKg > 20 && weightKg < 300) {
+        summary.weightKg = weightKg;
+        if (w.bodyFat) summary.bodyFatPct = Math.round(w.bodyFat * 10) / 10;
+        categories.push("weight");
+        rawPayload.weight = w;
+        await upsertGarminWeight(userId, dateStr, weightKg);
+      }
+    }
+  } catch (err: any) {
+    console.warn(`[garmin-di] Weight fetch failed for ${userId}:`, err.message);
+  }
+
+  // ── Recent Activities ─────────────────────────────────────────────────────
+  try {
+    const data = await diApiFetch(
+      `/activitylist-service/activities/search/activities?limit=5&start=0`,
+      diToken
+    );
+    if (Array.isArray(data) && data.length > 0) {
+      const recent = data.map((a: any) => ({
+        name: a.activityName || a.activityType?.typeKey || "Activity",
+        type: a.activityType?.typeKey || "unknown",
+        durationMin: a.duration ? Math.round(a.duration / 60) : 0,
+        calories: a.calories || 0,
+      }));
+      summary.recentActivities = recent;
+      const todayActivities = data.filter(
+        (a: any) => a.startTimeLocal?.startsWith(dateStr)
+      );
+      if (todayActivities.length > 0) {
+        const totalCal = todayActivities.reduce(
+          (sum: number, a: any) => sum + (a.calories || 0), 0
+        );
+        if (totalCal > 0) summary.caloriesBurned = totalCal;
+      }
+      categories.push("activities");
+      rawPayload.activities = recent;
+    }
+  } catch (err: any) {
+    console.warn(`[garmin-di] Activities fetch failed for ${userId}:`, err.message);
+  }
+
+  // ── Save normalized summary (same upsert as garmin-connect path) ──────────
+  summary.rawPayload = rawPayload;
+
+  if (categories.length > 0) {
+    await pool.query(
+      `INSERT INTO garmin_daily_summary (
+        user_id, date, total_steps, calories_burned, active_minutes,
+        sleep_duration_min, deep_sleep_min, light_sleep_min, rem_sleep_min, awake_sleep_min, sleep_score,
+        resting_heart_rate, max_heart_rate,
+        avg_stress, body_battery_high, body_battery_low,
+        avg_overnight_hrv, hrv_status,
+        weight_kg, body_fat_pct,
+        recent_activities, raw_payload, synced_at
+      ) VALUES (
+        $1, $2, $3, $4, $5,
+        $6, $7, $8, $9, $10, $11,
+        $12, $13,
+        $14, $15, $16,
+        $17, $18,
+        $19, $20,
+        $21, $22, now()
+      )
+      ON CONFLICT (user_id, date) DO UPDATE SET
+        total_steps = COALESCE($3, garmin_daily_summary.total_steps),
+        calories_burned = COALESCE($4, garmin_daily_summary.calories_burned),
+        active_minutes = COALESCE($5, garmin_daily_summary.active_minutes),
+        sleep_duration_min = COALESCE($6, garmin_daily_summary.sleep_duration_min),
+        deep_sleep_min = COALESCE($7, garmin_daily_summary.deep_sleep_min),
+        light_sleep_min = COALESCE($8, garmin_daily_summary.light_sleep_min),
+        rem_sleep_min = COALESCE($9, garmin_daily_summary.rem_sleep_min),
+        awake_sleep_min = COALESCE($10, garmin_daily_summary.awake_sleep_min),
+        sleep_score = COALESCE($11, garmin_daily_summary.sleep_score),
+        resting_heart_rate = COALESCE($12, garmin_daily_summary.resting_heart_rate),
+        max_heart_rate = COALESCE($13, garmin_daily_summary.max_heart_rate),
+        avg_stress = COALESCE($14, garmin_daily_summary.avg_stress),
+        body_battery_high = COALESCE($15, garmin_daily_summary.body_battery_high),
+        body_battery_low = COALESCE($16, garmin_daily_summary.body_battery_low),
+        avg_overnight_hrv = COALESCE($17, garmin_daily_summary.avg_overnight_hrv),
+        hrv_status = COALESCE($18, garmin_daily_summary.hrv_status),
+        weight_kg = COALESCE($19, garmin_daily_summary.weight_kg),
+        body_fat_pct = COALESCE($20, garmin_daily_summary.body_fat_pct),
+        recent_activities = COALESCE($21, garmin_daily_summary.recent_activities),
+        raw_payload = COALESCE($22, garmin_daily_summary.raw_payload),
+        synced_at = now()`,
+      [
+        summary.userId, summary.date,
+        summary.totalSteps ?? null, summary.caloriesBurned ?? null, summary.activeMinutes ?? null,
+        summary.sleepDurationMin ?? null, summary.deepSleepMin ?? null, summary.lightSleepMin ?? null,
+        summary.remSleepMin ?? null, summary.awakeSleepMin ?? null, summary.sleepScore ?? null,
+        summary.restingHeartRate ?? null, summary.maxHeartRate ?? null,
+        summary.avgStress ?? null, summary.bodyBatteryHigh ?? null, summary.bodyBatteryLow ?? null,
+        summary.avgOvernightHrv ?? null, summary.hrvStatus ?? null,
+        summary.weightKg ?? null, summary.bodyFatPct ?? null,
+        summary.recentActivities ? JSON.stringify(summary.recentActivities) : null,
+        rawPayload ? JSON.stringify(rawPayload) : null,
+      ]
+    );
+
+    await pool.query(
+      "UPDATE garmin_sessions SET last_sync_at = now(), status = 'connected', last_error = NULL WHERE user_id = $1",
+      [userId]
+    );
+  }
+
+  console.log(`[garmin-di] Synced ${categories.length} categories for user ${userId} on ${dateStr}: ${categories.join(", ")}`);
+  return { ok: true, categories };
+}
+
 // ─── Data fetching & normalization ───────────────────────────────────────────
 
 /** Format a Date as YYYY-MM-DD */
@@ -127,6 +423,26 @@ export async function syncGarminData(
   userId: string,
   targetDate?: Date
 ): Promise<{ ok: true; categories: string[] } | { ok: false; error: string }> {
+  // Check if this user has a DI token — if so, use the direct HTTP path
+  const sessionRes = await pool.query(
+    "SELECT token_type, encrypted_tokens FROM garmin_sessions WHERE user_id = $1",
+    [userId]
+  );
+  const session = sessionRes.rows[0];
+  if (session?.token_type === "di-token" && session.encrypted_tokens) {
+    try {
+      const tokens: DiTokens = JSON.parse(decryptString(session.encrypted_tokens));
+      return await syncGarminDataDI(userId, tokens, targetDate);
+    } catch (err: any) {
+      console.error(`[garmin] DI token sync failed for ${userId}:`, err.message);
+      await pool.query(
+        "UPDATE garmin_sessions SET status = 'error', last_error = $1, updated_at = now() WHERE user_id = $2",
+        ["DI token error — please re-import your token", userId]
+      ).catch(() => {});
+      return { ok: false, error: "DI token error — please re-import your token" };
+    }
+  }
+
   const gc = await getGarminClient(userId);
   if (!gc) {
     return { ok: false, error: "No valid Garmin session — please reconnect" };
@@ -394,20 +710,22 @@ export async function getGarminStatus(userId: string): Promise<{
   status: string;
   lastSyncAt: string | null;
   lastError: string | null;
+  tokenType: string;
 }> {
   const res = await pool.query(
-    "SELECT status, last_sync_at, last_error FROM garmin_sessions WHERE user_id = $1",
+    "SELECT status, last_sync_at, last_error, token_type FROM garmin_sessions WHERE user_id = $1",
     [userId]
   );
   const row = res.rows[0];
   if (!row) {
-    return { connected: false, status: "disconnected", lastSyncAt: null, lastError: null };
+    return { connected: false, status: "disconnected", lastSyncAt: null, lastError: null, tokenType: "none" };
   }
   return {
     connected: row.status === "connected",
     status: row.status,
     lastSyncAt: row.last_sync_at?.toISOString() ?? null,
     lastError: row.last_error,
+    tokenType: row.token_type ?? "garmin-connect",
   };
 }
 

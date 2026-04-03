@@ -91,6 +91,10 @@ export const api = {
     apiRequest("POST", "/api/garmin/sync"),
   garminDisconnect: () =>
     apiRequest("DELETE", "/api/garmin/disconnect"),
+  garminImportDiToken: (diToken: string, diRefreshToken: string, diClientId: string) =>
+    apiRequest("POST", "/api/garmin/import-di-token", {
+      di_token: diToken, di_refresh_token: diRefreshToken, di_client_id: diClientId,
+    }),
   getEffectiveWeight: () =>
     apiRequest("GET", "/api/weight/effective"),
 
