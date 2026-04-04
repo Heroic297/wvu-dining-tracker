@@ -111,30 +111,45 @@ export default function InvitePage() {
   const activeCodes   = codes.filter((c) => c.active);
   const inactiveCodes = codes.filter((c) => !c.active);
 
-  const CodeCard = ({ c }: { c: InviteCode }) => {
+  const getStatus = (c: InviteCode) => {
+    if (!c.active) return "revoked" as const;
     const exhausted = c.maxUses !== null && c.usedCount >= c.maxUses;
-    const isUsed = !c.active || exhausted;
+    if (exhausted) return "used" as const;
+    return "unused" as const;
+  };
 
-    const badgeClasses = !c.active
-      ? "bg-slate-700 text-slate-500 border-slate-700"
-      : exhausted
-      ? "bg-slate-700 text-slate-500 border-slate-700"
-      : "bg-emerald-500/10 text-emerald-400 border-emerald-500/20";
-
-    const badgeLabel = !c.active ? "Revoked" : exhausted ? "Used up" : "Unused";
+  const CodeCard = ({ c }: { c: InviteCode }) => {
+    const status = getStatus(c);
+    const isUsable = status === "unused";
 
     return (
       <div
-        className={`rounded-2xl bg-slate-900 border border-slate-800/60 p-5 transition-all duration-200 hover:border-slate-700 ${isUsed ? "opacity-60" : ""}`}
+        className={`rounded-2xl bg-slate-900 border border-slate-800/60 p-5 transition-all duration-200 hover:border-slate-700 ${
+          !isUsable ? "opacity-60" : ""
+        }`}
         data-testid={`invite-row-${c.id}`}
       >
         <div className="flex items-center justify-between mb-3">
           <span className="font-mono text-lg text-slate-100 tracking-wider">{c.code}</span>
           <div className="flex items-center gap-2">
-            <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium border ${badgeClasses}`}>
-              {badgeLabel}
-            </span>
-            {!isUsed ? (
+            {/* Status badge */}
+            {status === "unused" && (
+              <span className="rounded-full px-2.5 py-0.5 text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                Unused
+              </span>
+            )}
+            {status === "used" && (
+              <span className="rounded-full px-2.5 py-0.5 text-xs font-medium bg-slate-700 text-slate-500 border border-slate-700">
+                Used
+              </span>
+            )}
+            {status === "revoked" && (
+              <span className="rounded-full px-2.5 py-0.5 text-xs font-medium bg-red-500/10 text-red-400 border border-red-500/20">
+                Revoked
+              </span>
+            )}
+            {/* Copy button — only for usable codes */}
+            {isUsable && (
               <button
                 onClick={() => copyCode(c.code, c.id)}
                 className="p-1.5 rounded-lg text-slate-500 hover:text-slate-300 hover:bg-slate-800 transition-all duration-200"
@@ -147,32 +162,21 @@ export default function InvitePage() {
                   <Copy className="w-4 h-4" />
                 )}
               </button>
-            ) : (
-              <button
-                onClick={() => copyCode(c.code, c.id)}
-                className="p-1.5 rounded-lg text-slate-700 cursor-default"
-                title="Copy code"
-                disabled
-                data-testid={`button-copy-${c.id}`}
-              >
-                <Copy className="w-4 h-4" />
-              </button>
             )}
           </div>
         </div>
 
+        {/* Label */}
         {c.label && (
-          <p className="text-xs text-slate-500 mb-1">{c.label}</p>
+          <p className="text-xs text-slate-400 mb-2">{c.label}</p>
         )}
 
+        {/* Footer: date, uses, actions */}
         <div className="flex items-center justify-between">
-          <div>
-            <p className="text-xs text-slate-500">
-              Created {formatDate(c.createdAt)}
-            </p>
-            <p className="text-xs text-slate-600">
-              {c.usedCount} / {c.maxUses ?? "∞"} uses
-            </p>
+          <div className="text-xs text-slate-500">
+            <span>Created {formatDate(c.createdAt)}</span>
+            <span className="mx-1.5">·</span>
+            <span>{c.usedCount} / {c.maxUses ?? "∞"} uses</span>
           </div>
           <div className="flex items-center gap-1">
             {c.active && (
@@ -246,10 +250,10 @@ export default function InvitePage() {
                 data-testid="input-invite-max-uses"
               />
             </div>
-            <p className="text-xs text-slate-600">
-              Default is 1 use — enough for one person to register.
-            </p>
           </div>
+          <p className="text-xs text-slate-600">
+            Default is 1 use — enough for one person to register.
+          </p>
         </div>
 
         {/* Code list */}
