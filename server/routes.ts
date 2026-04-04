@@ -1001,7 +1001,11 @@ export async function registerRoutes(
       try {
         const status = await getGarminStatus(req.user!.id);
         const date = (req.query.date as string) || new Date().toISOString().slice(0, 10);
-        const summary = status.connected ? await getGarminSummary(req.user!.id, date) : null;
+        const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+        let summary = status.connected ? await getGarminSummary(req.user!.id, date) : null;
+        if (!summary && status.connected) {
+          summary = await getGarminSummary(req.user!.id, yesterday);
+        }
         res.json({ ...status, summary });
       } catch (err) {
         console.error("[garmin/status]", err);
@@ -1020,7 +1024,12 @@ export async function registerRoutes(
         if (!result.ok) {
           return res.status(400).json({ error: result.error });
         }
-        const summary = await getGarminSummary(req.user!.id);
+        const today = new Date().toISOString().slice(0, 10);
+        const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+        let summary = await getGarminSummary(req.user!.id, today);
+        if (!summary) {
+          summary = await getGarminSummary(req.user!.id, yesterday);
+        }
         res.json({ ok: true, categories: result.categories, summary });
       } catch (err) {
         console.error("[garmin/sync]", err);

@@ -236,39 +236,50 @@ async function syncGarminDataDI(
 
   const diToken = tokens.di_token;
 
-  // ── Steps (daily summary endpoint) ────────────────────────────────────────
-  // Try the stats endpoint first (matches garmin-connect library: /usersummary-service/stats/steps/daily/{date}/{date})
-  // then fall back to the daily summary endpoint
+  // ── Steps (DI token compatible endpoints) ─────────────────────────────────
   try {
-    let stepsData = await diApiFetch(
-      `/usersummary-service/stats/steps/daily/${dateStr}/${dateStr}`,
+    let stepped = false;
+
+    // 1. Try wellness-service dailySummary (works with DI token)
+    const wellness = await diApiFetch(
+      `/wellness-service/wellness/dailySummary/${dateStr}`,
       diToken
     );
-    // The stats endpoint returns an array of [{calendarDate, totalSteps, ...}]
-    if (Array.isArray(stepsData) && stepsData.length > 0) {
-      const dayStats = stepsData[0];
-      if (dayStats?.totalSteps && dayStats.totalSteps > 0) {
-        summary.totalSteps = dayStats.totalSteps;
-        categories.push("steps");
-        rawPayload.dailySummary = dayStats;
-      }
-      if (dayStats?.activeSeconds) {
-        summary.activeMinutes = Math.round(dayStats.activeSeconds / 60);
-      }
+    if (wellness?.totalSteps && wellness.totalSteps > 0) {
+      summary.totalSteps = wellness.totalSteps;
+      if (wellness.activeSeconds) summary.activeMinutes = Math.round(wellness.activeSeconds / 60);
+      if (wellness.totalKilocalories) summary.caloriesBurned = Math.round(wellness.totalKilocalories);
+      categories.push("steps");
+      rawPayload.dailySummary = wellness;
+      stepped = true;
     }
-    // Fallback: try the original daily summary endpoint
-    if (!summary.totalSteps) {
+
+    // 2. Fallback: userSummary via connectapi base (different from connect.garmin.com)
+    if (!stepped) {
       const data = await diApiFetch(
         `/usersummary-service/usersummary/daily/${dateStr}`,
         diToken
       );
       if (data?.totalSteps && data.totalSteps > 0) {
         summary.totalSteps = data.totalSteps;
+        if (data.activeSeconds) summary.activeMinutes = Math.round(data.activeSeconds / 60);
         categories.push("steps");
         rawPayload.dailySummary = data;
+        stepped = true;
       }
-      if (data?.activeSeconds) {
-        summary.activeMinutes = Math.round(data.activeSeconds / 60);
+    }
+
+    // 3. Fallback: stats endpoint
+    if (!stepped) {
+      const stepsData = await diApiFetch(
+        `/usersummary-service/stats/steps/daily/${dateStr}/${dateStr}`,
+        diToken
+      );
+      if (Array.isArray(stepsData) && stepsData[0]?.totalSteps > 0) {
+        summary.totalSteps = stepsData[0].totalSteps;
+        if (stepsData[0].activeSeconds) summary.activeMinutes = Math.round(stepsData[0].activeSeconds / 60);
+        categories.push("steps");
+        rawPayload.dailySummary = stepsData[0];
       }
     }
   } catch (err: any) {
@@ -276,81 +287,95 @@ async function syncGarminDataDI(
   }
 
   // ── Sleep ─────────────────────────────────────────────────────────────────
-  // Library uses /sleep-service/sleep/dailySleepData?date={date} (NOT wellness-service, NOT path param)
   try {
-    let data = await diApiFetch(
-      `/sleep-service/sleep/dailySleepData?date=${dateStr}`,
-      diToken
-    );
-    // Fallback: try the original wellness-service path
-    if (!data?.dailySleepDTO) {
-      data = await diApiFetch(
-        `/wellness-service/wellness/dailySleepData/${dateStr}`,
+    // Sleep data can appear under today OR yesterday depending on sync timing
+    // Try today first, then yesterday if fields are null
+    const datesToTry = [dateStr, fmtDate(new Date(date.getTime() - 86400000))];
+    let sleepFetched = false;
+
+    for (const sleepDate of datesToTry) {
+      if (sleepFetched) break;
+
+      let data = await diApiFetch(
+        `/sleep-service/sleep/dailySleepData?date=${sleepDate}`,
         diToken
       );
-    }
-    if (data?.dailySleepDTO) {
-      const s = data.dailySleepDTO;
-      summary.sleepDurationMin = s.sleepTimeSeconds ? Math.round(s.sleepTimeSeconds / 60) : null;
-      summary.deepSleepMin = s.deepSleepSeconds ? Math.round(s.deepSleepSeconds / 60) : null;
-      summary.lightSleepMin = s.lightSleepSeconds ? Math.round(s.lightSleepSeconds / 60) : null;
-      summary.remSleepMin = s.remSleepSeconds ? Math.round(s.remSleepSeconds / 60) : null;
-      summary.awakeSleepMin = s.awakeSleepSeconds ? Math.round(s.awakeSleepSeconds / 60) : null;
-      summary.sleepScore = s.sleepScores?.overall?.value ?? null;
-      summary.avgStress = s.avgSleepStress ? Math.round(s.avgSleepStress) : null;
-      categories.push("sleep");
-      rawPayload.sleep = s;
-      // Store sleepLevels (timestamped stage transitions) — lives at root, not inside dailySleepDTO
-      if (Array.isArray(data.sleepLevels) && data.sleepLevels.length > 0) {
-        rawPayload.sleepLevels = data.sleepLevels;
+      if (!data?.dailySleepDTO) {
+        data = await diApiFetch(
+          `/wellness-service/wellness/dailySleepData/${sleepDate}`,
+          diToken
+        );
       }
-      // Store sleep start/end timestamps for accurate time display
-      if (s.sleepStartTimestampGMT) rawPayload.sleepStartGMT = s.sleepStartTimestampGMT;
-      if (s.sleepEndTimestampGMT) rawPayload.sleepEndGMT = s.sleepEndTimestampGMT;
-      if (s.sleepStartTimestampLocal) rawPayload.sleepStartLocal = s.sleepStartTimestampLocal;
-      if (s.sleepEndTimestampLocal) rawPayload.sleepEndLocal = s.sleepEndTimestampLocal;
-    }
-    // HRV from sleep
-    if (data?.avgOvernightHrv) {
-      summary.avgOvernightHrv = data.avgOvernightHrv;
-      summary.hrvStatus = data.hrvStatus ?? null;
-      categories.push("hrv");
-    }
-    // Body battery from sleep
-    if (data?.sleepBodyBattery?.length) {
-      const bbs = data.sleepBodyBattery.map((b: any) => b.value).filter((v: number) => v > 0);
-      if (bbs.length > 0) {
-        summary.bodyBatteryHigh = Math.max(...bbs);
-        summary.bodyBatteryLow = Math.min(...bbs);
-        categories.push("body_battery");
+      if (data?.dailySleepDTO) {
+        const s = data.dailySleepDTO;
+        // Only use this date's data if it actually has sleep time
+        if (!s.sleepTimeSeconds && sleepDate !== datesToTry[datesToTry.length - 1]) continue;
+        summary.sleepDurationMin = s.sleepTimeSeconds ? Math.round(s.sleepTimeSeconds / 60) : null;
+        summary.deepSleepMin = s.deepSleepSeconds ? Math.round(s.deepSleepSeconds / 60) : null;
+        summary.lightSleepMin = s.lightSleepSeconds ? Math.round(s.lightSleepSeconds / 60) : null;
+        summary.remSleepMin = s.remSleepSeconds ? Math.round(s.remSleepSeconds / 60) : null;
+        summary.awakeSleepMin = s.awakeSleepSeconds ? Math.round(s.awakeSleepSeconds / 60) : null;
+        summary.sleepScore = s.sleepScores?.overall?.value ?? null;
+        summary.avgStress = s.avgSleepStress ? Math.round(s.avgSleepStress) : null;
+        if (summary.sleepDurationMin) {
+          categories.push("sleep");
+          sleepFetched = true;
+        }
+        rawPayload.sleep = s;
+        if (Array.isArray(data.sleepLevels) && data.sleepLevels.length > 0) {
+          rawPayload.sleepLevels = data.sleepLevels;
+        }
+        if (s.sleepStartTimestampGMT) rawPayload.sleepStartGMT = s.sleepStartTimestampGMT;
+        if (s.sleepEndTimestampGMT) rawPayload.sleepEndGMT = s.sleepEndTimestampGMT;
+        if (s.sleepStartTimestampLocal) rawPayload.sleepStartLocal = s.sleepStartTimestampLocal;
+        if (s.sleepEndTimestampLocal) rawPayload.sleepEndLocal = s.sleepEndTimestampLocal;
       }
-    }
-    if (data?.restingHeartRate) {
-      summary.restingHeartRate = data.restingHeartRate;
+      // HRV from sleep
+      if (data?.avgOvernightHrv) {
+        summary.avgOvernightHrv = data.avgOvernightHrv;
+        summary.hrvStatus = data.hrvStatus ?? null;
+        categories.push("hrv");
+      }
+      // Body battery from sleep
+      if (data?.sleepBodyBattery?.length) {
+        const bbs = data.sleepBodyBattery.map((b: any) => b.value).filter((v: number) => v > 0);
+        if (bbs.length > 0) {
+          summary.bodyBatteryHigh = Math.max(...bbs);
+          summary.bodyBatteryLow = Math.min(...bbs);
+          categories.push("body_battery");
+        }
+      }
+      if (data?.restingHeartRate) {
+        summary.restingHeartRate = data.restingHeartRate;
+      }
     }
   } catch (err: any) {
     console.warn(`[garmin-di] Sleep fetch failed for ${userId}:`, err.message);
   }
 
-  // ── Heart Rate ────────────────────────────────────────────────────────────
-  // Library uses /wellness-service/wellness/dailyHeartRate?date={date} (query param, not path param)
+  // ── Heart Rate ─────────────────────────────────────────────────────────────
   try {
-    let data = await diApiFetch(
-      `/wellness-service/wellness/dailyHeartRate?date=${dateStr}`,
-      diToken
-    );
-    // Fallback: try with path param
-    if (!data) {
-      data = await diApiFetch(
-        `/wellness-service/wellness/dailyHeartRate/${dateStr}`,
+    const datesToTry = [dateStr, fmtDate(new Date(date.getTime() - 86400000))];
+    for (const hrDate of datesToTry) {
+      let data = await diApiFetch(
+        `/wellness-service/wellness/dailyHeartRate?date=${hrDate}`,
         diToken
       );
-    }
-    if (data) {
-      if (data.restingHeartRate) summary.restingHeartRate = data.restingHeartRate;
-      if (data.maxHeartRate) summary.maxHeartRate = data.maxHeartRate;
-      categories.push("heart_rate");
-      rawPayload.heartRate = { resting: data.restingHeartRate, max: data.maxHeartRate };
+      if (!data) {
+        data = await diApiFetch(
+          `/wellness-service/wellness/dailyHeartRate/${hrDate}`,
+          diToken
+        );
+      }
+      if (data) {
+        if (data.restingHeartRate) summary.restingHeartRate = data.restingHeartRate;
+        if (data.maxHeartRate) summary.maxHeartRate = data.maxHeartRate;
+        if (data.restingHeartRate || data.maxHeartRate) {
+          categories.push("heart_rate");
+          rawPayload.heartRate = { resting: data.restingHeartRate, max: data.maxHeartRate };
+          break;
+        }
+      }
     }
   } catch (err: any) {
     console.warn(`[garmin-di] Heart rate fetch failed for ${userId}:`, err.message);
@@ -547,48 +572,78 @@ export async function syncGarminData(
   }
 
   // ── Sleep ──────────────────────────────────────────────────────────────────
-  try {
-    const sleep = await gc.getSleepData(date);
-    if (sleep?.dailySleepDTO) {
-      const s = sleep.dailySleepDTO;
-      summary.sleepDurationMin = s.sleepTimeSeconds ? Math.round(s.sleepTimeSeconds / 60) : null;
-      summary.deepSleepMin = s.deepSleepSeconds ? Math.round(s.deepSleepSeconds / 60) : null;
-      summary.lightSleepMin = s.lightSleepSeconds ? Math.round(s.lightSleepSeconds / 60) : null;
-      summary.remSleepMin = s.remSleepSeconds ? Math.round(s.remSleepSeconds / 60) : null;
-      summary.awakeSleepMin = s.awakeSleepSeconds ? Math.round(s.awakeSleepSeconds / 60) : null;
-      summary.sleepScore = s.sleepScores?.overall?.value ?? null;
-      summary.avgStress = s.avgSleepStress ? Math.round(s.avgSleepStress) : null;
-      categories.push("sleep");
-      rawPayload.sleep = s;
-      // Store sleepLevels (timestamped stage transitions) — lives at root, not inside dailySleepDTO
-      if (Array.isArray(sleep.sleepLevels) && sleep.sleepLevels.length > 0) {
-        rawPayload.sleepLevels = sleep.sleepLevels;
+  // Try today's sleep, fall back to yesterday if sleepTimeSeconds is null
+  {
+    const datesToTry = [date, new Date(date.getTime() - 86400000)];
+    let sleepFetched = false;
+    for (const sleepDate of datesToTry) {
+      if (sleepFetched) break;
+      try {
+        const sleep = await gc.getSleepData(sleepDate);
+        if (sleep?.dailySleepDTO) {
+          const s = sleep.dailySleepDTO;
+          // Only use this date's data if it actually has sleep time
+          if (!s.sleepTimeSeconds && sleepDate !== datesToTry[datesToTry.length - 1]) {
+            // still extract HRV/body battery/HR even if sleepTime is null
+            if (sleep?.avgOvernightHrv) {
+              summary.avgOvernightHrv = sleep.avgOvernightHrv;
+              summary.hrvStatus = sleep.hrvStatus ?? null;
+              categories.push("hrv");
+            }
+            if (sleep?.sleepBodyBattery?.length) {
+              const bbs = sleep.sleepBodyBattery.map((b: any) => b.value).filter((v: number) => v > 0);
+              if (bbs.length > 0) {
+                summary.bodyBatteryHigh = Math.max(...bbs);
+                summary.bodyBatteryLow = Math.min(...bbs);
+                categories.push("body_battery");
+              }
+            }
+            if (sleep?.restingHeartRate) {
+              summary.restingHeartRate = sleep.restingHeartRate;
+            }
+            continue;
+          }
+          summary.sleepDurationMin = s.sleepTimeSeconds ? Math.round(s.sleepTimeSeconds / 60) : null;
+          summary.deepSleepMin = s.deepSleepSeconds ? Math.round(s.deepSleepSeconds / 60) : null;
+          summary.lightSleepMin = s.lightSleepSeconds ? Math.round(s.lightSleepSeconds / 60) : null;
+          summary.remSleepMin = s.remSleepSeconds ? Math.round(s.remSleepSeconds / 60) : null;
+          summary.awakeSleepMin = s.awakeSleepSeconds ? Math.round(s.awakeSleepSeconds / 60) : null;
+          summary.sleepScore = s.sleepScores?.overall?.value ?? null;
+          summary.avgStress = s.avgSleepStress ? Math.round(s.avgSleepStress) : null;
+          if (summary.sleepDurationMin) {
+            categories.push("sleep");
+            sleepFetched = true;
+          }
+          rawPayload.sleep = s;
+          if (Array.isArray(sleep.sleepLevels) && sleep.sleepLevels.length > 0) {
+            rawPayload.sleepLevels = sleep.sleepLevels;
+          }
+          if (s.sleepStartTimestampGMT) rawPayload.sleepStartGMT = s.sleepStartTimestampGMT;
+          if (s.sleepEndTimestampGMT) rawPayload.sleepEndGMT = s.sleepEndTimestampGMT;
+          if (s.sleepStartTimestampLocal) rawPayload.sleepStartLocal = s.sleepStartTimestampLocal;
+          if (s.sleepEndTimestampLocal) rawPayload.sleepEndLocal = s.sleepEndTimestampLocal;
+        }
+        // HRV and body battery from sleep data
+        if (sleep?.avgOvernightHrv) {
+          summary.avgOvernightHrv = sleep.avgOvernightHrv;
+          summary.hrvStatus = sleep.hrvStatus ?? null;
+          categories.push("hrv");
+        }
+        if (sleep?.sleepBodyBattery?.length) {
+          const bbs = sleep.sleepBodyBattery.map((b: any) => b.value).filter((v: number) => v > 0);
+          if (bbs.length > 0) {
+            summary.bodyBatteryHigh = Math.max(...bbs);
+            summary.bodyBatteryLow = Math.min(...bbs);
+            categories.push("body_battery");
+          }
+        }
+        if (sleep?.restingHeartRate) {
+          summary.restingHeartRate = sleep.restingHeartRate;
+        }
+      } catch (err: any) {
+        console.warn(`[garmin] Sleep fetch failed for ${userId} on ${fmtDate(sleepDate)}:`, err.message);
       }
-      // Store sleep start/end timestamps for accurate time display
-      if (s.sleepStartTimestampGMT) rawPayload.sleepStartGMT = s.sleepStartTimestampGMT;
-      if (s.sleepEndTimestampGMT) rawPayload.sleepEndGMT = s.sleepEndTimestampGMT;
-      if (s.sleepStartTimestampLocal) rawPayload.sleepStartLocal = s.sleepStartTimestampLocal;
-      if (s.sleepEndTimestampLocal) rawPayload.sleepEndLocal = s.sleepEndTimestampLocal;
     }
-    // HRV and body battery from sleep data
-    if (sleep?.avgOvernightHrv) {
-      summary.avgOvernightHrv = sleep.avgOvernightHrv;
-      summary.hrvStatus = sleep.hrvStatus ?? null;
-      categories.push("hrv");
-    }
-    if (sleep?.sleepBodyBattery?.length) {
-      const bbs = sleep.sleepBodyBattery.map((b: any) => b.value).filter((v: number) => v > 0);
-      if (bbs.length > 0) {
-        summary.bodyBatteryHigh = Math.max(...bbs);
-        summary.bodyBatteryLow = Math.min(...bbs);
-        categories.push("body_battery");
-      }
-    }
-    if (sleep?.restingHeartRate) {
-      summary.restingHeartRate = sleep.restingHeartRate;
-    }
-  } catch (err: any) {
-    console.warn(`[garmin] Sleep fetch failed for ${userId}:`, err.message);
   }
 
   // ── Heart Rate ─────────────────────────────────────────────────────────────
@@ -909,7 +964,11 @@ export async function getGarminCoachContext(userId: string): Promise<string | nu
   if (!status.connected) return null;
 
   const today = fmtDate(new Date());
-  const summary = await getGarminSummary(userId, today);
+  const yesterday = fmtDate(new Date(Date.now() - 86400000));
+  let summary = await getGarminSummary(userId, today);
+  if (!summary) {
+    summary = await getGarminSummary(userId, yesterday);
+  }
   if (!summary) return null;
 
   const lines: string[] = ["--- GARMIN WEARABLE DATA (today) ---"];
