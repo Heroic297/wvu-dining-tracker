@@ -889,6 +889,12 @@ export default function CoachPage() {
     sendMutation.mutate(text);
   }, [input, isStreaming, sendMutation]);
 
+  const handleSuggestedPrompt = useCallback((prompt: string) => {
+    if (isStreaming) return;
+    setInput("");
+    sendMutation.mutate(prompt);
+  }, [isStreaming, sendMutation]);
+
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -922,12 +928,6 @@ export default function CoachPage() {
       clearing={clearMutation.isPending}
     />
   ) : null;
-
-  const handleSuggestedPrompt = useCallback((prompt: string) => {
-    if (isStreaming) return;
-    setInput("");
-    sendMutation.mutate(prompt);
-  }, [isStreaming, sendMutation]);
 
   return (
     <div className="flex h-full overflow-hidden">
