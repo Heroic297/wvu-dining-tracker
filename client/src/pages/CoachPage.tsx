@@ -24,6 +24,7 @@ import {
   RefreshCw,
   Check,
   Pencil,
+  MessageCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -705,27 +706,52 @@ function MessageBubble({ msg }: { msg: Message }) {
   const watermark = !isUser && !msg.pending && msg.model
     ? `${MODEL_LABELS[msg.model] ?? msg.model.split("/").pop()?.replace(":free","") ?? msg.model}${msg.provider ? ` · ${PROVIDER_LABELS[msg.provider] ?? msg.provider}` : ""}`
     : null;
-  return (
-    <div className={`flex gap-2.5 ${isUser ? "justify-end" : "justify-start"}`}>
-      {!isUser && (
-        <div className="w-7 h-7 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0 mt-0.5">
-          <Brain className="w-3.5 h-3.5 text-primary" />
+
+  if (isUser) {
+    return (
+      <div className="flex justify-end">
+        <div className="max-w-[80%] bg-emerald-900/40 border border-emerald-800/30 rounded-2xl rounded-br-sm px-4 py-3">
+          <p className="text-sm text-slate-200">{msg.content}</p>
         </div>
-      )}
-      <div className={`flex flex-col ${isUser ? "items-end" : "items-start"} max-w-[80%]`}>
+      </div>
+    );
+  }
+
+  // Typing indicator for pending messages
+  if (msg.pending) {
+    return (
+      <div className="flex justify-start gap-2">
+        <div className="w-7 h-7 rounded-full bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center flex-shrink-0">
+          <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+        </div>
+        <div className="bg-slate-800 rounded-2xl rounded-bl-sm px-4 py-3">
+          <div className="flex gap-1">
+            <div className="w-1.5 h-1.5 rounded-full bg-slate-500 animate-bounce" style={{animationDelay: '0ms'}} />
+            <div className="w-1.5 h-1.5 rounded-full bg-slate-500 animate-bounce" style={{animationDelay: '150ms'}} />
+            <div className="w-1.5 h-1.5 rounded-full bg-slate-500 animate-bounce" style={{animationDelay: '300ms'}} />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex justify-start gap-2">
+      <div className="w-7 h-7 rounded-full bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center flex-shrink-0 mt-0.5">
+        <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+      </div>
+      <div className="flex flex-col items-start max-w-[80%]">
         <div
-          className={`rounded-2xl px-3.5 py-2.5 text-sm ${
-            isUser
-              ? "bg-primary text-primary-foreground rounded-br-sm"
-              : msg.error
-              ? "bg-destructive/10 border border-destructive/30 text-destructive-foreground rounded-bl-sm"
-              : "bg-card border border-border rounded-bl-sm"
-          } ${msg.pending ? "opacity-60 animate-pulse" : ""}`}
+          className={`rounded-2xl rounded-bl-sm px-4 py-3 text-sm ${
+            msg.error
+              ? "bg-destructive/10 border border-destructive/30 text-destructive-foreground"
+              : "bg-slate-800"
+          }`}
         >
-          {isUser || msg.pending ? msg.content : renderMarkdown(msg.content)}
+          <div className="text-sm text-slate-200">{renderMarkdown(msg.content)}</div>
         </div>
         {watermark && (
-          <p className="text-[10px] text-muted-foreground/60 mt-0.5 px-1 select-none">{watermark}</p>
+          <p className="text-[10px] text-slate-500 mt-0.5 px-1 select-none">{watermark}</p>
         )}
       </div>
     </div>
@@ -758,7 +784,7 @@ export default function CoachPage() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [showNeedKey, setShowNeedKey] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const textareaRef = useRef<HTMLInputElement>(null);
 
   // Profile query
   const { data: profile, isLoading: profileLoading } = useQuery<CoachProfile>({
@@ -863,12 +889,6 @@ export default function CoachPage() {
     sendMutation.mutate(text);
   }, [input, isStreaming, sendMutation]);
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
-  };
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -903,15 +923,21 @@ export default function CoachPage() {
     />
   ) : null;
 
+  const handleSuggestedPrompt = useCallback((prompt: string) => {
+    if (isStreaming) return;
+    setInput("");
+    sendMutation.mutate(prompt);
+  }, [isStreaming, sendMutation]);
+
   return (
     <div className="flex h-full overflow-hidden">
       {/* ── Main chat area ── */}
-      <div className="flex flex-col flex-1 min-w-0 h-full">
+      <div className="flex flex-col flex-1 min-w-0 h-full bg-slate-950 text-slate-100">
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border flex-shrink-0">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800 flex-shrink-0">
           <div className="flex items-center gap-2">
-            <Brain className="w-5 h-5 text-primary" />
-            <h1 className="text-base font-semibold">
+            <Brain className="w-5 h-5 text-emerald-400" />
+            <h1 className="text-base font-semibold text-slate-100">
               Coach{profile?.preferredName ? ` · ${profile.preferredName}` : ""}
             </h1>
           </div>
@@ -952,7 +978,7 @@ export default function CoachPage() {
                     qc.invalidateQueries({ queryKey: ["coachProfile"] });
                   }}
                 >
-                  <SelectTrigger className="h-7 text-xs w-auto max-w-[150px] border-border bg-secondary">
+                  <SelectTrigger className="h-7 text-xs w-auto max-w-[150px] border-slate-700 bg-slate-800 text-slate-300">
                     <SelectValue placeholder="Select model" />
                   </SelectTrigger>
                   <SelectContent align="end" className="max-w-[220px]">
@@ -968,7 +994,7 @@ export default function CoachPage() {
             {/* Mobile: Coach Knows sheet trigger */}
             <Sheet>
               <SheetTrigger asChild>
-                <Button variant="ghost" size="sm" className="lg:hidden text-xs gap-1.5">
+                <Button variant="ghost" size="sm" className="lg:hidden text-xs gap-1.5 text-slate-400 hover:text-slate-200">
                   <Info className="w-3.5 h-3.5" />
                   Coach Knows
                 </Button>
@@ -986,34 +1012,23 @@ export default function CoachPage() {
           </div>
         </div>
 
-        {/* Messages */}
-        <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3 min-h-0">
+        {/* Scrollable messages area */}
+        <div className="flex-1 overflow-y-auto px-4 pt-6 pb-4 space-y-3 min-h-0">
           {messages.length === 0 && (
-            <div className="flex flex-col items-center justify-center h-full gap-3 text-center px-6">
-              <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center">
-                <Sparkles className="w-6 h-6 text-primary" />
+            <div className="flex flex-col items-center justify-center h-full text-center px-6 py-12">
+              <div className="w-16 h-16 rounded-2xl bg-slate-800 border border-slate-700 flex items-center justify-center mb-4">
+                <MessageCircle className="w-8 h-8 text-emerald-400" />
               </div>
-              <div className="space-y-1">
-                <p className="text-sm font-semibold">
-                  {profile?.preferredName ? `Hey ${profile.preferredName}!` : "Hey!"} I'm your Macro Coach.
-                </p>
-                <p className="text-xs text-muted-foreground max-w-xs">
-                  Ask me anything — macro targets, meal ideas, training nutrition, peak week guidance, dining hall options, or just what to eat tonight.
-                </p>
-              </div>
-              <div className="flex flex-wrap gap-2 justify-center mt-2">
-                {[
-                  "Explain my calorie target today",
-                  "What should I eat before training?",
-                  ...(profile?.isWvuStudent ? ["What's at the dining hall tomorrow?"] : []),
-                  "How am I tracking this week?",
-                ].map((suggestion) => (
+              <h2 className="text-lg font-semibold text-slate-300 mb-1">AI Nutrition Coach</h2>
+              <p className="text-sm text-slate-500 mb-6">Ask me anything about your nutrition, goals, or meal planning.</p>
+              <div className="flex flex-wrap gap-2 justify-center">
+                {["What should I eat today?", "Am I hitting my protein goal?", "Suggest a high-protein snack", "How many calories left?"].map((prompt) => (
                   <button
-                    key={suggestion}
-                    onClick={() => { setInput(suggestion); textareaRef.current?.focus(); }}
-                    className="text-xs px-3 py-1.5 rounded-full border border-border bg-secondary hover:bg-secondary/80 hover:border-primary/40 transition-colors"
+                    key={prompt}
+                    onClick={() => handleSuggestedPrompt(prompt)}
+                    className="rounded-full px-3 py-1.5 text-xs font-medium bg-slate-800 border border-slate-700 text-slate-300 cursor-pointer hover:border-emerald-500/50 hover:text-emerald-400 transition-all duration-200"
                   >
-                    {suggestion}
+                    {prompt}
                   </button>
                 ))}
               </div>
@@ -1028,31 +1043,31 @@ export default function CoachPage() {
         {/* Need key banner */}
         {showNeedKey && !profile?.hasOwnKey && <NoKeyBanner />}
 
-        {/* Input */}
-        <div className="border-t border-border px-3 py-3 flex-shrink-0">
+        {/* Fixed input */}
+        <div className="border-t border-slate-800 bg-slate-950/95 backdrop-blur px-4 py-3 pb-20 flex-shrink-0">
           <div className="flex gap-2 items-end">
-            <Textarea
+            <input
               ref={textareaRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="Ask your coach anything..."
-              className="resize-none min-h-[44px] max-h-[120px] text-sm flex-1"
-              rows={1}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSend();
+                }
+              }}
+              placeholder="Ask your coach..."
+              className="flex-1 rounded-xl bg-slate-800 border border-slate-700 px-4 py-3 text-sm text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/20 transition-all duration-200"
               disabled={isStreaming}
             />
-            <Button
-              size="icon"
+            <button
               onClick={handleSend}
               disabled={!input.trim() || isStreaming}
-              className="flex-shrink-0 h-[44px] w-[44px]"
+              className="rounded-xl bg-emerald-500 hover:bg-emerald-400 text-white p-3 transition-colors duration-200 flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Send className="w-4 h-4" />
-            </Button>
+            </button>
           </div>
-          <p className="text-[10px] text-muted-foreground mt-1.5 px-1">
-            Enter to send · Shift+Enter for new line
-          </p>
         </div>
       </div>
 
