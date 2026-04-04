@@ -1040,7 +1040,8 @@ export async function disconnectGarmin(userId: string): Promise<void> {
 
 /**
  * Get Garmin wearable context for the AI coach.
- * Returns null if no Garmin data detected — coach should NOT get wearable context.
+ * Returns a string block with today's full detail + 7-day sleep history table.
+ * Returns null if no Garmin session exists for this user.
  */
 export async function getGarminCoachContext(userId: string): Promise<string | null> {
   const status = await getGarminStatus(userId);
@@ -1048,6 +1049,8 @@ export async function getGarminCoachContext(userId: string): Promise<string | nu
 
   const today = fmtDate(new Date());
   const yesterday = fmtDate(new Date(Date.now() - 86400000));
+
+  // ── Today's summary (full detail) ─────────────────────────────────────────
   let summary = await getGarminSummary(userId, today);
   if (!summary) {
     summary = await getGarminSummary(userId, yesterday);
@@ -1103,6 +1106,47 @@ export async function getGarminCoachContext(userId: string): Promise<string | nu
 
   if (summary.syncedAt) {
     lines.push(`Last sync: ${new Date(summary.syncedAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/New_York" })} ET`);
+  }
+
+  // ── 7-day sleep history table ─────────────────────────────────────────────
+  // Query last 7 days (excluding today — already shown above in detail)
+  try {
+    const cutoff = fmtDate(new Date(Date.now() - 7 * 86400000));
+    const histRes = await pool.query(
+      `SELECT date, sleep_duration_min, sleep_score, deep_sleep_min, rem_sleep_min
+       FROM garmin_daily_summary
+       WHERE user_id = $1 AND date >= $2 AND date < $3
+       ORDER BY date ASC`,
+      [userId, cutoff, today]
+    );
+
+    const histRows = histRes.rows.filter(
+      (r: any) => r.sleep_duration_min != null || r.sleep_score != null
+    );
+
+    if (histRows.length > 0) {
+      lines.push("Sleep history (past 7 days):");
+      for (const r of histRows) {
+        const d = r.date;
+        const durMin: number | null = r.sleep_duration_min;
+        const score: number | null = r.sleep_score;
+        const deep: number | null = r.deep_sleep_min;
+        const rem: number | null = r.rem_sleep_min;
+
+        let entry = `  ${d}:`;
+        if (durMin != null) {
+          const h = Math.floor(durMin / 60);
+          const m = durMin % 60;
+          entry += ` ${h}h${m > 0 ? `${m}m` : ""}`;
+        }
+        if (score != null) entry += ` score=${score}/100`;
+        if (deep != null) entry += ` deep=${deep}m`;
+        if (rem != null) entry += ` rem=${rem}m`;
+        lines.push(entry);
+      }
+    }
+  } catch {
+    // Non-fatal — history is bonus context, don't crash coach
   }
 
   lines.push("--- END GARMIN DATA ---");

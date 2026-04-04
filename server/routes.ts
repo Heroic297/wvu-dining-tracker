@@ -24,6 +24,7 @@ import {
   disconnectGarmin,
   importDiToken,
 } from "./garmin.js";
+import { pool } from "./db.js";
 import { z } from "zod";
 import { randomUUID } from "crypto";
 import crypto from "crypto";
@@ -1096,6 +1097,104 @@ export async function registerRoutes(
         });
       } catch (err) {
         res.status(500).json({ error: "Failed to get effective weight" });
+      }
+    }
+  );
+
+  // ── Dev / Testing ──────────────────────────────────────────────────────────
+  // Seed 7 days of fake Garmin sleep data for the authenticated user.
+  // Gated to non-production environments so it can never run on prod.
+  // Usage: POST /api/dev/seed-garmin-sleep  (no body needed)
+  app.post(
+    "/api/dev/seed-garmin-sleep",
+    requireAuth as any,
+    async (req: AuthRequest, res) => {
+      if (process.env.NODE_ENV === "production") {
+        return res.status(403).json({ error: "Not available in production" });
+      }
+      try {
+        const userId = req.user!.id;
+
+        // Ensure a garmin_sessions row exists so getGarminCoachContext sees status=connected
+        await pool.query(
+          `INSERT INTO garmin_sessions (user_id, encrypted_tokens, status, token_type, updated_at)
+           VALUES ($1, 'seed', 'connected', 'seed', now())
+           ON CONFLICT (user_id) DO UPDATE SET
+             status = 'connected',
+             token_type = 'seed',
+             last_error = NULL,
+             updated_at = now()`,
+          [userId]
+        );
+
+        // Realistic sleep data for a collegiate powerlifter — slight fatigue trend
+        // heading into a meet week (scores drop, less deep sleep)
+        const seedDays = [
+          { daysAgo: 7, durMin: 452, score: 79, deep: 72, rem: 88, light: 252, awake: 18, hrv: 62, rhr: 52 },
+          { daysAgo: 6, durMin: 438, score: 75, deep: 68, rem: 82, light: 243, awake: 21, hrv: 58, rhr: 53 },
+          { daysAgo: 5, durMin: 461, score: 81, deep: 80, rem: 91, light: 248, awake: 15, hrv: 65, rhr: 51 },
+          { daysAgo: 4, durMin: 423, score: 71, deep: 58, rem: 76, light: 244, awake: 27, hrv: 54, rhr: 55 },
+          { daysAgo: 3, durMin: 445, score: 74, deep: 64, rem: 85, light: 249, awake: 22, hrv: 57, rhr: 54 },
+          { daysAgo: 2, durMin: 397, score: 66, deep: 50, rem: 70, light: 238, awake: 31, hrv: 49, rhr: 57 },
+          { daysAgo: 1, durMin: 418, score: 69, deep: 55, rem: 78, light: 241, awake: 28, hrv: 52, rhr: 56 },
+        ];
+
+        const now = Date.now();
+        let inserted = 0;
+
+        for (const d of seedDays) {
+          const dateStr = new Date(now - d.daysAgo * 86400000).toISOString().slice(0, 10);
+          await pool.query(
+            `INSERT INTO garmin_daily_summary (
+              user_id, date,
+              sleep_duration_min, sleep_score,
+              deep_sleep_min, light_sleep_min, rem_sleep_min, awake_sleep_min,
+              avg_overnight_hrv, hrv_status,
+              resting_heart_rate,
+              total_steps, calories_burned, active_minutes,
+              synced_at
+            ) VALUES (
+              $1, $2,
+              $3, $4,
+              $5, $6, $7, $8,
+              $9, $10,
+              $11,
+              $12, $13, $14,
+              now()
+            )
+            ON CONFLICT (user_id, date) DO UPDATE SET
+              sleep_duration_min = $3,
+              sleep_score        = $4,
+              deep_sleep_min     = $5,
+              light_sleep_min    = $6,
+              rem_sleep_min      = $7,
+              awake_sleep_min    = $8,
+              avg_overnight_hrv  = $9,
+              hrv_status         = $10,
+              resting_heart_rate = $11,
+              synced_at          = now()`,
+            [
+              userId, dateStr,
+              d.durMin, d.score,
+              d.deep, d.light, d.rem, d.awake,
+              d.hrv, "BALANCED",
+              d.rhr,
+              8000 + Math.floor(Math.random() * 4000),  // steps
+              300 + Math.floor(Math.random() * 200),     // calories
+              45 + Math.floor(Math.random() * 30),       // active minutes
+            ]
+          );
+          inserted++;
+        }
+
+        res.json({
+          ok: true,
+          inserted,
+          message: `Seeded ${inserted} days of fake Garmin sleep data for user ${userId}. The AI coach will now include sleep history context.`,
+        });
+      } catch (err: any) {
+        console.error("[dev/seed-garmin-sleep]", err);
+        res.status(500).json({ error: err.message });
       }
     }
   );
