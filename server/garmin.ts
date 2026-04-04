@@ -20,7 +20,7 @@ import type { InsertGarminDailySummary } from "../shared/schema.js";
 
 const GARMIN_CONNECT_BASE = "https://connect.garmin.com";
 const GARMIN_API_BASE = "https://connectapi.garmin.com";
-const DI_GATED_EMAIL = "owengidusko@gmail.com";
+// DI token import is now available to all users (email gating removed)
 
 // ─── Session management ──────────────────────────────────────────────────────
 
@@ -136,11 +136,6 @@ async function updateStoredTokens(userId: string, gc: GarminConnect): Promise<vo
 }
 
 // ─── DI Token Import ────────────────────────────────────────────────────────
-
-/** Check whether a user email is allowed to use DI token import */
-export function isDiTokenAllowed(email: string): boolean {
-  return email.toLowerCase() === DI_GATED_EMAIL;
-}
 
 /**
  * Import a Garmin DI token for direct API access.

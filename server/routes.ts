@@ -23,7 +23,6 @@ import {
   syncGarminData,
   disconnectGarmin,
   importDiToken,
-  isDiTokenAllowed,
 } from "./garmin.js";
 import { z } from "zod";
 import { randomUUID } from "crypto";
@@ -1053,15 +1052,12 @@ export async function registerRoutes(
     }
   );
 
-  // Import Garmin DI token (dev-only, gated to specific user)
+  // Import Garmin DI token (available to all authenticated users)
   app.post(
     "/api/garmin/import-di-token",
     requireAuth as any,
     async (req: AuthRequest, res) => {
       try {
-        if (!isDiTokenAllowed(req.user!.email)) {
-          return res.status(403).json({ error: "DI token import is not available for your account" });
-        }
         const schema = z.object({
           di_token: z.string().min(1, "di_token is required"),
           di_refresh_token: z.string().min(1, "di_refresh_token is required"),
