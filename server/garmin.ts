@@ -33,15 +33,36 @@ export async function garminLogin(
   email: string,
   password: string
 ): Promise<{ ok: true } | { ok: false; error: string }> {
+  // Try Python sidecar first (garminconnect 0.3.0 — Cloudflare bypass, MFA-compatible)
+  try {
+    const { pythonGarminLogin } = await import("./garminPython.js");
+    const pyResult = await pythonGarminLogin(userId, email, password);
+    if (pyResult.ok) {
+      // Mark as connected in DB with token_type = 'python-garth'
+      await pool.query(
+        `INSERT INTO garmin_sessions (user_id, encrypted_tokens, status, token_type, updated_at)
+         VALUES ($1, '', 'connected', 'python-garth', now())
+         ON CONFLICT (user_id) DO UPDATE SET
+           status = 'connected',
+           token_type = 'python-garth',
+           last_error = NULL,
+           updated_at = now()`,
+        [userId]
+      );
+      return { ok: true };
+    }
+    // Python failed — fall through to legacy npm library as last resort
+    console.warn(`[garmin] Python sidecar login failed for ${userId}: ${pyResult.error} — trying legacy library`);
+  } catch (err: any) {
+    console.warn(`[garmin] Python sidecar unavailable for ${userId}: ${err.message} — trying legacy library`);
+  }
+
+  // Legacy fallback: garmin-connect npm library
   try {
     const gc = new GarminConnect({ username: email, password });
     await gc.login(email, password);
-
-    // Export the OAuth tokens from the library
     const tokens = gc.exportToken();
     const encrypted = encryptString(JSON.stringify(tokens));
-
-    // Upsert into garmin_sessions
     await pool.query(
       `INSERT INTO garmin_sessions (user_id, encrypted_tokens, status, updated_at)
        VALUES ($1, $2, 'connected', now())
@@ -52,13 +73,10 @@ export async function garminLogin(
          updated_at = now()`,
       [userId, encrypted]
     );
-
     return { ok: true };
   } catch (err: any) {
     const msg = err.message || "Login failed";
     console.error(`[garmin] Login failed for user ${userId}:`, msg);
-
-    // Save error state
     await pool.query(
       `INSERT INTO garmin_sessions (user_id, encrypted_tokens, status, last_error, updated_at)
        VALUES ($1, '', 'error', $2, now())
@@ -68,7 +86,6 @@ export async function garminLogin(
          updated_at = now()`,
       [userId, msg]
     ).catch(() => {});
-
     return { ok: false, error: msg };
   }
 }
@@ -541,6 +558,102 @@ export async function syncGarminData(
         ["DI token error — please re-import your token", userId]
       ).catch(() => {});
       return { ok: false, error: "DI token error — please re-import your token" };
+    }
+  }
+
+  // python-garth path (garminconnect 0.3.0 via Python sidecar)
+  if (session?.token_type === "python-garth") {
+    try {
+      const { pythonGarminSync } = await import("./garminPython.js");
+      const pyResult = await pythonGarminSync(userId, targetDate);
+      if (!pyResult.ok) {
+        await pool.query(
+          "UPDATE garmin_sessions SET status = 'error', last_error = $1, updated_at = now() WHERE user_id = $2",
+          [pyResult.error, userId]
+        ).catch(() => {});
+        return { ok: false, error: pyResult.error };
+      }
+
+      // Normalize the Python result into garmin_daily_summary
+      const s = pyResult.summary;
+      const raw = pyResult.rawPayload;
+      const dateStr = pyResult.date;
+      const categories = pyResult.categories;
+
+      if (categories.length > 0) {
+        await pool.query(
+          `INSERT INTO garmin_daily_summary (
+            user_id, date, total_steps, calories_burned, active_minutes,
+            sleep_duration_min, deep_sleep_min, light_sleep_min, rem_sleep_min, awake_sleep_min, sleep_score,
+            resting_heart_rate, max_heart_rate,
+            avg_stress, body_battery_high, body_battery_low,
+            avg_overnight_hrv, hrv_status,
+            weight_kg, body_fat_pct,
+            recent_activities, raw_payload, synced_at
+          ) VALUES (
+            $1, $2, $3, $4, $5,
+            $6, $7, $8, $9, $10, $11,
+            $12, $13,
+            $14, $15, $16,
+            $17, $18,
+            $19, $20,
+            $21, $22, now()
+          )
+          ON CONFLICT (user_id, date) DO UPDATE SET
+            total_steps = COALESCE($3, garmin_daily_summary.total_steps),
+            calories_burned = COALESCE($4, garmin_daily_summary.calories_burned),
+            active_minutes = COALESCE($5, garmin_daily_summary.active_minutes),
+            sleep_duration_min = COALESCE($6, garmin_daily_summary.sleep_duration_min),
+            deep_sleep_min = COALESCE($7, garmin_daily_summary.deep_sleep_min),
+            light_sleep_min = COALESCE($8, garmin_daily_summary.light_sleep_min),
+            rem_sleep_min = COALESCE($9, garmin_daily_summary.rem_sleep_min),
+            awake_sleep_min = COALESCE($10, garmin_daily_summary.awake_sleep_min),
+            sleep_score = COALESCE($11, garmin_daily_summary.sleep_score),
+            resting_heart_rate = COALESCE($12, garmin_daily_summary.resting_heart_rate),
+            max_heart_rate = COALESCE($13, garmin_daily_summary.max_heart_rate),
+            avg_stress = COALESCE($14, garmin_daily_summary.avg_stress),
+            body_battery_high = COALESCE($15, garmin_daily_summary.body_battery_high),
+            body_battery_low = COALESCE($16, garmin_daily_summary.body_battery_low),
+            avg_overnight_hrv = COALESCE($17, garmin_daily_summary.avg_overnight_hrv),
+            hrv_status = COALESCE($18, garmin_daily_summary.hrv_status),
+            weight_kg = COALESCE($19, garmin_daily_summary.weight_kg),
+            body_fat_pct = COALESCE($20, garmin_daily_summary.body_fat_pct),
+            recent_activities = COALESCE($21, garmin_daily_summary.recent_activities),
+            raw_payload = COALESCE($22, garmin_daily_summary.raw_payload),
+            synced_at = now()`,
+          [
+            userId, dateStr,
+            s.totalSteps ?? null, s.caloriesBurned ?? null, s.activeMinutes ?? null,
+            s.sleepDurationMin ?? null, s.deepSleepMin ?? null, s.lightSleepMin ?? null,
+            s.remSleepMin ?? null, s.awakeSleepMin ?? null, s.sleepScore ?? null,
+            s.restingHeartRate ?? null, s.maxHeartRate ?? null,
+            s.avgStress ?? null, s.bodyBatteryHigh ?? null, s.bodyBatteryLow ?? null,
+            s.avgOvernightHrv ?? null, s.hrvStatus ?? null,
+            s.weightKg ?? null, s.bodyFatPct ?? null,
+            s.recentActivities ? JSON.stringify(s.recentActivities) : null,
+            raw ? JSON.stringify(raw) : null,
+          ]
+        );
+
+        await pool.query(
+          "UPDATE garmin_sessions SET last_sync_at = now(), status = 'connected', last_error = NULL WHERE user_id = $1",
+          [userId]
+        );
+
+        if (s.weightKg) {
+          await upsertGarminWeight(userId, dateStr, s.weightKg);
+        }
+      }
+
+      console.log(`[garmin-py] Synced ${categories.length} categories for user ${userId} on ${dateStr}: ${categories.join(", ")}`);
+      return { ok: true, categories };
+    } catch (err: any) {
+      console.error(`[garmin-py] Sync error for ${userId}:`, err.message);
+      await pool.query(
+        "UPDATE garmin_sessions SET status = 'error', last_error = $1, updated_at = now() WHERE user_id = $2",
+        [err.message, userId]
+      ).catch(() => {});
+      return { ok: false, error: err.message };
     }
   }
 
