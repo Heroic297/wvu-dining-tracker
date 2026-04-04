@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { Link } from "wouter";
 import { useAuth } from "@/contexts/AuthContext";
 import { api, lbsToKg, kgToLbs } from "@/lib/api";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DateInput } from "@/components/DateInput";
@@ -10,8 +10,8 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { CheckCircle, XCircle, Loader2, Dumbbell, Activity, Scale, RefreshCw, Droplets, Plus, Trash2, Brain, Eye, EyeOff, Globe, Sun, Moon, LogOut, Target, Users } from "lucide-react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { CheckCircle, Loader2, Activity, Scale, Droplets, Plus, Trash2, Brain, Eye, EyeOff, Globe, Sun, Moon, LogOut, Target, Users } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -120,16 +120,6 @@ export default function SettingsPage() {
     await queryClient.invalidateQueries({ queryKey: ["coachProfile"] });
   };
 
-  // Wearable status
-  const [syncing, setSyncing] = useState<string | null>(null);
-  const { data: wearableStatus, refetch: refetchWearableStatus } = useQuery<{ fitbit: boolean; garmin: boolean }>({
-    queryKey: ["/api/wearables/status"],
-    queryFn: async () => {
-      const res = await apiRequest("GET", "/api/wearables/status");
-      if (!res.ok) return { fitbit: false, garmin: false };
-      return res.json();
-    },
-  });
 
   const saveProfile = async () => {
     setSaving(true);
@@ -170,41 +160,6 @@ export default function SettingsPage() {
     }
   };
 
-  const connectWearable = async (source: "fitbit" | "garmin") => {
-    try {
-      const res = await (source === "fitbit" ? api.getFitbitAuthUrl() : api.getGarminAuthUrl());
-      const data = await res.json();
-      if (data.url) window.open(data.url, "_blank", "noopener");
-      else toast({ title: `${source} not configured`, description: "Set the CLIENT_ID env var in Railway", variant: "destructive" });
-    } catch {
-      toast({ title: `${source} not configured`, description: "Set GARMIN_CLIENT_ID or FITBIT_CLIENT_ID in Railway env vars", variant: "destructive" });
-    }
-  };
-
-  const disconnectWearable = async (source: string) => {
-    await api.disconnectWearable(source);
-    queryClient.invalidateQueries({ queryKey: ["/api/wearables/status"] });
-    toast({ title: `${source} disconnected` });
-  };
-
-  const syncNow = async (source: "fitbit" | "garmin") => {
-    setSyncing(source);
-    try {
-      await api.syncWearable(source);
-      // Invalidate all queries that depend on wearable data
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] }),
-        queryClient.invalidateQueries({ queryKey: ["/api/targets"] }),
-        queryClient.invalidateQueries({ queryKey: ["/api/weight"] }),
-        queryClient.invalidateQueries({ queryKey: ["/api/activity"] }),
-      ]);
-      toast({ title: `${source === "garmin" ? "Garmin" : "Fitbit"} synced`, description: "Activity and weight updated" });
-    } catch {
-      toast({ title: "Sync failed", description: "Check your connection and try again", variant: "destructive" });
-    } finally {
-      setSyncing(null);
-    }
-  };
 
   const isPowerlifting = goalType.includes("powerlifting");
 
@@ -461,93 +416,6 @@ export default function SettingsPage() {
         </div>
       </section>
 
-      {/* Wearables */}
-      <section className="bg-card border border-border rounded-xl p-4 space-y-3">
-        <h2 className="font-semibold flex items-center gap-2"><Dumbbell className="w-4 h-4 text-primary" />Wearable integrations</h2>
-        <p className="text-xs text-muted-foreground">
-          Syncs calorie burn, steps, and morning weight. Weight is used to keep your TDEE targets current automatically.
-          Syncs hourly in the background — or hit Sync now after a workout.
-        </p>
-
-        {[
-          { key: "fitbit", label: "Fitbit", desc: "Activity + weight via Fitbit Web API" },
-          { key: "garmin", label: "Garmin Connect", desc: "Activity + body composition via Garmin Health API" },
-        ].map(({ key, label, desc }) => {
-          const connected = wearableStatus?.[key as "fitbit" | "garmin"];
-          const isSyncing = syncing === key;
-          return (
-            <div key={key} className="py-2 border-t border-border first:border-0 space-y-2">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  {connected
-                    ? <CheckCircle className="w-4 h-4 text-green-400" />
-                    : <XCircle className="w-4 h-4 text-muted-foreground" />}
-                  <div>
-                    <p className="text-sm font-medium">{label}</p>
-                    <p className="text-xs text-muted-foreground">{connected ? desc : "Not connected"}</p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  {connected && (
-                    <Button
-                      variant="outline" size="sm"
-                      onClick={() => syncNow(key as any)}
-                      disabled={isSyncing}
-                      data-testid={`button-sync-${key}`}
-                    >
-                      {isSyncing
-                        ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        : <RefreshCw className="w-3.5 h-3.5" />}
-                      <span className="ml-1">{isSyncing ? "Syncing..." : "Sync now"}</span>
-                    </Button>
-                  )}
-                  {connected ? (
-                    <Button
-                      variant="ghost" size="sm"
-                      onClick={() => disconnectWearable(key)}
-                      data-testid={`button-disconnect-${key}`}
-                      className="text-muted-foreground hover:text-destructive"
-                    >
-                      Disconnect
-                    </Button>
-                  ) : (
-                    <Button
-                      size="sm"
-                      disabled
-                      data-testid={`button-connect-${key}`}
-                      className="opacity-60 cursor-not-allowed"
-                    >
-                      Connect <span className="ml-1 text-xs font-normal">(coming soon)</span>
-                    </Button>
-                  )}
-                </div>
-              </div>
-            </div>
-          );
-        })}
-
-        {/* Burn mode toggle — shown when any wearable is connected */}
-        {(wearableStatus?.garmin || wearableStatus?.fitbit) && (
-          <div className="pt-2 border-t border-border">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium">Calorie target source</p>
-                <p className="text-xs text-muted-foreground">Use wearable burn data, or fall back to TDEE formula</p>
-              </div>
-              <Select value={burnMode} onValueChange={setBurnMode}>
-                <SelectTrigger className="w-40" data-testid="select-burn-mode"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="wearable">Wearable data</SelectItem>
-                  <SelectItem value="tdee">TDEE formula</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <p className="text-xs text-muted-foreground mt-1">
-              TDEE formula is always used as fallback when wearable data isn't available for a day.
-            </p>
-          </div>
-        )}
-      </section>
 
       {/* AI Coach — provider + key */}
       <section className="space-y-3">
