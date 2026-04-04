@@ -573,76 +573,51 @@ export async function syncGarminData(
 
   // ── Sleep ──────────────────────────────────────────────────────────────────
   // Try today's sleep, fall back to yesterday if sleepTimeSeconds is null
-  {
-    const datesToTry = [date, new Date(date.getTime() - 86400000)];
-    let sleepFetched = false;
-    for (const sleepDate of datesToTry) {
-      if (sleepFetched) break;
-      try {
-        const sleep = await gc.getSleepData(sleepDate);
-        if (sleep?.dailySleepDTO) {
-          const s = sleep.dailySleepDTO;
-          // Only use this date's data if it actually has sleep time
-          if (!s.sleepTimeSeconds && sleepDate !== datesToTry[datesToTry.length - 1]) {
-            // still extract HRV/body battery/HR even if sleepTime is null
-            if (sleep?.avgOvernightHrv) {
-              summary.avgOvernightHrv = sleep.avgOvernightHrv;
-              summary.hrvStatus = sleep.hrvStatus ?? null;
-              categories.push("hrv");
-            }
-            if (sleep?.sleepBodyBattery?.length) {
-              const bbs = sleep.sleepBodyBattery.map((b: any) => b.value).filter((v: number) => v > 0);
-              if (bbs.length > 0) {
-                summary.bodyBatteryHigh = Math.max(...bbs);
-                summary.bodyBatteryLow = Math.min(...bbs);
-                categories.push("body_battery");
-              }
-            }
-            if (sleep?.restingHeartRate) {
-              summary.restingHeartRate = sleep.restingHeartRate;
-            }
-            continue;
-          }
-          summary.sleepDurationMin = s.sleepTimeSeconds ? Math.round(s.sleepTimeSeconds / 60) : null;
-          summary.deepSleepMin = s.deepSleepSeconds ? Math.round(s.deepSleepSeconds / 60) : null;
-          summary.lightSleepMin = s.lightSleepSeconds ? Math.round(s.lightSleepSeconds / 60) : null;
-          summary.remSleepMin = s.remSleepSeconds ? Math.round(s.remSleepSeconds / 60) : null;
-          summary.awakeSleepMin = s.awakeSleepSeconds ? Math.round(s.awakeSleepSeconds / 60) : null;
-          summary.sleepScore = s.sleepScores?.overall?.value ?? null;
-          summary.avgStress = s.avgSleepStress ? Math.round(s.avgSleepStress) : null;
-          if (summary.sleepDurationMin) {
-            categories.push("sleep");
-            sleepFetched = true;
-          }
-          rawPayload.sleep = s;
-          if (Array.isArray(sleep.sleepLevels) && sleep.sleepLevels.length > 0) {
-            rawPayload.sleepLevels = sleep.sleepLevels;
-          }
-          if (s.sleepStartTimestampGMT) rawPayload.sleepStartGMT = s.sleepStartTimestampGMT;
-          if (s.sleepEndTimestampGMT) rawPayload.sleepEndGMT = s.sleepEndTimestampGMT;
-          if (s.sleepStartTimestampLocal) rawPayload.sleepStartLocal = s.sleepStartTimestampLocal;
-          if (s.sleepEndTimestampLocal) rawPayload.sleepEndLocal = s.sleepEndTimestampLocal;
+  const datesToTry = [date, new Date(date.getTime() - 86400000)];
+  let sleepFetched = false;
+  for (const sleepDate of datesToTry) {
+    if (sleepFetched) break;
+    try {
+      const sleep = await gc.getSleepData(sleepDate);
+      if (sleep?.dailySleepDTO?.sleepTimeSeconds) {
+        const s = sleep.dailySleepDTO;
+        summary.sleepDurationMin = s.sleepTimeSeconds ? Math.round(s.sleepTimeSeconds / 60) : null;
+        summary.deepSleepMin = s.deepSleepSeconds ? Math.round(s.deepSleepSeconds / 60) : null;
+        summary.lightSleepMin = s.lightSleepSeconds ? Math.round(s.lightSleepSeconds / 60) : null;
+        summary.remSleepMin = s.remSleepSeconds ? Math.round(s.remSleepSeconds / 60) : null;
+        summary.awakeSleepMin = s.awakeSleepSeconds ? Math.round(s.awakeSleepSeconds / 60) : null;
+        summary.sleepScore = s.sleepScores?.overall?.value ?? null;
+        summary.avgStress = s.avgSleepStress ? Math.round(s.avgSleepStress) : null;
+        categories.push("sleep");
+        rawPayload.sleep = s;
+        if (Array.isArray(sleep.sleepLevels) && sleep.sleepLevels.length > 0) {
+          rawPayload.sleepLevels = sleep.sleepLevels;
         }
-        // HRV and body battery from sleep data
-        if (sleep?.avgOvernightHrv) {
-          summary.avgOvernightHrv = sleep.avgOvernightHrv;
-          summary.hrvStatus = sleep.hrvStatus ?? null;
-          categories.push("hrv");
-        }
-        if (sleep?.sleepBodyBattery?.length) {
-          const bbs = sleep.sleepBodyBattery.map((b: any) => b.value).filter((v: number) => v > 0);
-          if (bbs.length > 0) {
-            summary.bodyBatteryHigh = Math.max(...bbs);
-            summary.bodyBatteryLow = Math.min(...bbs);
-            categories.push("body_battery");
-          }
-        }
-        if (sleep?.restingHeartRate) {
-          summary.restingHeartRate = sleep.restingHeartRate;
-        }
-      } catch (err: any) {
-        console.warn(`[garmin] Sleep fetch failed for ${userId} on ${fmtDate(sleepDate)}:`, err.message);
+        if (s.sleepStartTimestampGMT) rawPayload.sleepStartGMT = s.sleepStartTimestampGMT;
+        if (s.sleepEndTimestampGMT) rawPayload.sleepEndGMT = s.sleepEndTimestampGMT;
+        if (s.sleepStartTimestampLocal) rawPayload.sleepStartLocal = s.sleepStartTimestampLocal;
+        if (s.sleepEndTimestampLocal) rawPayload.sleepEndLocal = s.sleepEndTimestampLocal;
+        sleepFetched = true;
       }
+      // still extract HRV/body battery/HR even if sleepTime is null
+      if (sleep?.avgOvernightHrv) {
+        summary.avgOvernightHrv = sleep.avgOvernightHrv;
+        summary.hrvStatus = sleep.hrvStatus ?? null;
+        categories.push("hrv");
+      }
+      if (sleep?.sleepBodyBattery?.length) {
+        const bbs = sleep.sleepBodyBattery.map((b: any) => b.value).filter((v: number) => v > 0);
+        if (bbs.length > 0) {
+          summary.bodyBatteryHigh = Math.max(...bbs);
+          summary.bodyBatteryLow = Math.min(...bbs);
+          categories.push("body_battery");
+        }
+      }
+      if (sleep?.restingHeartRate) {
+        summary.restingHeartRate = sleep.restingHeartRate;
+      }
+    } catch (err: any) {
+      console.warn(`[garmin] Sleep fetch failed for ${userId} on ${fmtDate(sleepDate)}:`, err.message);
     }
   }
 
