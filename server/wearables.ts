@@ -291,7 +291,7 @@ export async function syncUserWearable(userId: string, source: "fitbit" | "garmi
 
         if (weightKg && weightKg > 20 && weightKg < 300) {
           // Write to weight_log
-          await storage.upsertWeightLog({ userId, date: dateStr, weightKg });
+          await storage.upsertWeightLog({ userId, date: dateStr, weightKg, source });
 
           // Update user.weightKg so TDEE recalculates with latest weight
           await storage.updateUser(userId, { weightKg });

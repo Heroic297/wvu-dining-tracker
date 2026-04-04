@@ -14,6 +14,7 @@ import DietPlanPage from "@/pages/DietPlanPage";
 import SettingsPage from "@/pages/SettingsPage";
 import InvitePage from "@/pages/InvitePage";
 import CoachPage from "@/pages/CoachPage";
+import WearablesPage from "@/pages/WearablesPage";
 import { Loader2 } from "lucide-react";
 
 function AppRoutes() {
@@ -43,6 +44,7 @@ function AppRoutes() {
         <Route path="/history" component={HistoryPage} />
         <Route path="/plan" component={DietPlanPage} />
         <Route path="/settings" component={SettingsPage} />
+        <Route path="/wearables" component={WearablesPage} />
         <Route path="/invites" component={InvitePage} />
         <Route path="/coach" component={CoachPage} />
         <Route component={DashboardPage} />

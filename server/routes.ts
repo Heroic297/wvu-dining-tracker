@@ -16,6 +16,15 @@ import {
   exchangeGarminCode,
   syncUserWearable,
 } from "./wearables.js";
+import {
+  garminLogin,
+  getGarminStatus,
+  getGarminSummary,
+  syncGarminData,
+  disconnectGarmin,
+  importDiToken,
+  isDiTokenAllowed,
+} from "./garmin.js";
 import { z } from "zod";
 import { randomUUID } from "crypto";
 import crypto from "crypto";
@@ -760,6 +769,7 @@ export async function registerRoutes(
         const data = schema.parse(req.body);
         const log = await storage.upsertWeightLog({
           userId: req.user!.id,
+          source: "manual",
           ...data,
         });
 
@@ -953,6 +963,147 @@ export async function registerRoutes(
     }
   );
 
+  // ── Garmin MVP (unofficial garmin-connect integration) ──────────────────────
+
+  // Connect Garmin via email/password
+  app.post(
+    "/api/garmin/connect",
+    requireAuth as any,
+    async (req: AuthRequest, res) => {
+      try {
+        const schema = z.object({
+          email: z.string().email(),
+          password: z.string().min(1),
+        });
+        const { email, password } = schema.parse(req.body);
+        const result = await garminLogin(req.user!.id, email, password);
+        if (!result.ok) {
+          return res.status(401).json({ error: result.error });
+        }
+        // Kick off initial sync in background
+        syncGarminData(req.user!.id).catch(console.error);
+        res.json({ ok: true });
+      } catch (err: any) {
+        if (err.name === "ZodError") {
+          return res.status(400).json({ error: err.errors[0].message });
+        }
+        console.error("[garmin/connect]", err);
+        res.status(500).json({ error: "Garmin connection failed" });
+      }
+    }
+  );
+
+  // Get Garmin connection status + latest summary
+  app.get(
+    "/api/garmin/status",
+    requireAuth as any,
+    async (req: AuthRequest, res) => {
+      try {
+        const status = await getGarminStatus(req.user!.id);
+        const date = (req.query.date as string) || new Date().toISOString().slice(0, 10);
+        const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+        let summary = status.connected ? await getGarminSummary(req.user!.id, date) : null;
+        if (!summary && status.connected) {
+          summary = await getGarminSummary(req.user!.id, yesterday);
+        }
+        res.json({ ...status, summary });
+      } catch (err) {
+        console.error("[garmin/status]", err);
+        res.status(500).json({ error: "Failed to get Garmin status" });
+      }
+    }
+  );
+
+  // Sync / refresh Garmin data
+  app.post(
+    "/api/garmin/sync",
+    requireAuth as any,
+    async (req: AuthRequest, res) => {
+      try {
+        const result = await syncGarminData(req.user!.id);
+        if (!result.ok) {
+          return res.status(400).json({ error: result.error });
+        }
+        const today = new Date().toISOString().slice(0, 10);
+        const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+        let summary = await getGarminSummary(req.user!.id, today);
+        if (!summary) {
+          summary = await getGarminSummary(req.user!.id, yesterday);
+        }
+        res.json({ ok: true, categories: result.categories, summary });
+      } catch (err) {
+        console.error("[garmin/sync]", err);
+        res.status(500).json({ error: "Sync failed" });
+      }
+    }
+  );
+
+  // Disconnect Garmin
+  app.delete(
+    "/api/garmin/disconnect",
+    requireAuth as any,
+    async (req: AuthRequest, res) => {
+      try {
+        await disconnectGarmin(req.user!.id);
+        res.json({ ok: true });
+      } catch (err) {
+        console.error("[garmin/disconnect]", err);
+        res.status(500).json({ error: "Disconnect failed" });
+      }
+    }
+  );
+
+  // Import Garmin DI token (dev-only, gated to specific user)
+  app.post(
+    "/api/garmin/import-di-token",
+    requireAuth as any,
+    async (req: AuthRequest, res) => {
+      try {
+        if (!isDiTokenAllowed(req.user!.email)) {
+          return res.status(403).json({ error: "DI token import is not available for your account" });
+        }
+        const schema = z.object({
+          di_token: z.string().min(1, "di_token is required"),
+          di_refresh_token: z.string().min(1, "di_refresh_token is required"),
+          di_client_id: z.string().min(1, "di_client_id is required"),
+        });
+        const { di_token, di_refresh_token, di_client_id } = schema.parse(req.body);
+        const result = await importDiToken(req.user!.id, di_token, di_refresh_token, di_client_id);
+        if (!result.ok) {
+          return res.status(400).json({ error: result.error });
+        }
+        // Kick off initial sync in background
+        syncGarminData(req.user!.id).catch(console.error);
+        res.json({ ok: true });
+      } catch (err: any) {
+        if (err.name === "ZodError") {
+          return res.status(400).json({ error: err.errors[0].message });
+        }
+        console.error("[garmin/import-di-token]", err);
+        res.status(500).json({ error: "DI token import failed" });
+      }
+    }
+  );
+
+  // Get effective weight (considering Garmin vs manual precedence)
+  app.get(
+    "/api/weight/effective",
+    requireAuth as any,
+    async (req: AuthRequest, res) => {
+      try {
+        const logs = await storage.getWeightLogs(req.user!.id, 1);
+        const latest = logs[0];
+        res.json({
+          weightKg: latest?.weightKg ?? req.user!.weightKg ?? null,
+          source: (latest as any)?.source ?? "manual",
+          date: latest?.date ?? null,
+        });
+      } catch (err) {
+        res.status(500).json({ error: "Failed to get effective weight" });
+      }
+    }
+  );
+
   // ── Background Job Triggers (for Railway cron or external triggers) ────────
 
   app.post("/api/jobs/scrape", async (req, res) => {
@@ -1082,6 +1233,6 @@ export async function registerRoutes(
 
 /** Remove sensitive fields from user object */
 function sanitizeUser(user: any) {
-  const { passwordHash, groqApiKeyEncrypted, ...safe } = user;
+  const { passwordHash, groqApiKeyEncrypted, openrouterApiKeyEncrypted, ...safe } = user;
   return safe;
 }

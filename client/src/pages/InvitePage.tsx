@@ -7,12 +7,10 @@ import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/contexts/AuthContext";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-import { Copy, Plus, Trash2, Ban, Check, RefreshCw, Users } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
+import { Copy, Plus, Trash2, Ban, Check, RefreshCw, Key } from "lucide-react";
 
 const OWNER_EMAIL = "owengidusko@gmail.com";
 
@@ -26,6 +24,14 @@ interface InviteCode {
   createdAt: string;
 }
 
+function formatDate(dateStr: string) {
+  return new Date(dateStr).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
 export default function InvitePage() {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -36,8 +42,8 @@ export default function InvitePage() {
   // Guard — shouldn't normally be reachable, but just in case
   if (user?.email !== OWNER_EMAIL) {
     return (
-      <div className="p-6 text-sm text-muted-foreground">
-        Access restricted to the app owner.
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center">
+        <p className="text-sm text-slate-500">Access restricted to the app owner.</p>
       </div>
     );
   }
@@ -105,74 +111,93 @@ export default function InvitePage() {
   const activeCodes   = codes.filter((c) => c.active);
   const inactiveCodes = codes.filter((c) => !c.active);
 
-  const CodeRow = ({ c }: { c: InviteCode }) => {
+  const getStatus = (c: InviteCode) => {
+    if (!c.active) return "revoked" as const;
     const exhausted = c.maxUses !== null && c.usedCount >= c.maxUses;
-    const statusColor = !c.active
-      ? "bg-destructive/10 text-destructive"
-      : exhausted
-      ? "bg-muted text-muted-foreground"
-      : "bg-emerald-500/10 text-emerald-400";
-    const statusLabel = !c.active ? "Revoked" : exhausted ? "Used up" : "Active";
+    if (exhausted) return "used" as const;
+    return "unused" as const;
+  };
+
+  const CodeCard = ({ c }: { c: InviteCode }) => {
+    const status = getStatus(c);
+    const isUsable = status === "unused";
 
     return (
       <div
-        className="border border-border rounded-xl p-3 space-y-2"
+        className={`rounded-2xl bg-slate-900 border border-slate-800/60 p-5 transition-all duration-200 hover:border-slate-700 ${
+          !isUsable ? "opacity-60" : ""
+        }`}
         data-testid={`invite-row-${c.id}`}
       >
-        <div className="flex items-start justify-between gap-2">
-          <div className="flex-1 min-w-0">
-            {/* Code + copy */}
-            <div className="flex items-center gap-2">
-              <span className="font-mono text-base font-bold tracking-widest text-foreground">
-                {c.code}
+        <div className="flex items-center justify-between mb-3">
+          <span className="font-mono text-lg text-slate-100 tracking-wider">{c.code}</span>
+          <div className="flex items-center gap-2">
+            {/* Status badge */}
+            {status === "unused" && (
+              <span className="rounded-full px-2.5 py-0.5 text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                Unused
               </span>
+            )}
+            {status === "used" && (
+              <span className="rounded-full px-2.5 py-0.5 text-xs font-medium bg-slate-700 text-slate-500 border border-slate-700">
+                Used
+              </span>
+            )}
+            {status === "revoked" && (
+              <span className="rounded-full px-2.5 py-0.5 text-xs font-medium bg-red-500/10 text-red-400 border border-red-500/20">
+                Revoked
+              </span>
+            )}
+            {/* Copy button — only for usable codes */}
+            {isUsable && (
               <button
                 onClick={() => copyCode(c.code, c.id)}
-                className="text-muted-foreground hover:text-primary transition-colors"
+                className="p-1.5 rounded-lg text-slate-500 hover:text-slate-300 hover:bg-slate-800 transition-all duration-200"
                 title="Copy code"
                 data-testid={`button-copy-${c.id}`}
               >
-                {copiedId === c.id
-                  ? <Check className="w-3.5 h-3.5 text-primary" />
-                  : <Copy className="w-3.5 h-3.5" />}
+                {copiedId === c.id ? (
+                  <Check className="w-4 h-4 text-emerald-400" />
+                ) : (
+                  <Copy className="w-4 h-4" />
+                )}
               </button>
-            </div>
-            {/* Label */}
-            {c.label && (
-              <p className="text-xs text-muted-foreground mt-0.5">{c.label}</p>
             )}
           </div>
-          {/* Status badge */}
-          <span className={`text-xs px-2 py-0.5 rounded-full font-medium flex-shrink-0 ${statusColor}`}>
-            {statusLabel}
-          </span>
         </div>
 
-        {/* Uses + actions */}
+        {/* Label */}
+        {c.label && (
+          <p className="text-xs text-slate-400 mb-2">{c.label}</p>
+        )}
+
+        {/* Footer: date, uses, actions */}
         <div className="flex items-center justify-between">
-          <p className="text-xs text-muted-foreground">
-            {c.usedCount} / {c.maxUses ?? "∞"} uses
-          </p>
+          <div className="text-xs text-slate-500">
+            <span>Created {formatDate(c.createdAt)}</span>
+            <span className="mx-1.5">·</span>
+            <span>{c.usedCount} / {c.maxUses ?? "∞"} uses</span>
+          </div>
           <div className="flex items-center gap-1">
             {c.active && (
               <button
                 onClick={() => revokeMutation.mutate(c.id)}
                 disabled={revokeMutation.isPending}
-                className="text-muted-foreground hover:text-yellow-400 transition-colors p-1"
+                className="p-1.5 rounded-lg text-slate-600 hover:text-yellow-400 hover:bg-slate-800 transition-all duration-200"
                 title="Revoke code"
                 data-testid={`button-revoke-${c.id}`}
               >
-                <Ban className="w-3.5 h-3.5" />
+                <Ban className="w-4 h-4" />
               </button>
             )}
             <button
               onClick={() => deleteMutation.mutate(c.id)}
               disabled={deleteMutation.isPending}
-              className="text-muted-foreground hover:text-destructive transition-colors p-1"
+              className="p-1.5 rounded-lg text-slate-600 hover:text-red-400 hover:bg-slate-800 transition-all duration-200"
               title="Delete code"
               data-testid={`button-delete-invite-${c.id}`}
             >
-              <Trash2 className="w-3.5 h-3.5" />
+              <Trash2 className="w-4 h-4" />
             </button>
           </div>
         </div>
@@ -181,84 +206,89 @@ export default function InvitePage() {
   };
 
   return (
-    <div className="p-4 md:p-6 max-w-lg space-y-6">
-      <div className="flex items-center gap-2">
-        <Users className="w-5 h-5 text-primary" />
-        <h1 className="text-xl font-bold">Invite codes</h1>
-      </div>
+    <div className="min-h-screen bg-slate-950 text-slate-100 pb-24">
+      <div className="max-w-lg mx-auto px-4 pt-6 space-y-5">
+        <h1 className="text-xl font-semibold text-slate-100">Invite Codes</h1>
 
-      {/* Create new code */}
-      <div className="bg-card border border-border rounded-xl p-4 space-y-3">
-        <p className="text-sm font-semibold">Generate a new code</p>
-        <div className="grid grid-cols-2 gap-3">
-          <div className="space-y-1 col-span-2">
-            <Label className="text-xs">Person's name or note (optional)</Label>
-            <Input
-              placeholder="e.g. John Smith"
-              value={label}
-              onChange={(e) => setLabel(e.target.value)}
-              data-testid="input-invite-label"
-            />
+        {/* Generate New Code — primary action */}
+        <button
+          onClick={() => createMutation.mutate()}
+          disabled={createMutation.isPending}
+          className="rounded-xl bg-emerald-500 hover:bg-emerald-400 text-white font-semibold py-3.5 w-full transition-colors duration-200 flex items-center justify-center gap-2 disabled:opacity-60"
+          data-testid="button-create-invite"
+        >
+          {createMutation.isPending ? (
+            <RefreshCw className="w-4 h-4 animate-spin" />
+          ) : (
+            <Plus className="w-4 h-4" />
+          )}
+          Generate New Code
+        </button>
+
+        {/* Optional label and max uses inputs */}
+        <div className="rounded-2xl bg-slate-900 border border-slate-800/60 p-4 space-y-3">
+          <p className="text-sm font-medium text-slate-300">Code options</p>
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <Label className="text-xs text-slate-400">Person's name or note (optional)</Label>
+              <Input
+                placeholder="e.g. John Smith"
+                value={label}
+                onChange={(e) => setLabel(e.target.value)}
+                className="bg-slate-800 border-slate-700 text-slate-100 placeholder:text-slate-600"
+                data-testid="input-invite-label"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs text-slate-400">Max uses</Label>
+              <Input
+                type="number"
+                min="1"
+                value={maxUses}
+                onChange={(e) => setMaxUses(e.target.value)}
+                className="bg-slate-800 border-slate-700 text-slate-100 w-24"
+                data-testid="input-invite-max-uses"
+              />
+            </div>
           </div>
-          <div className="space-y-1">
-            <Label className="text-xs">Max uses</Label>
-            <Input
-              type="number"
-              min="1"
-              value={maxUses}
-              onChange={(e) => setMaxUses(e.target.value)}
-              data-testid="input-invite-max-uses"
-            />
-          </div>
-          <div className="flex items-end">
-            <Button
-              onClick={() => createMutation.mutate()}
-              disabled={createMutation.isPending}
-              className="w-full"
-              data-testid="button-create-invite"
-            >
-              {createMutation.isPending
-                ? <RefreshCw className="w-4 h-4 animate-spin mr-1.5" />
-                : <Plus className="w-4 h-4 mr-1.5" />}
-              Generate
-            </Button>
-          </div>
+          <p className="text-xs text-slate-600">
+            Default is 1 use — enough for one person to register.
+          </p>
         </div>
-        <p className="text-xs text-muted-foreground">
-          Default is 1 use — enough for one person to register. Set higher if sharing the same code with multiple people.
-        </p>
+
+        {/* Code list */}
+        {isLoading ? (
+          <div className="flex items-center justify-center py-16">
+            <RefreshCw className="w-5 h-5 text-slate-600 animate-spin" />
+          </div>
+        ) : codes.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-16 text-center">
+            <Key className="w-10 h-10 text-slate-700 mb-3" />
+            <p className="text-slate-400 font-medium">No invite codes yet</p>
+            <p className="text-xs text-slate-600 mt-1">Generate a code to invite someone</p>
+          </div>
+        ) : (
+          <>
+            {activeCodes.length > 0 && (
+              <div className="space-y-3">
+                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
+                  Active ({activeCodes.length})
+                </p>
+                {activeCodes.map((c) => <CodeCard key={c.id} c={c} />)}
+              </div>
+            )}
+
+            {inactiveCodes.length > 0 && (
+              <div className="space-y-3">
+                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
+                  Revoked / used up ({inactiveCodes.length})
+                </p>
+                {inactiveCodes.map((c) => <CodeCard key={c.id} c={c} />)}
+              </div>
+            )}
+          </>
+        )}
       </div>
-
-      {/* Active codes */}
-      {isLoading ? (
-        <div className="text-sm text-muted-foreground">Loading...</div>
-      ) : (
-        <>
-          {activeCodes.length > 0 && (
-            <div className="space-y-2">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                Active ({activeCodes.length})
-              </p>
-              {activeCodes.map((c) => <CodeRow key={c.id} c={c} />)}
-            </div>
-          )}
-
-          {activeCodes.length === 0 && (
-            <div className="bg-card border border-border rounded-xl p-6 text-center text-sm text-muted-foreground">
-              No active codes. Generate one above to invite someone.
-            </div>
-          )}
-
-          {inactiveCodes.length > 0 && (
-            <div className="space-y-2">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                Revoked / used up ({inactiveCodes.length})
-              </p>
-              {inactiveCodes.map((c) => <CodeRow key={c.id} c={c} />)}
-            </div>
-          )}
-        </>
-      )}
     </div>
   );
 }
