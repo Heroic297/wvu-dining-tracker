@@ -116,14 +116,14 @@ USDA_API_KEY=DEMO_KEY
 
 # ─── Fitbit OAuth2 ───────────────────────────────────────────────────────────
 # Register at: https://dev.fitbit.com/apps/new
-# Callback URL: https://your-app.railway.app/api/wearables/fitbit/callback
+# Callback URL: https://your-app.onrender.com/api/wearables/fitbit/callback
 FITBIT_CLIENT_ID=
 FITBIT_CLIENT_SECRET=
 FITBIT_REDIRECT_URI=http://localhost:5000/api/wearables/fitbit/callback
 
 # ─── Garmin OAuth2 ───────────────────────────────────────────────────────────
 # Register at: https://developer.garmin.com/gc-developer-program/overview/
-# Callback URL: https://your-app.railway.app/api/wearables/garmin/callback
+# Callback URL: https://your-app.onrender.com/api/wearables/garmin/callback
 GARMIN_CLIENT_ID=
 GARMIN_CLIENT_SECRET=
 GARMIN_REDIRECT_URI=http://localhost:5000/api/wearables/garmin/callback
@@ -150,52 +150,42 @@ NODE_ENV=development
 
 ---
 
-## Railway Deployment
+## Render Deployment
 
-### 1. Create Railway project
+### 1. Create a Render Web Service
 
-```bash
-railway login
-railway init
-```
+Go to [dashboard.render.com](https://dashboard.render.com) → **New** → **Web Service** → connect your GitHub repo.
 
-Or use the Railway dashboard at [railway.app](https://railway.app).
+### 2. Configure the service
 
-### 2. Add a PostgreSQL database
+| Setting | Value |
+|---------|-------|
+| **Environment** | Node |
+| **Build Command** | `npm install && npm run build` |
+| **Start Command** | `npm run start` |
+| **Branch** | `main` |
 
-In the Railway dashboard:
-- Click **+ New** → **Database** → **PostgreSQL**
-- Railway auto-sets `DATABASE_URL` in your service
+### 3. Add environment variables
 
-### 3. Configure environment variables
-
-In your Railway service settings, add all variables from `.env.example` with production values:
+In your Render service → **Environment**, add all variables from `.env.example` with production values:
 - `NODE_ENV=production`
 - `JWT_SECRET` — a long random string
 - `GROQ_API_KEY` — your Groq key
-- `DATABASE_URL` — Railway will auto-inject from the Postgres service
-- Fitbit/Garmin callback URLs pointing to your Railway domain
+- `DATABASE_URL` — your Supabase connection string
+- Fitbit/Garmin callback URLs pointing to your Render domain
 
 ### 4. Deploy
 
-```bash
-# Push to GitHub first, then connect via Railway dashboard
-git push origin main
-```
+Render auto-deploys on every push to `main`. You can also trigger a manual deploy from the dashboard.
 
-Or use Railway's GitHub integration for automatic deploys on push.
+### 5. Rollback
 
-### 5. Start command
-
-In Railway service settings, set start command:
-```
-npm run build && npm run start
-```
+In the Render dashboard → your service → **Events** tab, click any previous successful deploy and hit **Redeploy** to instantly roll back.
 
 ### 6. Scheduled scraping job (optional external trigger)
 
-Create a Railway Cron Service to hit the scrape endpoint daily:
-- URL: `POST https://your-app.railway.app/api/jobs/scrape`
+Use Render's **Cron Jobs** (under your project) or any external scheduler to hit the scrape endpoint daily:
+- URL: `POST https://your-app.onrender.com/api/jobs/scrape`
 - Header: `x-cron-secret: YOUR_CRON_SECRET`
 - Schedule: `0 11 * * *` (6 AM EST = 11 AM UTC)
 
@@ -204,8 +194,8 @@ Create a Railway Cron Service to hit the scrape endpoint daily:
 ### 7. Update OAuth callback URLs
 
 Once deployed, update Fitbit and Garmin app settings to point callbacks to:
-- `https://your-app.railway.app/api/wearables/fitbit/callback`
-- `https://your-app.railway.app/api/wearables/garmin/callback`
+- `https://your-app.onrender.com/api/wearables/fitbit/callback`
+- `https://your-app.onrender.com/api/wearables/garmin/callback`
 
 And update the env vars accordingly.
 
@@ -216,14 +206,14 @@ And update the env vars accordingly.
 1. Apply at [developer.garmin.com](https://developer.garmin.com/gc-developer-program/overview/)
 2. Create an app in the Developer Portal
 3. Note: Garmin's approval process can take a few days
-4. Set callback URL to your Railway deployment URL
+4. Set callback URL to your Render deployment URL
 
 ## Fitbit Developer Setup
 
 1. Go to [dev.fitbit.com](https://dev.fitbit.com/apps/new)
 2. Create a **Personal** application
 3. Set OAuth 2.0 Application Type: **Personal**
-4. Callback URL: your Railway URL `/api/wearables/fitbit/callback`
+4. Callback URL: your Render URL `/api/wearables/fitbit/callback`
 
 ---
 
