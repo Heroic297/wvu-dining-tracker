@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { PlusCircle, Flame, TrendingUp, UtensilsCrossed, Trophy, Droplets, Plus, Minus } from "lucide-react";
 import ProgressRing from "@/components/ProgressRing";
 
-// Hex fallbacks for recharts (can't use CSS vars in SVG attrs via recharts)
+// Hex fallbacks for macro colours
 const HEX = {
   protein:  "#34d399",
   carbs:    "#f59e0b",
@@ -75,7 +75,7 @@ export default function DashboardPage() {
             <Skeleton className="h-[200px] w-[200px] rounded-full bg-slate-800" />
           </div>
           <div className="flex gap-3">
-            {[...Array(3)].map((_, i) => <Skeleton key={i} className="flex-1 h-24 rounded-xl bg-slate-800" />)}
+            {[...Array(3)].map((_, i) => <Skeleton key={i} className="flex-1 h-28 rounded-xl bg-slate-800" />)}
           </div>
           <Skeleton className="h-36 rounded-xl bg-slate-800" />
         </div>
@@ -125,7 +125,7 @@ export default function DashboardPage() {
       `${(i / (vals.length - 1)) * w},${h - ((v - min) / range) * h}`
     ).join(" ");
     return (
-      <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} className="ml-2">
+      <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} className="mt-2">
         <polyline
           points={points}
           fill="none"
@@ -329,7 +329,7 @@ export default function DashboardPage() {
           )}
         </div>
 
-        {/* Water tracker card */}
+        {/* Water tracker */}
         {enableWaterTracking && (
           <div className="rounded-2xl bg-slate-900 border border-slate-800/60 p-5 space-y-3">
             <div className="flex items-center justify-between">
@@ -342,15 +342,19 @@ export default function DashboardPage() {
               </span>
             </div>
 
-            <div className="bg-slate-800 rounded-full h-2">
-              <div
-                className="h-full rounded-full bg-sky-400 transition-all duration-500"
-                style={{ width: `${waterPct}%` }}
-              />
-            </div>
-            <p className="text-xs text-slate-500">
-              {waterGlasses.toFixed(1)} of {waterTargetGlasses.toFixed(1)} glasses
-            </p>
+            {waterTargetMl && (
+              <>
+                <div className="bg-slate-800 rounded-full h-2">
+                  <div
+                    className="h-full rounded-full bg-sky-400 transition-all duration-500"
+                    style={{ width: `${waterPct}%` }}
+                  />
+                </div>
+                <p className="text-xs text-slate-500">
+                  {waterGlasses} of {waterTargetGlasses} glasses
+                </p>
+              </>
+            )}
 
             {/* Bottle-based logging */}
             {waterBottles.length > 0 ? (
@@ -414,22 +418,22 @@ export default function DashboardPage() {
         )}
 
         {/* Weight card */}
-        {latestWeight && (
+        {weightChartData.length > 0 && latestWeight !== null && (
           <div className="rounded-2xl bg-slate-900 border border-slate-800/60 p-5">
             <div className="flex items-center justify-between mb-2">
-              <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">Weight</p>
+              <span className="text-sm font-semibold text-slate-200">Weight</span>
               <TrendingUp className="w-4 h-4 text-slate-600" />
             </div>
-            <div className="flex items-end gap-3">
+            <div className="flex items-baseline gap-2">
               <span className="text-3xl font-bold text-slate-100">{latestWeight}</span>
-              <span className="text-sm text-slate-500 mb-1">lbs</span>
+              <span className="text-sm text-slate-500">lbs</span>
               {weightDelta !== null && weightDelta !== 0 && (
-                <span className={`text-sm font-semibold mb-1 ${weightDelta > 0 ? "text-rose-400" : "text-emerald-400"}`}>
+                <span className={`text-sm font-medium ${weightDelta > 0 ? "text-rose-400" : "text-emerald-400"}`}>
                   {weightDelta > 0 ? "↑" : "↓"} {Math.abs(weightDelta)} lbs
                 </span>
               )}
-              {renderSparkline()}
             </div>
+            {renderSparkline()}
           </div>
         )}
 
@@ -438,7 +442,7 @@ export default function DashboardPage() {
           <div className="rounded-2xl bg-slate-900 border border-slate-800/60 p-5">
             <div className="flex items-center gap-2 mb-3">
               <Flame className="w-4 h-4 text-orange-400" />
-              <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">Activity</p>
+              <span className="text-sm font-semibold text-slate-200">Activity</span>
             </div>
             <div className="grid grid-cols-3 gap-2">
               {recentActivity.slice(0, 3).map((a: any) => (
@@ -453,7 +457,7 @@ export default function DashboardPage() {
         )}
 
         <p className="text-center text-xs text-slate-600 pb-2">
-          <a href="https://www.perplexity.ai/computer" target="_blank" rel="noopener noreferrer" className="hover:text-emerald-400 transition-colors">
+          <a href="https://www.perplexity.ai/computer" target="_blank" rel="noopener noreferrer" className="hover:text-slate-400 transition-colors">
             Created with Perplexity Computer
           </a>
         </p>
