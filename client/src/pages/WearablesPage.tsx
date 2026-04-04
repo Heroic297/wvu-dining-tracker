@@ -57,8 +57,6 @@ interface GarminStatus {
   tokenType: string;
 }
 
-const DI_TOKEN_ALLOWED_EMAIL = "owengidusko@gmail.com";
-
 export default function WearablesPage() {
   const { toast } = useToast();
   const { user } = useAuth();
@@ -67,8 +65,7 @@ export default function WearablesPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [diTokenJson, setDiTokenJson] = useState("");
   const [diTokenError, setDiTokenError] = useState<string | null>(null);
-
-  const isDiUser = user?.email?.toLowerCase() === DI_TOKEN_ALLOWED_EMAIL;
+  const [connectMode, setConnectMode] = useState<"login" | "di-token">("login");
 
   const { data: garminData, isLoading, refetch } = useQuery<GarminStatus>({
     queryKey: ["garmin-status"],
@@ -257,96 +254,123 @@ export default function WearablesPage() {
           </div>
         )}
 
-        {/* DI Token Import — only for gated user */}
-        {isDiUser && (!connected || status === "error") && (
-          <div className="space-y-3 border-t border-border pt-4">
-            <p className="text-xs text-muted-foreground">
-              Paste your Garmin DI token JSON below. This imports your token directly
-              for API access without username/password login.
-            </p>
-            <div className="space-y-2">
-              <Label className="text-xs">DI Token JSON</Label>
-              <textarea
-                className="w-full h-28 rounded-lg border border-border bg-background px-3 py-2 text-xs font-mono resize-none focus:outline-none focus:ring-2 focus:ring-ring"
-                placeholder={'{\n  "di_token": "...",\n  "di_refresh_token": "...",\n  "di_client_id": "..."\n}'}
-                value={diTokenJson}
-                onChange={(e) => { setDiTokenJson(e.target.value); setDiTokenError(null); }}
-              />
-              {diTokenError && (
-                <p className="text-xs text-destructive">{diTokenError}</p>
-              )}
-              <Button
-                onClick={() => diTokenMutation.mutate()}
-                disabled={!diTokenJson.trim() || diTokenMutation.isPending}
-                className="w-full"
-                size="sm"
-              >
-                {diTokenMutation.isPending
-                  ? <><Loader2 className="w-3.5 h-3.5 animate-spin mr-2" />Importing...</>
-                  : "Import DI Token"}
-              </Button>
-            </div>
-          </div>
-        )}
-
         {/* Show DI token badge when connected via DI */}
-        {isDiUser && connected && tokenType === "di-token" && (
+        {connected && tokenType === "di-token" && (
           <div className="flex items-center gap-2 text-xs text-muted-foreground bg-blue-500/10 rounded-lg px-3 py-2">
             <CheckCircle className="w-3.5 h-3.5 text-blue-400" />
             Connected via DI token (direct API)
           </div>
         )}
 
-        {/* Login form — shown when disconnected or error (hidden for DI user) */}
-        {!isDiUser && (!connected || status === "error") && (
+        {/* Connection options — shown when disconnected or error */}
+        {(!connected || status === "error") && (
           <div className="space-y-3 border-t border-border pt-4">
-            <p className="text-xs text-muted-foreground">
-              Sign in with your Garmin Connect credentials to sync your wearable data.
-              Your credentials are used once to establish a session — they are not stored.
-              Only the encrypted session token is saved for future syncs.
-            </p>
-            <div className="space-y-2">
-              <div className="space-y-1">
-                <Label className="text-xs">Garmin email</Label>
-                <Input
-                  type="email"
-                  placeholder="your@email.com"
-                  value={garminEmail}
-                  onChange={(e) => setGarminEmail(e.target.value)}
-                  className="h-9 text-sm"
-                />
-              </div>
-              <div className="space-y-1">
-                <Label className="text-xs">Garmin password</Label>
-                <div className="relative">
-                  <Input
-                    type={showPassword ? "text" : "password"}
-                    placeholder="Password"
-                    value={garminPassword}
-                    onChange={(e) => setGarminPassword(e.target.value)}
-                    className="h-9 text-sm pr-9"
-                    onKeyDown={(e) => { if (e.key === "Enter" && garminEmail && garminPassword) connectMutation.mutate(); }}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(v => !v)}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                  >
-                    {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                  </button>
-                </div>
-              </div>
-              <Button
-                onClick={() => connectMutation.mutate()}
-                disabled={!garminEmail || !garminPassword || connectMutation.isPending}
-                className="w-full"
-                size="sm"
+            {/* Mode toggle */}
+            <div className="flex rounded-lg border border-border overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setConnectMode("login")}
+                className={`flex-1 text-xs font-medium py-2 px-3 transition-colors ${
+                  connectMode === "login"
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-background text-muted-foreground hover:bg-muted"
+                }`}
               >
-                {connectMutation.isPending
-                  ? <><Loader2 className="w-3.5 h-3.5 animate-spin mr-2" />Connecting...</>
-                  : "Connect Garmin"}
-              </Button>
+                Login
+              </button>
+              <button
+                type="button"
+                onClick={() => setConnectMode("di-token")}
+                className={`flex-1 text-xs font-medium py-2 px-3 transition-colors ${
+                  connectMode === "di-token"
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-background text-muted-foreground hover:bg-muted"
+                }`}
+              >
+                Use DI Token
+              </button>
             </div>
+
+            {/* Login form */}
+            {connectMode === "login" && (
+              <div className="space-y-2">
+                <p className="text-xs text-muted-foreground">
+                  Sign in with your Garmin Connect credentials to sync your wearable data.
+                  Your credentials are used once to establish a session — they are not stored.
+                  Only the encrypted session token is saved for future syncs.
+                </p>
+                <div className="space-y-1">
+                  <Label className="text-xs">Garmin email</Label>
+                  <Input
+                    type="email"
+                    placeholder="your@email.com"
+                    value={garminEmail}
+                    onChange={(e) => setGarminEmail(e.target.value)}
+                    className="h-9 text-sm"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Garmin password</Label>
+                  <div className="relative">
+                    <Input
+                      type={showPassword ? "text" : "password"}
+                      placeholder="Password"
+                      value={garminPassword}
+                      onChange={(e) => setGarminPassword(e.target.value)}
+                      className="h-9 text-sm pr-9"
+                      onKeyDown={(e) => { if (e.key === "Enter" && garminEmail && garminPassword) connectMutation.mutate(); }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(v => !v)}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    >
+                      {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+                </div>
+                <Button
+                  onClick={() => connectMutation.mutate()}
+                  disabled={!garminEmail || !garminPassword || connectMutation.isPending}
+                  className="w-full"
+                  size="sm"
+                >
+                  {connectMutation.isPending
+                    ? <><Loader2 className="w-3.5 h-3.5 animate-spin mr-2" />Connecting...</>
+                    : "Connect Garmin"}
+                </Button>
+              </div>
+            )}
+
+            {/* DI Token import */}
+            {connectMode === "di-token" && (
+              <div className="space-y-2">
+                <p className="text-xs text-muted-foreground">
+                  Paste your Garmin DI token JSON below. This imports your token directly
+                  for API access without username/password login.
+                </p>
+                <Label className="text-xs">DI Token JSON</Label>
+                <textarea
+                  className="w-full h-28 rounded-lg border border-border bg-background px-3 py-2 text-xs font-mono resize-none focus:outline-none focus:ring-2 focus:ring-ring"
+                  placeholder={'{\n  "di_token": "...",\n  "di_refresh_token": "...",\n  "di_client_id": "..."\n}'}
+                  value={diTokenJson}
+                  onChange={(e) => { setDiTokenJson(e.target.value); setDiTokenError(null); }}
+                />
+                {diTokenError && (
+                  <p className="text-xs text-destructive">{diTokenError}</p>
+                )}
+                <Button
+                  onClick={() => diTokenMutation.mutate()}
+                  disabled={!diTokenJson.trim() || diTokenMutation.isPending}
+                  className="w-full"
+                  size="sm"
+                >
+                  {diTokenMutation.isPending
+                    ? <><Loader2 className="w-3.5 h-3.5 animate-spin mr-2" />Importing...</>
+                    : "Import DI Token"}
+                </Button>
+              </div>
+            )}
           </div>
         )}
       </section>
