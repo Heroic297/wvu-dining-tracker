@@ -335,23 +335,25 @@ export default function DietPlanPage() {
   const currentLbs = latestWeight ? r1(kgToLbs(latestWeight)) : null;
   const targetLbs = user?.targetWeightKg ? r1(kgToLbs(user.targetWeightKg)) : null;
 
-  // Protocol breakdown — how much each component removes from scale weight
-  // Buffer = smallest protocol combination that fully covers the cut %.
-  // Must match the buffer logic in tdee.ts computeDailyTargets exactly.
-  const cutPctRaw = waterCutAnalysis?.cutPct ?? 0;
+  // Protocol breakdown — how much each component removes from scale weight.
+  // Buffer is selected by TIER, matching tdee.ts computeDailyTargets exactly.
+  const tier = waterCutAnalysis?.tier ?? 0;
+  const cutKgRaw = waterCutAnalysis?.cutKg ?? 0;
+  const cutLbsRaw = currentLbs ? r1(currentLbs - (targetLbs ?? currentLbs)) : 0;
 
-  // Per-component estimates (conservative lower bounds)
-  // Components are enabled based on what the buffer requires, not just the tier.
-  const gutCutPct        = cutPctRaw >= 0.5 ? 0.015 : 0;  // 1.5% BW
-  const waterCutPct      = cutPctRaw > 1.5  ? 0.010 : 0;  // 1.0% BW (needed when gut alone insufficient)
-  const depletionPct     = cutPctRaw > 2.5  ? 0.015 : 0;  // 1.5% BW (needed when gut+water insufficient)
+  // Per-component estimates by tier
+  const gutCutPct        = tier >= 1 ? 0.020 : 0;  // 2.0% BW
+  const waterCutPct      = tier >= 2 ? 0.010 : 0;  // 1.0% BW
+  const depletionPct     = tier >= 3 ? 0.010 : 0;  // 1.0% BW
   const totalBufferPct   = gutCutPct + waterCutPct + depletionPct;
 
-  const gutCutLbs        = currentLbs ? r1(currentLbs * gutCutPct)    : 0;
-  const waterCutLbs      = currentLbs ? r1(currentLbs * waterCutPct)  : 0;
-  const depletionLbs     = currentLbs ? r1(currentLbs * depletionPct) : 0;
-  const bufferLbs        = currentLbs ? r1(currentLbs * totalBufferPct) : 0;
-  const hasBuffer        = totalBufferPct > 0 && bufferLbs > 0;
+  // Buffer must never exceed the actual cut (mirrors tdee.ts safety cap)
+  const uncappedBufferLbs = currentLbs ? r1(currentLbs * totalBufferPct) : 0;
+  const bufferLbs        = Math.min(uncappedBufferLbs, Math.max(0, cutLbsRaw));
+  const gutCutLbs        = currentLbs ? r1(Math.min(currentLbs * gutCutPct,    bufferLbs)) : 0;
+  const waterCutLbs      = currentLbs && tier >= 2 ? r1(Math.min(currentLbs * waterCutPct,  Math.max(0, bufferLbs - gutCutLbs))) : 0;
+  const depletionLbs     = currentLbs && tier >= 3 ? r1(Math.min(currentLbs * depletionPct, Math.max(0, bufferLbs - gutCutLbs - waterCutLbs))) : 0;
+  const hasBuffer        = bufferLbs > 0;
   const dietTargetLbs    = targetLbs !== null && hasBuffer ? r1(targetLbs + bufferLbs) : targetLbs;
 
   // How much the DIET needs to cover (current → diet target)
@@ -562,7 +564,7 @@ export default function DietPlanPage() {
                   <div className="flex items-center justify-between text-xs">
                     <span className="flex items-center gap-1.5">
                       <span className="w-2 h-2 rounded-sm bg-emerald-500 flex-shrink-0" />
-                      <span className="text-muted-foreground">Gut cut <span className="text-foreground/50">(low-residue 3 days out, ~1.5–2.5% BW)</span></span>
+                      <span className="text-muted-foreground">Gut cut <span className="text-foreground/50">(low-residue 3 days out, ~1–2.5% BW)</span></span>
                     </span>
                     <span className="font-semibold text-emerald-400">{gutCutLbs} lbs</span>
                   </div>
