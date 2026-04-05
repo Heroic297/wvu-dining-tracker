@@ -190,35 +190,34 @@ export function computeDailyTargets(
     // needs to get the athlete to (targetWeight + buffer).  If current weight
     // is already at or below that diet target → eat at maintenance.
     //
-    // The buffer must cover the ACTUAL cut the athlete needs, not just the
-    // tier's primary protocol.  An athlete at 1.8% BW is in Tier 1 (gut cut
-    // only) but gut cut covers only 1.5%.  Rather than prescribing a dietary
-    // deficit for the remaining 0.3%, use the next-tier combined buffer that
-    // fully covers the cut — gut + water/sodium = 2.5%.  This prevents the
-    // diet from fighting the protocol.
-    //
-    // Protocol capacities (cumulative):
-    //   Gut cut only              = 1.5% BW
-    //   Gut + water/sodium        = 2.5% BW
-    //   Gut + water + depletion   = 4.0% BW
-    //   Full aggressive           = 4.5% BW
+    // Buffer is selected by TIER (from analyzeWaterCut), not by cut%.
+    // Each tier's buffer represents the expected weight the protocol removes:
+    //   Tier 1: gut cut only           = 2.0% BW
+    //   Tier 2: gut + water/sodium     = 3.0% BW
+    //   Tier 3+: gut + water + depletion = 4.0% BW
     const analysis = isLossGoal && user.targetWeightKg
       ? analyzeWaterCut(user, currentWeightKg)
       : null;
-    const cutPct = analysis?.cutPct ?? 0;
-    // Pick the smallest buffer that fully covers the cut %.
-    // If cut is beyond all protocols (>4.5%), cap at 4.5% — diet covers rest.
-    const cutBufferKg = isLossGoal
-      ? cutPct < 0.5  ? 0                          // essentially at weight
-      : cutPct <= 1.5 ? currentWeightKg * 0.015    // gut cut alone covers it
-      : cutPct <= 2.5 ? currentWeightKg * 0.025    // gut + water/sodium covers it
-      : cutPct <= 4.0 ? currentWeightKg * 0.040    // gut + water + depletion covers it
-      : cutPct <= 4.5 ? currentWeightKg * 0.045    // full aggressive protocol
-      : currentWeightKg * 0.045                     // cap — diet must cover the excess
+    const tier = analysis?.tier ?? 0;
+    let cutBufferKg = isLossGoal
+      ? tier === 1 ? currentWeightKg * 0.020   // gut cut only: 2.0% BW
+      : tier === 2 ? currentWeightKg * 0.030   // gut + water/sodium: 3.0% BW
+      : tier >= 3  ? currentWeightKg * 0.040   // gut + water + depletion: 4.0% BW
+      : 0
       : 0;
+
+    // Buffer must never exceed the actual cut — otherwise diet target lands
+    // above current weight and the formula prescribes a surplus.
+    const cutKg = analysis?.cutKg ?? 0;
+    cutBufferKg = Math.min(cutBufferKg, cutKg);
+
     const dietTargetKg = (user.targetWeightKg ?? 0) + cutBufferKg;
     const kgToChange = dietTargetKg - currentWeightKg;
-    const dailyAdjust = (kgToChange * 7700) / daysLeft;
+
+    // For loss goals: never prescribe a surplus — clamp to maintenance
+    const dailyAdjust = isLossGoal
+      ? Math.min(0, (kgToChange * 7700) / daysLeft)
+      : (kgToChange * 7700) / daysLeft;
 
     if (isLossGoal) {
       targetCalories = Math.max(dailyBurn + Math.max(dailyAdjust, -1000), 1200);
