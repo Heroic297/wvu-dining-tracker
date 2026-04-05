@@ -67,7 +67,7 @@ export default function WearablesPage() {
   const [diTokenError, setDiTokenError] = useState<string | null>(null);
   const [connectMode, setConnectMode] = useState<"login" | "di-token">("login");
 
-  const { data: garminData, isLoading, refetch } = useQuery<GarminStatus>({
+  const { data: garminData, isLoading } = useQuery<GarminStatus>({
     queryKey: ["garmin-status"],
     queryFn: async () => {
       const res = await apiRequest("GET", "/api/garmin/status");
@@ -89,8 +89,9 @@ export default function WearablesPage() {
       toast({ title: "Garmin connected", description: "Syncing your data now..." });
       setGarminEmail("");
       setGarminPassword("");
-      // Wait a moment for background sync to start, then refetch
-      setTimeout(() => refetch(), 3000);
+      // Invalidate immediately to show connected status, then again after bg sync
+      queryClient.invalidateQueries({ queryKey: ["garmin-status"] });
+      setTimeout(() => queryClient.invalidateQueries({ queryKey: ["garmin-status"] }), 5000);
     },
     onError: (err: Error) => {
       toast({ title: "Connection failed", description: err.message, variant: "destructive" });
@@ -108,7 +109,8 @@ export default function WearablesPage() {
     },
     onSuccess: (data: any) => {
       toast({ title: "Garmin synced", description: `Updated: ${data.categories?.join(", ") || "no new data"}` });
-      refetch();
+      // Invalidate garmin status so UI shows fresh data immediately
+      queryClient.invalidateQueries({ queryKey: ["garmin-status"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] });
       queryClient.invalidateQueries({ queryKey: ["/api/weight"] });
     },
@@ -125,7 +127,7 @@ export default function WearablesPage() {
     },
     onSuccess: () => {
       toast({ title: "Garmin disconnected" });
-      refetch();
+      queryClient.invalidateQueries({ queryKey: ["garmin-status"] });
     },
   });
 
@@ -151,7 +153,8 @@ export default function WearablesPage() {
     onSuccess: () => {
       toast({ title: "DI token imported", description: "Syncing your Garmin data now..." });
       setDiTokenJson("");
-      setTimeout(() => refetch(), 3000);
+      queryClient.invalidateQueries({ queryKey: ["garmin-status"] });
+      setTimeout(() => queryClient.invalidateQueries({ queryKey: ["garmin-status"] }), 5000);
     },
     onError: (err: Error) => {
       setDiTokenError(err.message);
