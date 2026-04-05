@@ -1031,9 +1031,9 @@ export async function registerRoutes(
           summary = await getGarminSummary(req.user!.id, yesterday);
         }
         res.json({ ok: true, categories: result.categories, summary });
-      } catch (err) {
+      } catch (err: any) {
         console.error("[garmin/sync]", err);
-        res.status(500).json({ error: "Sync failed" });
+        res.status(500).json({ error: err?.message || "Sync failed" });
       }
     }
   );

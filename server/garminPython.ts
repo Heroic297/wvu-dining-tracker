@@ -4,12 +4,34 @@
  */
 import { spawn } from "child_process";
 import path from "path";
+import fs from "fs";
 import { fileURLToPath } from "url";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const SIDECAR_PATH = path.join(__dirname, "garmin_sidecar.py");
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-// Tokens directory — use /tmp on Render (ephemeral but fine, tokens auto-refresh)
+// Resolve sidecar path: in production (dist/index.cjs), the .py file is in server/
+// relative to the project root; in dev, it's a sibling of this file.
+function resolveSidecarPath(): string {
+  // 1. Sibling of this file (works in dev with tsx)
+  const sibling = path.join(__dirname, "garmin_sidecar.py");
+  if (fs.existsSync(sibling)) return sibling;
+
+  // 2. In production, __dirname is dist/ — look in ../server/
+  const fromDist = path.resolve(__dirname, "..", "server", "garmin_sidecar.py");
+  if (fs.existsSync(fromDist)) return fromDist;
+
+  // 3. Fallback: project root server/ dir
+  const fromRoot = path.resolve(process.cwd(), "server", "garmin_sidecar.py");
+  if (fs.existsSync(fromRoot)) return fromRoot;
+
+  // Last resort — use the sibling path and let the spawn error be descriptive
+  return sibling;
+}
+
+const SIDECAR_PATH = resolveSidecarPath();
+
+// Tokens directory — use /tmp on Render (ephemeral; DB-backed persistence added below)
 const TOKENS_DIR = process.env.GARMIN_TOKENS_DIR ?? "/tmp/garmin-tokens";
 
 export function getTokensPath(userId: string): string {
@@ -112,9 +134,44 @@ export async function pythonGarminSync(
  */
 export function pythonTokenExists(userId: string): boolean {
   try {
-    const fs = require("fs");
     return fs.existsSync(getTokensPath(userId));
   } catch {
     return false;
+  }
+}
+
+/**
+ * Read the raw token file contents for a user (after login or sync).
+ * Returns null if the file doesn't exist.
+ */
+export function readTokenFile(userId: string): string | null {
+  try {
+    const p = getTokensPath(userId);
+    if (!fs.existsSync(p)) return null;
+    return fs.readFileSync(p, "utf-8");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Write token data to the token file for a user.
+ * Used to restore DB-backed tokens before a sidecar sync call.
+ */
+export function writeTokenFile(userId: string, data: string): void {
+  const p = getTokensPath(userId);
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, data, "utf-8");
+}
+
+/**
+ * Remove the token file for a user (cleanup after sync).
+ */
+export function removeTokenFile(userId: string): void {
+  try {
+    const p = getTokensPath(userId);
+    if (fs.existsSync(p)) fs.unlinkSync(p);
+  } catch {
+    // ignore
   }
 }

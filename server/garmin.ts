@@ -35,19 +35,24 @@ export async function garminLogin(
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   // Try Python sidecar first (garminconnect 0.3.0 — Cloudflare bypass, MFA-compatible)
   try {
-    const { pythonGarminLogin } = await import("./garminPython.js");
+    const { pythonGarminLogin, readTokenFile } = await import("./garminPython.js");
     const pyResult = await pythonGarminLogin(userId, email, password);
     if (pyResult.ok) {
-      // Mark as connected in DB with token_type = 'python-garth'
+      // Read the token file the sidecar just wrote and persist encrypted to DB
+      // so tokens survive Render dyno restarts (where /tmp is ephemeral)
+      const tokenData = readTokenFile(userId);
+      const encryptedTokens = tokenData ? encryptString(tokenData) : "";
+
       await pool.query(
         `INSERT INTO garmin_sessions (user_id, encrypted_tokens, status, token_type, updated_at)
-         VALUES ($1, '', 'connected', 'python-garth', now())
+         VALUES ($1, $2, 'connected', 'python-garth', now())
          ON CONFLICT (user_id) DO UPDATE SET
+           encrypted_tokens = $2,
            status = 'connected',
            token_type = 'python-garth',
            last_error = NULL,
            updated_at = now()`,
-        [userId]
+        [userId, encryptedTokens]
       );
       return { ok: true };
     }
@@ -559,7 +564,24 @@ export async function syncGarminData(
   // python-garth path (garminconnect 0.3.0 via Python sidecar)
   if (session?.token_type === "python-garth") {
     try {
-      const { pythonGarminSync } = await import("./garminPython.js");
+      const { pythonGarminSync, pythonTokenExists, writeTokenFile, readTokenFile } = await import("./garminPython.js");
+
+      // Restore tokens from DB to temp file if missing (survives Render dyno restarts)
+      if (!pythonTokenExists(userId) && session.encrypted_tokens) {
+        try {
+          const tokenData = decryptString(session.encrypted_tokens);
+          writeTokenFile(userId, tokenData);
+          console.log(`[garmin-py] Restored token file from DB for ${userId}`);
+        } catch (decErr: any) {
+          console.error(`[garmin-py] Failed to restore tokens from DB for ${userId}:`, decErr.message);
+          await pool.query(
+            "UPDATE garmin_sessions SET status = 'error', last_error = $1, updated_at = now() WHERE user_id = $2",
+            ["Session tokens corrupted — please reconnect", userId]
+          ).catch(() => {});
+          return { ok: false, error: "Session tokens corrupted — please reconnect" };
+        }
+      }
+
       const pyResult = await pythonGarminSync(userId, targetDate);
       if (!pyResult.ok) {
         await pool.query(
@@ -630,9 +652,13 @@ export async function syncGarminData(
           ]
         );
 
+        // Re-persist refreshed tokens to DB (sidecar may have refreshed them)
+        const refreshedTokens = readTokenFile(userId);
+        const encTokens = refreshedTokens ? encryptString(refreshedTokens) : session.encrypted_tokens;
+
         await pool.query(
-          "UPDATE garmin_sessions SET last_sync_at = now(), status = 'connected', last_error = NULL WHERE user_id = $1",
-          [userId]
+          "UPDATE garmin_sessions SET encrypted_tokens = $1, last_sync_at = now(), status = 'connected', last_error = NULL WHERE user_id = $2",
+          [encTokens, userId]
         );
 
         if (s.weightKg) {
