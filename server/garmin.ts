@@ -191,13 +191,20 @@ interface DiTokens {
  * falls back to connect.garmin.com/modern/proxy/ and connect.garmin.com.
  * Returns null on failure (non-2xx or network error).
  */
-async function diApiFetch(path: string, diToken: string): Promise<any | null> {
+interface DiApiFetchResult {
+  data: any | null;
+  got401: boolean;
+}
+
+async function diApiFetch(path: string, diToken: string): Promise<DiApiFetchResult> {
   // Try multiple base URLs — the DI token may work with different API gateways
   const bases = [
     GARMIN_API_BASE,                            // connectapi.garmin.com (library uses this)
     `${GARMIN_CONNECT_BASE}/modern/proxy`,      // connect.garmin.com/modern/proxy/ (web session)
     GARMIN_CONNECT_BASE,                        // connect.garmin.com (original)
   ];
+
+  let saw401 = false;
 
   for (const base of bases) {
     try {
@@ -214,10 +221,15 @@ async function diApiFetch(path: string, diToken: string): Promise<any | null> {
       const bodyText = await res.text();
       console.log(`[garmin-di] ${url} → ${res.status} | body: ${bodyText.substring(0, 500)}`);
 
+      if (res.status === 401) {
+        saw401 = true;
+        continue;
+      }
+
       if (!res.ok) continue; // Try next base URL
 
       try {
-        return JSON.parse(bodyText);
+        return { data: JSON.parse(bodyText), got401: false };
       } catch {
         console.warn(`[garmin-di] ${url} returned non-JSON response`);
         continue;
@@ -229,7 +241,7 @@ async function diApiFetch(path: string, diToken: string): Promise<any | null> {
   }
 
   console.warn(`[garmin-di] All base URLs failed for path: ${path}`);
-  return null;
+  return { data: null, got401: saw401 };
 }
 
 /**
@@ -244,6 +256,7 @@ async function syncGarminDataDI(
   const date = targetDate ?? new Date();
   const dateStr = fmtDate(date);
   const categories: string[] = [];
+  let any401 = false;
 
   const summary: Partial<InsertGarminDailySummary> = {
     userId,
@@ -253,14 +266,20 @@ async function syncGarminDataDI(
 
   const diToken = tokens.di_token;
 
+  // Helper: call diApiFetch and track 401s across the entire sync
+  const diFetch = async (p: string): Promise<any | null> => {
+    const result = await diApiFetch(p, diToken);
+    if (result.got401) any401 = true;
+    return result.data;
+  };
+
   // ── Steps (DI token compatible endpoints) ─────────────────────────────────
   try {
     let stepped = false;
 
     // 1. Try wellness-service dailySummary (works with DI token)
-    const wellness = await diApiFetch(
-      `/wellness-service/wellness/dailySummary/${dateStr}`,
-      diToken
+    const wellness = await diFetch(
+      `/wellness-service/wellness/dailySummary/${dateStr}`
     );
     if (wellness?.totalSteps && wellness.totalSteps > 0) {
       summary.totalSteps = wellness.totalSteps;
@@ -273,9 +292,8 @@ async function syncGarminDataDI(
 
     // 2. Fallback: userSummary via connectapi base (different from connect.garmin.com)
     if (!stepped) {
-      const data = await diApiFetch(
-        `/usersummary-service/usersummary/daily/${dateStr}`,
-        diToken
+      const data = await diFetch(
+        `/usersummary-service/usersummary/daily/${dateStr}`
       );
       if (data?.totalSteps && data.totalSteps > 0) {
         summary.totalSteps = data.totalSteps;
@@ -288,9 +306,8 @@ async function syncGarminDataDI(
 
     // 3. Fallback: stats endpoint
     if (!stepped) {
-      const stepsData = await diApiFetch(
-        `/usersummary-service/stats/steps/daily/${dateStr}/${dateStr}`,
-        diToken
+      const stepsData = await diFetch(
+        `/usersummary-service/stats/steps/daily/${dateStr}/${dateStr}`
       );
       if (Array.isArray(stepsData) && stepsData[0]?.totalSteps > 0) {
         summary.totalSteps = stepsData[0].totalSteps;
@@ -313,14 +330,12 @@ async function syncGarminDataDI(
     for (const sleepDate of datesToTry) {
       if (sleepFetched) break;
 
-      let data = await diApiFetch(
-        `/sleep-service/sleep/dailySleepData?date=${sleepDate}`,
-        diToken
+      let data = await diFetch(
+        `/sleep-service/sleep/dailySleepData?date=${sleepDate}`
       );
       if (!data?.dailySleepDTO) {
-        data = await diApiFetch(
-          `/wellness-service/wellness/dailySleepData/${sleepDate}`,
-          diToken
+        data = await diFetch(
+          `/wellness-service/wellness/dailySleepData/${sleepDate}`
         );
       }
       if (data?.dailySleepDTO) {
@@ -374,14 +389,12 @@ async function syncGarminDataDI(
   try {
     const datesToTry = [dateStr, fmtDate(new Date(date.getTime() - 86400000))];
     for (const hrDate of datesToTry) {
-      let data = await diApiFetch(
-        `/wellness-service/wellness/dailyHeartRate?date=${hrDate}`,
-        diToken
+      let data = await diFetch(
+        `/wellness-service/wellness/dailyHeartRate?date=${hrDate}`
       );
       if (!data) {
-        data = await diApiFetch(
-          `/wellness-service/wellness/dailyHeartRate/${hrDate}`,
-          diToken
+        data = await diFetch(
+          `/wellness-service/wellness/dailyHeartRate/${hrDate}`
         );
       }
       if (data) {
@@ -401,15 +414,13 @@ async function syncGarminDataDI(
   // ── Weight / Body Composition ─────────────────────────────────────────────
   // Library uses /weight-service/weight/dayview/{date}
   try {
-    let data = await diApiFetch(
-      `/weight-service/weight/dayview/${dateStr}`,
-      diToken
+    let data = await diFetch(
+      `/weight-service/weight/dayview/${dateStr}`
     );
     // Fallback: try the dateRange endpoint
     if (!data?.dateWeightList?.length) {
-      data = await diApiFetch(
-        `/weight-service/weight/dateRange?startDate=${dateStr}&endDate=${dateStr}`,
-        diToken
+      data = await diFetch(
+        `/weight-service/weight/dateRange?startDate=${dateStr}&endDate=${dateStr}`
       );
     }
     if (data?.dateWeightList?.length) {
@@ -429,9 +440,8 @@ async function syncGarminDataDI(
 
   // ── Recent Activities ─────────────────────────────────────────────────────
   try {
-    const data = await diApiFetch(
-      `/activitylist-service/activities/search/activities?limit=5&start=0`,
-      diToken
+    const data = await diFetch(
+      `/activitylist-service/activities/search/activities?limit=5&start=0`
     );
     if (Array.isArray(data) && data.length > 0) {
       const recent = data.map((a: any) => ({
@@ -455,6 +465,17 @@ async function syncGarminDataDI(
     }
   } catch (err: any) {
     console.warn(`[garmin-di] Activities fetch failed for ${userId}:`, err.message);
+  }
+
+  // ── If ALL API calls got 401 and nothing was fetched, token is expired ────
+  if (categories.length === 0 && any401) {
+    const errMsg = "Garmin session expired — please reconnect or paste a new DI token";
+    console.warn(`[garmin-di] All calls returned 401 for user ${userId} — marking session as error`);
+    await pool.query(
+      "UPDATE garmin_sessions SET status = 'error', last_error = $1, updated_at = now() WHERE user_id = $2",
+      [errMsg, userId]
+    ).catch(() => {});
+    return { ok: false, error: errMsg };
   }
 
   // ── Save normalized summary (same upsert as garmin-connect path) ──────────
@@ -1025,8 +1046,14 @@ export async function getGarminSummary(
     // raw_payload missing or malformed
   }
 
+  // Determine if this data is stale (not from today)
+  const today = fmtDate(new Date());
+  const rowDate = typeof row.date === "string" ? row.date : row.date?.toISOString?.()?.slice(0, 10);
+  const isStale = rowDate !== today;
+
   return {
     date: row.date,
+    isStale,
     totalSteps: row.total_steps,
     caloriesBurned: row.calories_burned,
     activeMinutes: row.active_minutes,
