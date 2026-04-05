@@ -336,16 +336,15 @@ export default function DietPlanPage() {
   const targetLbs = user?.targetWeightKg ? r1(kgToLbs(user.targetWeightKg)) : null;
 
   // Protocol breakdown — how much each component removes from scale weight
-  // These match the buffer values in tdee.ts computeDailyTargets exactly
-  const cutTier = waterCutAnalysis?.tier ?? 0;
-  const useGutCut   = waterCutAnalysis?.useGutCut        ?? false;
-  const useWaterCut = waterCutAnalysis?.useWaterSodiumLoad ?? false;
-  const useDepletion = waterCutAnalysis?.useGlycogenDepletion ?? false;
+  // Buffer = smallest protocol combination that fully covers the cut %.
+  // Must match the buffer logic in tdee.ts computeDailyTargets exactly.
+  const cutPctRaw = waterCutAnalysis?.cutPct ?? 0;
 
   // Per-component estimates (conservative lower bounds)
-  const gutCutPct        = useGutCut   ? 0.015 : 0;  // 1.5% BW (range: 1.5–2.5%)
-  const waterCutPct      = useWaterCut ? 0.010 : 0;  // 1.0% BW
-  const depletionPct     = useDepletion ? 0.015 : 0;  // 1.5% BW
+  // Components are enabled based on what the buffer requires, not just the tier.
+  const gutCutPct        = cutPctRaw >= 0.5 ? 0.015 : 0;  // 1.5% BW
+  const waterCutPct      = cutPctRaw > 1.5  ? 0.010 : 0;  // 1.0% BW (needed when gut alone insufficient)
+  const depletionPct     = cutPctRaw > 2.5  ? 0.015 : 0;  // 1.5% BW (needed when gut+water insufficient)
   const totalBufferPct   = gutCutPct + waterCutPct + depletionPct;
 
   const gutCutLbs        = currentLbs ? r1(currentLbs * gutCutPct)    : 0;
