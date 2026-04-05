@@ -21,6 +21,7 @@ interface SleepLevel {
 
 interface GarminSummary {
   date: string;
+  isStale?: boolean;
   totalSteps: number | null;
   caloriesBurned: number | null;
   activeMinutes: number | null;
@@ -381,8 +382,16 @@ export default function WearablesPage() {
       {/* Data summary cards — only shown when connected and data exists */}
       {connected && summary && (
         <div className="space-y-3">
+          {summary.isStale && (
+            <div className="flex items-center gap-2 text-xs bg-yellow-500/10 border border-yellow-500/20 rounded-lg px-3 py-2">
+              <AlertCircle className="w-3.5 h-3.5 text-yellow-500 shrink-0" />
+              <span className="text-yellow-600 dark:text-yellow-400">
+                Showing data from {new Date(summary.date).toLocaleDateString("en-US", { month: "short", day: "numeric" })} — tap "Sync now" to pull today's data
+              </span>
+            </div>
+          )}
           <h2 className="text-sm font-semibold text-muted-foreground">
-            Today's Garmin Data
+            {summary.isStale ? "Last Garmin Data" : "Today's Garmin Data"}
             {summary.syncedAt && (
               <span className="font-normal"> — synced {fmtTime(summary.syncedAt)}</span>
             )}

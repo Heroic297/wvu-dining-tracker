@@ -7,26 +7,40 @@ import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+// Derive __dirname safely — import.meta.url is undefined when esbuild bundles to CJS
+let __mod_dir: string;
+try {
+  __mod_dir = path.dirname(fileURLToPath(import.meta.url));
+} catch {
+  // CJS fallback: __dirname is defined by Node, or use process.cwd()
+  __mod_dir = typeof __dirname !== "undefined" ? __dirname : process.cwd();
+}
 
-// Resolve sidecar path: in production (dist/index.cjs), the .py file is in server/
-// relative to the project root; in dev, it's a sibling of this file.
-function resolveSidecarPath(): string {
-  // 1. Sibling of this file (works in dev with tsx)
-  const sibling = path.join(__dirname, "garmin_sidecar.py");
-  if (fs.existsSync(sibling)) return sibling;
+// Resolve sidecar path with multiple candidates.
+// In production (esbuild → dist/index.cjs) the .py file lives in server/ under the repo root.
+// process.cwd() is checked FIRST because Render's CWD is always the repo root.
+function resolveSidecarPath(): string | undefined {
+  const candidates = [
+    // 1. CWD-based — most reliable on Render where CWD = repo root
+    path.resolve(process.cwd(), "server", "garmin_sidecar.py"),
+    // 2. Sibling of this file (works in dev with tsx)
+    path.join(__mod_dir, "garmin_sidecar.py"),
+    // 3. In production, __mod_dir may be dist/ — look in ../server/
+    path.resolve(__mod_dir, "..", "server", "garmin_sidecar.py"),
+    // 4. Copied into dist/server/ by postbuild
+    path.resolve(process.cwd(), "dist", "server", "garmin_sidecar.py"),
+  ];
 
-  // 2. In production, __dirname is dist/ — look in ../server/
-  const fromDist = path.resolve(__dirname, "..", "server", "garmin_sidecar.py");
-  if (fs.existsSync(fromDist)) return fromDist;
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      console.log(`[garmin-py] Sidecar resolved: ${candidate}`);
+      return candidate;
+    }
+    console.log(`[garmin-py] Sidecar not at: ${candidate}`);
+  }
 
-  // 3. Fallback: project root server/ dir
-  const fromRoot = path.resolve(process.cwd(), "server", "garmin_sidecar.py");
-  if (fs.existsSync(fromRoot)) return fromRoot;
-
-  // Last resort — use the sibling path and let the spawn error be descriptive
-  return sibling;
+  console.error(`[garmin-py] garmin_sidecar.py not found in any candidate path`);
+  return undefined;
 }
 
 const SIDECAR_PATH = resolveSidecarPath();
@@ -48,6 +62,9 @@ function runSidecar(
   args: string[] = []
 ): Promise<any> {
   return new Promise((resolve, reject) => {
+    if (!SIDECAR_PATH) {
+      return reject(new Error("Python sidecar not found — garmin_sidecar.py missing from all candidate paths"));
+    }
     const proc = spawn(
       "python3",
       [SIDECAR_PATH, command, tokensPath, ...args],
