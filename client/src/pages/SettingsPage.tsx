@@ -551,8 +551,13 @@ export default function SettingsPage() {
             { id: "E2B" as ModelVariant, label: "Gemma 4 E2B", size: "~3.5 GB", desc: "Faster download, good for coaching" },
             { id: "E4B" as ModelVariant, label: "Gemma 4 E4B", size: "~6 GB", desc: "Larger, better structured responses" },
           ]).map((opt) => {
-            const isInstalled = localModel.variant === opt.id && localModel.ready;
-            const isLoading = localModel.loading && localModel.downloadingVariant === opt.id;
+            // Model is "installed" if this variant is stored — regardless of whether it's
+            // fully loaded into memory yet (ready). It may be reloading from cache on mount.
+            const isThisVariant = localModel.variant === opt.id;
+            const isInstalled = isThisVariant && (localModel.ready || localModel.loading);
+            const isFullyReady = isThisVariant && localModel.ready && !localModel.loading;
+            const isReloading = isThisVariant && localModel.loading && !localModel.downloadingVariant;
+            const isDownloading = localModel.loading && localModel.downloadingVariant === opt.id;
             const isCurrentlyDownloading = localModel.loading;
 
             return (
@@ -562,7 +567,7 @@ export default function SettingsPage() {
                     <p className="text-sm font-medium">{opt.label} <span className="text-xs text-muted-foreground">({opt.size})</span></p>
                     <p className="text-xs text-muted-foreground">{opt.desc}</p>
                   </div>
-                  {isInstalled ? (
+                  {isFullyReady ? (
                     <div className="flex items-center gap-2">
                       <span className="text-xs text-green-500 font-medium flex items-center gap-1">
                         <CheckCircle className="w-3.5 h-3.5" /> Installed
@@ -577,6 +582,11 @@ export default function SettingsPage() {
                         <X className="w-3.5 h-3.5" />
                       </Button>
                     </div>
+                  ) : isReloading ? (
+                    <div className="flex items-center gap-2">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />
+                      <span className="text-xs text-muted-foreground">Loading from cache...</span>
+                    </div>
                   ) : (
                     <Button
                       size="sm"
@@ -584,18 +594,18 @@ export default function SettingsPage() {
                       disabled={isCurrentlyDownloading}
                       className="h-8 text-xs"
                     >
-                      {isLoading ? (
+                      {isDownloading ? (
                         <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" />
                       ) : (
                         <Download className="w-3.5 h-3.5 mr-1" />
                       )}
-                      {isLoading ? "Downloading..." : "Download"}
+                      {isDownloading ? "Downloading..." : "Download"}
                     </Button>
                   )}
                 </div>
 
-                {/* Progress bar */}
-                {isLoading && (
+                {/* Progress bar — show during fresh download only (not cache reload) */}
+                {isDownloading && (
                   <div className="space-y-1">
                     <div className="w-full h-2 bg-secondary rounded-full overflow-hidden">
                       <div

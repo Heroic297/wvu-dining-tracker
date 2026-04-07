@@ -10,6 +10,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { useLocalModelContext } from "@/contexts/LocalModelContext";
 import {
   Brain,
   Send,
@@ -778,6 +779,7 @@ function NoKeyBanner() {
 
 export default function CoachPage() {
   const qc = useQueryClient();
+  const localModel = useLocalModelContext();
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -815,8 +817,62 @@ export default function CoachPage() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  // ── Build a lightweight system prompt from profile for local inference ──
+  const buildLocalSystemPrompt = useCallback((p: CoachProfile | undefined): string => {
+    if (!p) return "You are Macro Coach, an expert AI nutrition and health assistant.";
+    const toneDesc =
+      p.coachTone === "coach"
+        ? "You are motivational, encouraging, and speak in plain English."
+        : p.coachTone === "data"
+        ? "You are precise and numbers-forward. Use exact figures, minimal fluff."
+        : "You balance motivation with precision. Be direct but supportive.";
+    const memory = p.rollingSummary
+      ? `\n--- WHAT YOU KNOW ABOUT THIS USER ---\n${p.rollingSummary}\n--- END MEMORY ---`
+      : "";
+    const name = p.preferredName ? `The user's name is ${p.preferredName}.` : "";
+    const goal = p.mainGoal ? `Their current goal: ${p.mainGoal}.` : "";
+    return `You are Macro Coach, an expert AI health and nutrition assistant.
+
+${toneDesc}
+You specialize in nutrition, body composition, powerlifting prep, peak week protocols, weight management, and performance optimization.
+${name} ${goal}
+
+SCOPE: You ONLY discuss health, nutrition, training, body composition, and directly related topics. Politely decline anything outside this scope.
+${memory}`;
+  }, []);
+
+  // ── Local model inference ──────────────────────────────────────────────────
+  const localInference = useCallback(async (userMessage: string): Promise<{ message: string; model: string; provider: string }> => {
+    const systemPrompt = buildLocalSystemPrompt(profile);
+
+    // Build messages: system + recent history + new user message
+    const chatMessages: Array<{ role: string; content: string }> = [
+      { role: "system", content: systemPrompt },
+      // Include recent conversation context (last 10 exchanges)
+      ...messages
+        .filter((m) => !m.pending && !m.error)
+        .slice(-20)
+        .map((m) => ({ role: m.role, content: m.content })),
+      { role: "user", content: userMessage },
+    ];
+
+    const response = await localModel.generateText(chatMessages);
+    return {
+      message: response,
+      model: `Gemma 4 ${localModel.variant ?? ""} (local)`,
+      provider: "local",
+    };
+  }, [buildLocalSystemPrompt, profile, messages, localModel]);
+
   const sendMutation = useMutation({
-    mutationFn: (message: string) => api.coachChat(message).then((r) => r.json()),
+    mutationFn: async (message: string) => {
+      // If the local model is ready, use it instead of the server
+      if (localModel.ready && localModel.variant) {
+        return localInference(message);
+      }
+      // Fall back to server route
+      return api.coachChat(message).then((r) => r.json());
+    },
     onMutate: (message) => {
       setMessages((prev) => [
         ...prev,
@@ -856,8 +912,10 @@ export default function CoachPage() {
         ...prev.slice(0, -1),
         { role: "assistant", content: data.message, model: data.model, provider: data.provider },
       ]);
-      // Refresh profile (daily usage may have changed)
-      qc.invalidateQueries({ queryKey: ["coachProfile"] });
+      // Refresh profile (daily usage may have changed) — skip for local inference
+      if (data.provider !== "local") {
+        qc.invalidateQueries({ queryKey: ["coachProfile"] });
+      }
     },
     onError: () => {
       setIsStreaming(false);
