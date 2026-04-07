@@ -153,3 +153,51 @@ export async function kgStoreMempalace(
     return false;
   }
 }
+
+/**
+ * Build a formatted context block from today's macro data + meal-level rows
+ * + the user's top coaching memories from mempalace.
+ *
+ * snapshot: {
+ *   today, totals, targets, meals, water_ml, weight
+ * }
+ *
+ * Returns a plain-text block ready to prepend to any system prompt.
+ * On failure returns an empty string so the caller degrades gracefully.
+ */
+export async function getMempalaceContextSnapshot(
+  userId: string,
+  snapshot: {
+    today: string;
+    totals: { kcal: number; protein: number; carbs: number; fat: number };
+    targets: {
+      calories: number;
+      proteinG: number;
+      carbsG: number;
+      fatG: number;
+      waterTargetMl?: number;
+      tdee?: number;
+    } | null;
+    meals: Array<{
+      meal_name?: string;
+      logged_at?: string;
+      total_calories?: number;
+      total_protein?: number;
+      total_carbs?: number;
+      total_fat?: number;
+    }>;
+    water_ml: number;
+    weight: { weight_kg?: number; weight_lbs?: number; date?: string } | null;
+  }
+): Promise<string> {
+  try {
+    const payload = JSON.stringify(snapshot);
+    const result = await runSidecar(["context_snapshot", userId, payload]);
+    if (result?.ok && typeof result.block === "string") {
+      return result.block;
+    }
+    return "";
+  } catch {
+    return "";
+  }
+}
