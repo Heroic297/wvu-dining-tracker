@@ -378,15 +378,18 @@ export async function registerRoutes(
           return res.status(400).json({ error: "Query parameter 'q' required" });
         }
         // Text search always uses AI — barcode route uses USDA/Open Food Facts
+        console.log(`[nutrition/lookup] query="${foodName.trim()}" userId=${req.user!.id}`);
         const result = await lookupNutrition(foodName.trim(), { forceAi: true, userId: req.user!.id });
         if (!result) {
+          console.warn(`[nutrition/lookup] no result for "${foodName.trim()}"`);
           return res.status(404).json({
             error: "Could not find nutrition info — please enter manually",
           });
         }
+        console.log(`[nutrition/lookup] result: ${result.calories} kcal, source=${result.source}`);
         res.json(result);
-      } catch (err) {
-        console.error("[nutrition/lookup]", err);
+      } catch (err: any) {
+        console.error("[nutrition/lookup] ERROR:", err.message, err.stack?.split("\n").slice(0, 3).join(" | "));
         res.status(500).json({ error: "Nutrition lookup failed" });
       }
     }

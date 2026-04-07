@@ -269,8 +269,17 @@ export default function LogMealPage() {
       const res = await api.lookupNutrition(customSearch.trim());
       const data = await res.json();
       setSearchResult(data);
-    } catch {
-      setSearchResult({ error: "Not found — please enter values manually" });
+    } catch (err: any) {
+      // Extract a meaningful message if the server returned one
+      const msg = err?.message ?? "";
+      if (msg.includes("404")) {
+        setSearchResult({ error: "Not found — please enter values manually" });
+      } else if (msg.includes("500") || msg.includes("failed")) {
+        setSearchResult({ error: "Nutrition lookup service error — try again or enter manually" });
+      } else {
+        setSearchResult({ error: "Not found — please enter values manually" });
+      }
+      console.error("[handleSearch] lookup error:", err);
     } finally {
       setSearching(false);
     }
