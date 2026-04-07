@@ -785,6 +785,18 @@ export default function CoachPage() {
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [showNeedKey, setShowNeedKey] = useState(false);
+  // Local vs Cloud toggle — persisted so preference survives refresh
+  const [useLocalCoach, setUseLocalCoach] = useState(() => {
+    const stored = localStorage.getItem("coachUseLocal");
+    // Default to local if a model is available, but respect explicit user choice
+    return stored !== null ? stored === "true" : true;
+  });
+  const toggleCoachMode = useCallback((local: boolean) => {
+    setUseLocalCoach(local);
+    localStorage.setItem("coachUseLocal", String(local));
+  }, []);
+  // Effective flag: use local only if toggled on AND model is actually ready
+  const useLocal = useLocalCoach && localModel.ready && !!localModel.variant;
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLInputElement>(null);
 
@@ -866,11 +878,10 @@ ${memory}`;
 
   const sendMutation = useMutation({
     mutationFn: async (message: string) => {
-      // If the local model is ready, use it instead of the server
-      if (localModel.ready && localModel.variant) {
+      // Use local model if toggled on and ready, otherwise server
+      if (useLocal) {
         return localInference(message);
       }
-      // Fall back to server route
       return api.coachChat(message).then((r) => r.json());
     },
     onMutate: (message) => {
@@ -1000,15 +1011,85 @@ ${memory}`;
             </h1>
           </div>
           <div className="flex items-center gap-2">
-            {/* Model selector — when local model is active, show it; otherwise cloud selector */}
+            {/* Local/Cloud toggle + model selector */}
             {localModel.ready && localModel.variant ? (
-              <div className="flex items-center gap-1.5 h-7 px-2 rounded-md border border-emerald-700/50 bg-emerald-900/30 text-emerald-300 text-xs">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                Gemma 4 {localModel.variant} (Local)
+              <div className="flex items-center gap-1.5">
+                {/* Toggle pill */}
+                <div className="flex items-center h-7 rounded-md border border-slate-700 bg-slate-800 overflow-hidden text-xs">
+                  <button
+                    onClick={() => toggleCoachMode(true)}
+                    className={`px-2 h-full transition-colors ${
+                      useLocal
+                        ? "bg-emerald-900/60 text-emerald-300 border-r border-emerald-700/50"
+                        : "text-slate-400 hover:text-slate-200 border-r border-slate-700"
+                    }`}
+                  >
+                    {useLocal && <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse mr-1" />}
+                    Local
+                  </button>
+                  <button
+                    onClick={() => toggleCoachMode(false)}
+                    className={`px-2 h-full transition-colors ${
+                      !useLocal
+                        ? "bg-blue-900/60 text-blue-300"
+                        : "text-slate-400 hover:text-slate-200"
+                    }`}
+                  >
+                    Cloud
+                  </button>
+                </div>
+                {/* Show model info based on toggle */}
+                {useLocal ? (
+                  <span className="text-xs text-emerald-400/80 hidden sm:inline">
+                    Gemma 4 {localModel.variant}
+                  </span>
+                ) : profile?.hasOwnKey ? (() => {
+                  const provider = profile.provider ?? "groq";
+                  const FALLBACK: Record<string, Array<{id:string;label:string}>> = {
+                    groq: [
+                      { id: "llama-3.1-8b-instant",    label: "Llama 3.1 8B Instant (recommended)" },
+                      { id: "llama-3.3-70b-versatile",  label: "Llama 3.3 70B Versatile" },
+                    ],
+                    openrouter: [
+                      { id: "openrouter/free",                            label: "Auto (Free)" },
+                      { id: "qwen/qwen3.6-plus:free",                    label: "Qwen 3.6 Plus (recommended)" },
+                      { id: "meta-llama/llama-3.3-70b-instruct:free",     label: "Llama 3.3 70B" },
+                      { id: "nvidia/nemotron-3-super-120b-a12b:free",     label: "Nemotron 120B" },
+                      { id: "stepfun/step-3.5-flash:free",                label: "Step 3.5 Flash" },
+                    ],
+                  };
+                  const models = (profile.modelCatalog?.[provider] ?? FALLBACK[provider] ?? []) as Array<{id:string;label:string}>;
+                  const currentModel = profile.aiModel ?? "";
+                  const effectiveModel = models.some((m) => m.id === currentModel)
+                    ? currentModel
+                    : (models[0]?.id ?? "");
+                  return (
+                    <Select
+                      value={effectiveModel}
+                      onValueChange={async (model) => {
+                        try {
+                          await api.coachUpdateProvider(provider, model);
+                        } catch { /* refresh to current server state */ }
+                        qc.invalidateQueries({ queryKey: ["coachProfile"] });
+                      }}
+                    >
+                      <SelectTrigger className="h-7 text-xs w-auto max-w-[150px] border-slate-700 bg-slate-800 text-slate-300">
+                        <SelectValue placeholder="Select model" />
+                      </SelectTrigger>
+                      <SelectContent align="end" className="max-w-[220px]">
+                        {models.map((m) => (
+                          <SelectItem key={m.id} value={m.id} className="text-xs">
+                            {m.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  );
+                })() : null}
               </div>
             ) : profile?.hasOwnKey && (() => {
+              // No local model available — just show cloud model selector
               const provider = profile.provider ?? "groq";
-              // Fallback catalog — kept in sync with server FREE_MODEL_CATALOG (no dead models)
               const FALLBACK: Record<string, Array<{id:string;label:string}>> = {
                 groq: [
                   { id: "llama-3.1-8b-instant",    label: "Llama 3.1 8B Instant (recommended)" },
@@ -1022,10 +1103,8 @@ ${memory}`;
                   { id: "stepfun/step-3.5-flash:free",                label: "Step 3.5 Flash" },
                 ],
               };
-              // Use server catalog (authoritative), fall back to local. Only show models for current provider.
               const models = (profile.modelCatalog?.[provider] ?? FALLBACK[provider] ?? []) as Array<{id:string;label:string}>;
               const currentModel = profile.aiModel ?? "";
-              // If current model isn't in the list (dead/mismatched), show the default
               const effectiveModel = models.some((m) => m.id === currentModel)
                 ? currentModel
                 : (models[0]?.id ?? "");
@@ -1035,9 +1114,7 @@ ${memory}`;
                   onValueChange={async (model) => {
                     try {
                       await api.coachUpdateProvider(provider, model);
-                    } catch {
-                      // On failure, don't leave UI broken — just refresh to current server state
-                    }
+                    } catch { /* refresh to current server state */ }
                     qc.invalidateQueries({ queryKey: ["coachProfile"] });
                   }}
                 >
