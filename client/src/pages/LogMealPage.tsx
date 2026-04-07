@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, guessMealType, todayStr, fmt1 } from "@/lib/api";
 import { apiRequest } from "@/lib/queryClient";
@@ -11,8 +11,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Trash2, Search, Loader2, ChefHat, ScanBarcode, CheckCheck } from "lucide-react";
+import { Plus, Trash2, Search, Loader2, ChefHat, ScanBarcode, CheckCheck, Camera } from "lucide-react";
 import BarcodeScanner from "@/components/BarcodeScanner";
+import { useLocalModelContext } from "@/contexts/LocalModelContext";
 
 const MEAL_TYPES = ["breakfast", "lunch", "dinner", "brunch"];
 const NO_LOCATION = "__none__";
@@ -134,6 +135,23 @@ export default function LogMealPage() {
   const [searchResult, setSearchResult] = useState<any>(null);
   const [searching, setSearching] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
+
+  // Photo log state
+  const localModel = useLocalModelContext();
+  const photoInputRef = useRef<HTMLInputElement>(null);
+  const [photoAnalyzing, setPhotoAnalyzing] = useState(false);
+  const [photoItems, setPhotoItems] = useState<Array<{
+    name: string;
+    estimated_grams: number;
+    calories: number;
+    protein_g: number;
+    carbs_g: number;
+    fat_g: number;
+    checked: boolean;
+    multiplier: number;
+  }>>([]);
+  const [showPhotoResults, setShowPhotoResults] = useState(false);
+  const [photoError, setPhotoError] = useState<string | null>(null);
 
   // Manual macro fields (used for single-item result)
   const [manualCalories, setManualCalories] = useState("");
@@ -282,6 +300,124 @@ export default function LogMealPage() {
       setSearchResult({ error: "Barcode lookup failed — try entering the name manually" });
     } finally {
       setSearching(false);
+    }
+  };
+
+  // ── Photo Log ─────────────────────────────────────────────────────────────
+  const resizeImage = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        img.onload = () => {
+          const canvas = document.createElement("canvas");
+          const maxSize = 512;
+          let w = img.width;
+          let h = img.height;
+          if (w > h) {
+            if (w > maxSize) { h = (h * maxSize) / w; w = maxSize; }
+          } else {
+            if (h > maxSize) { w = (w * maxSize) / h; h = maxSize; }
+          }
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext("2d");
+          if (!ctx) { reject(new Error("Canvas not supported")); return; }
+          ctx.drawImage(img, 0, 0, w, h);
+          resolve(canvas.toDataURL("image/jpeg", 0.85));
+        };
+        img.onerror = reject;
+        img.src = e.target?.result as string;
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handlePhotoCapture = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    // Reset file input so same file can be re-selected
+    e.target.value = "";
+
+    if (!localModel.ready) {
+      setPhotoError("Local model is loading...");
+      setShowPhotoResults(true);
+      return;
+    }
+
+    setPhotoAnalyzing(true);
+    setPhotoError(null);
+    setPhotoItems([]);
+    setShowPhotoResults(true);
+
+    try {
+      const imageData = await resizeImage(file);
+      const prompt = `Identify every distinct food item visible in this image. For each item return a JSON array: [{"name": "...", "estimated_grams": ..., "calories": ..., "protein_g": ..., "carbs_g": ..., "fat_g": ...}]. Base gram estimates on standard USDA portion sizes for what is visible. Return only the JSON array, no other text.`;
+
+      const response = await localModel.analyzeImage(imageData, prompt);
+
+      // Try to parse JSON from the response
+      const jsonMatch = response.match(/\[[\s\S]*\]/);
+      if (!jsonMatch) {
+        setPhotoError("Couldn't identify food items clearly. Try the search bar instead.");
+        return;
+      }
+
+      const parsed = JSON.parse(jsonMatch[0]) as Array<{
+        name: string;
+        estimated_grams: number;
+        calories: number;
+        protein_g: number;
+        carbs_g: number;
+        fat_g: number;
+      }>;
+
+      if (!Array.isArray(parsed) || parsed.length === 0) {
+        setPhotoError("Couldn't identify food items clearly. Try the search bar instead.");
+        return;
+      }
+
+      setPhotoItems(parsed.map((item) => ({
+        ...item,
+        checked: true,
+        multiplier: 1,
+      })));
+    } catch (err: any) {
+      console.error("[photoLog] analysis error:", err);
+      setPhotoError("Couldn't identify food items clearly. Try the search bar instead.");
+    } finally {
+      setPhotoAnalyzing(false);
+    }
+  };
+
+  const handleLogPhotoItems = async () => {
+    const selected = photoItems.filter((item) => item.checked);
+    if (selected.length === 0) {
+      toast({ title: "Select at least one item", variant: "destructive" });
+      return;
+    }
+    try {
+      const meal = await ensureMeal();
+      for (const item of selected) {
+        const m = item.multiplier;
+        await api.addMealItem(meal.id, {
+          customName: item.name,
+          calories: Math.round(item.calories * m),
+          proteinG: Math.round(item.protein_g * m * 10) / 10,
+          carbsG: Math.round(item.carbs_g * m * 10) / 10,
+          fatG: Math.round(item.fat_g * m * 10) / 10,
+          servings: m,
+          source: "ai_estimated",
+        });
+      }
+      await refetchMeals();
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] });
+      setShowPhotoResults(false);
+      setPhotoItems([]);
+      toast({ title: `${selected.length} item${selected.length > 1 ? "s" : ""} logged from photo` });
+    } catch {
+      toast({ title: "Failed to log items", variant: "destructive" });
     }
   };
 
@@ -656,7 +792,148 @@ export default function LogMealPage() {
               >
                 <ScanBarcode className="w-4 h-4" />
               </Button>
+              {localModel.variant && (
+                <>
+                  <input
+                    ref={photoInputRef}
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    onChange={handlePhotoCapture}
+                    className="hidden"
+                  />
+                  <Button
+                    variant="outline"
+                    onClick={() => photoInputRef.current?.click()}
+                    disabled={searching || photoAnalyzing}
+                    data-testid="button-photo-log"
+                    title="Photo Log — identify food with AI"
+                    className="text-primary border-primary/40 hover:bg-primary/10"
+                  >
+                    <Camera className="w-4 h-4" />
+                  </Button>
+                </>
+              )}
             </div>
+
+            {/* ── Photo log analyzing spinner ────────────────────────────── */}
+            {photoAnalyzing && (
+              <div className="flex items-center justify-center gap-3 py-6">
+                <Loader2 className="w-5 h-5 animate-spin text-primary" />
+                <span className="text-sm text-muted-foreground">Analyzing photo...</span>
+              </div>
+            )}
+
+            {/* ── Photo log results ─────────────────────────────────────── */}
+            {showPhotoResults && !photoAnalyzing && (
+              <div className="space-y-3">
+                {photoError ? (
+                  <div className="rounded-lg bg-destructive/10 text-destructive p-3 text-sm">
+                    {photoError}
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => { setShowPhotoResults(false); setPhotoError(null); }}
+                      className="ml-2 h-6 text-xs"
+                    >
+                      Dismiss
+                    </Button>
+                  </div>
+                ) : photoItems.length > 0 && (
+                  <>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-sm font-semibold">Detected food items</p>
+                        <p className="text-xs text-muted-foreground">
+                          Uncheck items to exclude, adjust quantity multipliers
+                        </p>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => { setShowPhotoResults(false); setPhotoItems([]); }}
+                        className="h-7 text-xs text-muted-foreground"
+                      >
+                        Clear
+                      </Button>
+                    </div>
+
+                    <div className="space-y-2">
+                      {photoItems.map((item, idx) => (
+                        <div
+                          key={idx}
+                          className={`rounded-xl border transition-colors p-3 space-y-2 ${
+                            item.checked
+                              ? "border-primary/60 bg-primary/5"
+                              : "border-border bg-card opacity-60"
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-medium">{item.name}</p>
+                              <p className="text-xs text-muted-foreground">~{item.estimated_grams}g</p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setPhotoItems(prev => {
+                                const n = [...prev];
+                                n[idx] = { ...n[idx], checked: !n[idx].checked };
+                                return n;
+                              })}
+                              className={`flex-shrink-0 w-6 h-6 rounded-full border-2 flex items-center justify-center transition-colors ${
+                                item.checked
+                                  ? "border-primary bg-primary text-primary-foreground"
+                                  : "border-border bg-background text-muted-foreground hover:border-primary/60"
+                              }`}
+                            >
+                              {item.checked && <CheckCheck className="w-3 h-3" />}
+                            </button>
+                          </div>
+
+                          <div className="flex items-center gap-2 flex-wrap text-xs">
+                            <span className="font-semibold">{Math.round(item.calories * item.multiplier)} kcal</span>
+                            <span className="macro-protein">P:{(item.protein_g * item.multiplier).toFixed(1)}g</span>
+                            <span className="macro-carbs">C:{(item.carbs_g * item.multiplier).toFixed(1)}g</span>
+                            <span className="macro-fat">F:{(item.fat_g * item.multiplier).toFixed(1)}g</span>
+                          </div>
+
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="text-xs text-muted-foreground mr-1">Qty:</span>
+                            {[0.5, 1, 1.5, 2].map((m) => (
+                              <button
+                                key={m}
+                                type="button"
+                                onClick={() => setPhotoItems(prev => {
+                                  const n = [...prev];
+                                  n[idx] = { ...n[idx], multiplier: m };
+                                  return n;
+                                })}
+                                className={`px-2 py-0.5 rounded text-xs font-medium border transition-colors ${
+                                  item.multiplier === m
+                                    ? "bg-primary text-primary-foreground border-primary"
+                                    : "bg-secondary text-secondary-foreground border-border hover:border-primary/60"
+                                }`}
+                              >
+                                {m === 1 ? "1x" : `${m}x`}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <Button
+                      onClick={handleLogPhotoItems}
+                      className="w-full"
+                      data-testid="button-log-photo-items"
+                    >
+                      <Plus className="w-4 h-4 mr-1.5" />
+                      Log Selected Items
+                    </Button>
+                  </>
+                )}
+              </div>
+            )}
 
             {/* ── Multi-component breakdown result ────────────────────────── */}
             {searchResult && !searchResult.error && isMultiBreakdown && (

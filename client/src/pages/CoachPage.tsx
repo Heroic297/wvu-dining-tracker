@@ -10,6 +10,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { useLocalModelContext } from "@/contexts/LocalModelContext";
 import {
   Brain,
   Send,
@@ -699,7 +700,7 @@ const MODEL_LABELS: Record<string, string> = {
   "llama-3.3-70b-versatile":                     "Llama 3.3 70B",
   "llama-3.1-8b-instant":                        "Llama 3.1 8B",
 };
-const PROVIDER_LABELS: Record<string, string> = { groq: "Groq", openrouter: "OpenRouter" };
+const PROVIDER_LABELS: Record<string, string> = { groq: "Groq", openrouter: "OpenRouter", local: "On-Device" };
 
 function MessageBubble({ msg }: { msg: Message }) {
   const isUser = msg.role === "user";
@@ -778,11 +779,24 @@ function NoKeyBanner() {
 
 export default function CoachPage() {
   const qc = useQueryClient();
+  const localModel = useLocalModelContext();
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [showNeedKey, setShowNeedKey] = useState(false);
+  // Local vs Cloud toggle — persisted so preference survives refresh
+  const [useLocalCoach, setUseLocalCoach] = useState(() => {
+    const stored = localStorage.getItem("coachUseLocal");
+    // Default to local if a model is available, but respect explicit user choice
+    return stored !== null ? stored === "true" : true;
+  });
+  const toggleCoachMode = useCallback((local: boolean) => {
+    setUseLocalCoach(local);
+    localStorage.setItem("coachUseLocal", String(local));
+  }, []);
+  // Effective flag: use local only if toggled on AND model is actually ready
+  const useLocal = useLocalCoach && localModel.ready && !!localModel.variant;
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLInputElement>(null);
 
@@ -815,8 +829,61 @@ export default function CoachPage() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  // ── Build a lightweight system prompt from profile for local inference ──
+  const buildLocalSystemPrompt = useCallback((p: CoachProfile | undefined): string => {
+    if (!p) return "You are Macro Coach, an expert AI nutrition and health assistant.";
+    const toneDesc =
+      p.coachTone === "coach"
+        ? "You are motivational, encouraging, and speak in plain English."
+        : p.coachTone === "data"
+        ? "You are precise and numbers-forward. Use exact figures, minimal fluff."
+        : "You balance motivation with precision. Be direct but supportive.";
+    const memory = p.rollingSummary
+      ? `\n--- WHAT YOU KNOW ABOUT THIS USER ---\n${p.rollingSummary}\n--- END MEMORY ---`
+      : "";
+    const name = p.preferredName ? `The user's name is ${p.preferredName}.` : "";
+    const goal = p.mainGoal ? `Their current goal: ${p.mainGoal}.` : "";
+    return `You are Macro Coach, an expert AI health and nutrition assistant.
+
+${toneDesc}
+You specialize in nutrition, body composition, powerlifting prep, peak week protocols, weight management, and performance optimization.
+${name} ${goal}
+
+SCOPE: You ONLY discuss health, nutrition, training, body composition, and directly related topics. Politely decline anything outside this scope.
+${memory}`;
+  }, []);
+
+  // ── Local model inference ──────────────────────────────────────────────────
+  const localInference = useCallback(async (userMessage: string): Promise<{ message: string; model: string; provider: string }> => {
+    const systemPrompt = buildLocalSystemPrompt(profile);
+
+    // Build messages: system + recent history + new user message
+    const chatMessages: Array<{ role: string; content: string }> = [
+      { role: "system", content: systemPrompt },
+      // Include recent conversation context (last 10 exchanges)
+      ...messages
+        .filter((m) => !m.pending && !m.error)
+        .slice(-20)
+        .map((m) => ({ role: m.role, content: m.content })),
+      { role: "user", content: userMessage },
+    ];
+
+    const response = await localModel.generateText(chatMessages);
+    return {
+      message: response,
+      model: `Gemma 4 ${localModel.variant ?? ""} (local)`,
+      provider: "local",
+    };
+  }, [buildLocalSystemPrompt, profile, messages, localModel]);
+
   const sendMutation = useMutation({
-    mutationFn: (message: string) => api.coachChat(message).then((r) => r.json()),
+    mutationFn: async (message: string) => {
+      // Use local model if toggled on and ready, otherwise server
+      if (useLocal) {
+        return localInference(message);
+      }
+      return api.coachChat(message).then((r) => r.json());
+    },
     onMutate: (message) => {
       setMessages((prev) => [
         ...prev,
@@ -856,8 +923,10 @@ export default function CoachPage() {
         ...prev.slice(0, -1),
         { role: "assistant", content: data.message, model: data.model, provider: data.provider },
       ]);
-      // Refresh profile (daily usage may have changed)
-      qc.invalidateQueries({ queryKey: ["coachProfile"] });
+      // Refresh profile (daily usage may have changed) — skip for local inference
+      if (data.provider !== "local") {
+        qc.invalidateQueries({ queryKey: ["coachProfile"] });
+      }
     },
     onError: () => {
       setIsStreaming(false);
@@ -942,10 +1011,85 @@ export default function CoachPage() {
             </h1>
           </div>
           <div className="flex items-center gap-2">
-            {/* Model selector — shown whenever user has a key */}
-            {profile?.hasOwnKey && (() => {
+            {/* Local/Cloud toggle + model selector */}
+            {localModel.ready && localModel.variant ? (
+              <div className="flex items-center gap-1.5">
+                {/* Toggle pill */}
+                <div className="flex items-center h-7 rounded-md border border-slate-700 bg-slate-800 overflow-hidden text-xs">
+                  <button
+                    onClick={() => toggleCoachMode(true)}
+                    className={`px-2 h-full transition-colors ${
+                      useLocal
+                        ? "bg-emerald-900/60 text-emerald-300 border-r border-emerald-700/50"
+                        : "text-slate-400 hover:text-slate-200 border-r border-slate-700"
+                    }`}
+                  >
+                    {useLocal && <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse mr-1" />}
+                    Local
+                  </button>
+                  <button
+                    onClick={() => toggleCoachMode(false)}
+                    className={`px-2 h-full transition-colors ${
+                      !useLocal
+                        ? "bg-blue-900/60 text-blue-300"
+                        : "text-slate-400 hover:text-slate-200"
+                    }`}
+                  >
+                    Cloud
+                  </button>
+                </div>
+                {/* Show model info based on toggle */}
+                {useLocal ? (
+                  <span className="text-xs text-emerald-400/80 hidden sm:inline">
+                    Gemma 4 {localModel.variant}
+                  </span>
+                ) : profile?.hasOwnKey ? (() => {
+                  const provider = profile.provider ?? "groq";
+                  const FALLBACK: Record<string, Array<{id:string;label:string}>> = {
+                    groq: [
+                      { id: "llama-3.1-8b-instant",    label: "Llama 3.1 8B Instant (recommended)" },
+                      { id: "llama-3.3-70b-versatile",  label: "Llama 3.3 70B Versatile" },
+                    ],
+                    openrouter: [
+                      { id: "openrouter/free",                            label: "Auto (Free)" },
+                      { id: "qwen/qwen3.6-plus:free",                    label: "Qwen 3.6 Plus (recommended)" },
+                      { id: "meta-llama/llama-3.3-70b-instruct:free",     label: "Llama 3.3 70B" },
+                      { id: "nvidia/nemotron-3-super-120b-a12b:free",     label: "Nemotron 120B" },
+                      { id: "stepfun/step-3.5-flash:free",                label: "Step 3.5 Flash" },
+                    ],
+                  };
+                  const models = (profile.modelCatalog?.[provider] ?? FALLBACK[provider] ?? []) as Array<{id:string;label:string}>;
+                  const currentModel = profile.aiModel ?? "";
+                  const effectiveModel = models.some((m) => m.id === currentModel)
+                    ? currentModel
+                    : (models[0]?.id ?? "");
+                  return (
+                    <Select
+                      value={effectiveModel}
+                      onValueChange={async (model) => {
+                        try {
+                          await api.coachUpdateProvider(provider, model);
+                        } catch { /* refresh to current server state */ }
+                        qc.invalidateQueries({ queryKey: ["coachProfile"] });
+                      }}
+                    >
+                      <SelectTrigger className="h-7 text-xs w-auto max-w-[150px] border-slate-700 bg-slate-800 text-slate-300">
+                        <SelectValue placeholder="Select model" />
+                      </SelectTrigger>
+                      <SelectContent align="end" className="max-w-[220px]">
+                        {models.map((m) => (
+                          <SelectItem key={m.id} value={m.id} className="text-xs">
+                            {m.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  );
+                })() : null}
+              </div>
+            ) : profile?.hasOwnKey && (() => {
+              // No local model available — just show cloud model selector
               const provider = profile.provider ?? "groq";
-              // Fallback catalog — kept in sync with server FREE_MODEL_CATALOG (no dead models)
               const FALLBACK: Record<string, Array<{id:string;label:string}>> = {
                 groq: [
                   { id: "llama-3.1-8b-instant",    label: "Llama 3.1 8B Instant (recommended)" },
@@ -959,10 +1103,8 @@ export default function CoachPage() {
                   { id: "stepfun/step-3.5-flash:free",                label: "Step 3.5 Flash" },
                 ],
               };
-              // Use server catalog (authoritative), fall back to local. Only show models for current provider.
               const models = (profile.modelCatalog?.[provider] ?? FALLBACK[provider] ?? []) as Array<{id:string;label:string}>;
               const currentModel = profile.aiModel ?? "";
-              // If current model isn't in the list (dead/mismatched), show the default
               const effectiveModel = models.some((m) => m.id === currentModel)
                 ? currentModel
                 : (models[0]?.id ?? "");
@@ -972,9 +1114,7 @@ export default function CoachPage() {
                   onValueChange={async (model) => {
                     try {
                       await api.coachUpdateProvider(provider, model);
-                    } catch {
-                      // On failure, don't leave UI broken — just refresh to current server state
-                    }
+                    } catch { /* refresh to current server state */ }
                     qc.invalidateQueries({ queryKey: ["coachProfile"] });
                   }}
                 >

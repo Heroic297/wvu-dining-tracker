@@ -21,6 +21,8 @@
 import Groq from "groq-sdk";
 import axios from "axios";
 import { storage } from "./storage.js";
+import { pool } from "./db.js";
+import { decryptString } from "./crypto.js";
 import type { InsertNutritionCache } from "../shared/schema.js";
 
 const USDA_API_KEY = process.env.USDA_API_KEY || "DEMO_KEY";
@@ -468,7 +470,72 @@ interface RawAIResponse {
   }>;
 }
 
-async function estimateWithAI(parsed: ParsedQuery): Promise<NutritionResult | null> {
+interface OpenRouterOverride {
+  apiKey: string;
+  model: string;
+}
+
+async function estimateWithAI(
+  parsed: ParsedQuery,
+  openRouterOverride?: OpenRouterOverride
+): Promise<NutritionResult | null> {
+  if (openRouterOverride) {
+    // Use OpenRouter instead of Groq
+    try {
+      const resp = await axios.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        {
+          model: openRouterOverride.model,
+          messages: [
+            { role: "system", content: buildSystemPrompt(parsed) },
+            { role: "user",   content: `Nutrition for: "${parsed.cleanedQuery}"` },
+          ],
+          temperature: 0.05,
+          max_tokens: 1200,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${openRouterOverride.apiKey}`,
+            "Content-Type": "application/json",
+          },
+          timeout: 30000,
+        }
+      );
+
+      const raw = resp.data?.choices?.[0]?.message?.content?.trim() ?? "";
+      const cleaned = raw.replace(/```(?:json)?/gi, "").replace(/```/g, "").trim();
+      const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) return null;
+
+      const p = JSON.parse(jsonMatch[0]) as RawAIResponse;
+      const breakdown: NutritionComponent[] = (p.breakdown ?? []).map((b) => ({
+        item: b.item,
+        calories: Math.round(b.calories),
+        proteinG: Math.round(b.proteinG * 10) / 10,
+        carbsG:   Math.round(b.carbsG   * 10) / 10,
+        fatG:     Math.round(b.fatG     * 10) / 10,
+        servingSize: b.servingSize ?? "1 serving",
+        confidence: (b.confidence as NutritionComponent["confidence"]) ?? "medium",
+      }));
+
+      console.log(`[nutrition] OpenRouter (${openRouterOverride.model}) response for "${parsed.cleanedQuery}": ${p.calories} kcal`);
+      return {
+        calories: Math.round(p.calories),
+        proteinG: Math.round(p.proteinG * 10) / 10,
+        carbsG:   Math.round(p.carbsG   * 10) / 10,
+        fatG:     Math.round(p.fatG     * 10) / 10,
+        servingSize: p.servingSize ?? "1 serving",
+        source: "ai_estimated",
+        confidence: p.confidence ?? "medium",
+        foodName: parsed.cleanedQuery,
+        breakdown,
+      };
+    } catch (err: any) {
+      console.error("[nutrition] OpenRouter AI error:", err.message);
+      // Fall through to Groq as fallback
+    }
+  }
+
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) return null;
 
@@ -527,7 +594,7 @@ function normalizeKey(name: string): string {
 
 export async function lookupNutrition(
   foodName: string,
-  options: { forceAi?: boolean } = {}
+  options: { forceAi?: boolean; userId?: string } = {}
 ): Promise<NutritionResult | null> {
   const parsed = preprocessQuery(foodName);
   const key = normalizeKey(parsed.cleanedQuery);
@@ -549,18 +616,37 @@ export async function lookupNutrition(
     }
   }
 
+  // Resolve OpenRouter override if user has an OpenRouter key
+  let openRouterOverride: OpenRouterOverride | undefined;
+  if (options.userId) {
+    try {
+      const res = await pool.query(
+        "SELECT openrouter_api_key_encrypted FROM users WHERE id=$1",
+        [options.userId]
+      );
+      const enc = res.rows[0]?.openrouter_api_key_encrypted;
+      if (enc) {
+        const orKey = decryptString(enc);
+        openRouterOverride = { apiKey: orKey, model: "qwen/qwen3.6-plus:free" };
+        console.log(`[nutrition] Using OpenRouter (qwen/qwen3.6-plus:free) for user ${options.userId}`);
+      }
+    } catch (err: any) {
+      console.warn(`[nutrition] Failed to resolve OpenRouter key for user ${options.userId}:`, err.message);
+    }
+  }
+
   let result: NutritionResult | null = null;
 
   // 2a. Multi-component meal → AI breakdown
   if (parsed.isMultiComponent) {
     console.log(`[nutrition] Route: multi-component AI → "${parsed.cleanedQuery}"`);
-    result = await estimateWithAI(parsed);
+    result = await estimateWithAI(parsed, openRouterOverride);
   }
 
   // 2b. Restaurant chain → AI with chain prompt
   else if (parsed.chain) {
     console.log(`[nutrition] Route: chain AI (${parsed.chain}) → "${parsed.cleanedQuery}"`);
-    result = await estimateWithAI(parsed);
+    result = await estimateWithAI(parsed, openRouterOverride);
   }
 
   // 2c. Branded/packaged product → Open Food Facts → AI fallback
@@ -569,7 +655,7 @@ export async function lookupNutrition(
     result = await lookupOpenFoodFacts(parsed.cleanedQuery);
     if (!result) {
       console.log(`[nutrition] OFF miss, falling back to AI for "${parsed.cleanedQuery}"`);
-      result = await estimateWithAI(parsed);
+      result = await estimateWithAI(parsed, openRouterOverride);
     }
   }
 
@@ -579,14 +665,14 @@ export async function lookupNutrition(
     result = await lookupUsda(parsed.cleanedQuery);
     if (!result) {
       console.log(`[nutrition] USDA miss, falling back to AI for "${parsed.cleanedQuery}"`);
-      result = await estimateWithAI(parsed);
+      result = await estimateWithAI(parsed, openRouterOverride);
     }
   }
 
   // 2e. Everything else → AI direct
   else {
     console.log(`[nutrition] Route: AI direct → "${parsed.cleanedQuery}"`);
-    result = await estimateWithAI(parsed);
+    result = await estimateWithAI(parsed, openRouterOverride);
   }
 
   // 3. Cache
