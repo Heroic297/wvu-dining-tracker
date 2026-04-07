@@ -16,6 +16,7 @@ import { lookupNutrition } from "./nutrition.js";
 import { computeDailyTargets, analyzeWaterCut } from "./tdee.js";
 import { storage } from "./storage.js";
 import { getGarminCoachContext } from "./garmin.js";
+import { getMempalaceContextSnapshot, storeMempalace } from "./memoryBridge.js";
 import { z } from "zod";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -248,52 +249,79 @@ function camelCaseUser(row: any) {
   };
 }
 
-async function buildLiveContext(userId: string, rawUser: any): Promise<string> {
-  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
+// ─── Mempalace Snapshot Builder ──────────────────────────────────────────────
 
-  // Map raw DB row to camelCase so computeDailyTargets / analyzeWaterCut work correctly
+interface LiveData {
+  today: string;
+  user: ReturnType<typeof camelCaseUser>;
+  latestWeight: { weight_kg: number; date: string } | null;
+  totals: { kcal: number; protein: number; carbs: number; fat: number };
+  waterMl: number;
+  targets: ReturnType<typeof computeDailyTargets> | null;
+  meals: Array<{
+    meal_name: string;
+    logged_at: string;
+    total_calories: number;
+    total_protein: number;
+    total_carbs: number;
+    total_fat: number;
+  }>;
+}
+
+/**
+ * Fetch all per-day data needed by both buildLiveContext and the mempalace snapshot.
+ * Single shared query pass — no duplicated DB calls.
+ */
+async function fetchLiveData(userId: string, rawUser: any): Promise<LiveData> {
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
   const user = camelCaseUser(rawUser);
 
-  // Fetch each data point independently — one failure doesn't crash the whole context
-  let latestWeight: any = null;
-  let totals: any = { kcal: 0, protein: 0, carbs: 0, fat: 0 };
+  let latestWeight: LiveData["latestWeight"] = null;
+  let totals: LiveData["totals"] = { kcal: 0, protein: 0, carbs: 0, fat: 0 };
   let waterMl = 0;
-  let targets: any = null;
+  let targets: LiveData["targets"] = null;
+  let meals: LiveData["meals"] = [];
 
-  try {
-    const wRes = await pool.query(
+  await Promise.allSettled([
+    pool.query(
       `SELECT date, weight_kg FROM weight_log WHERE user_id=$1 ORDER BY date DESC LIMIT 1`,
       [userId]
-    );
-    latestWeight = wRes.rows[0] ?? null;
-  } catch { /* non-fatal */ }
+    ).then((r) => { latestWeight = r.rows[0] ?? null; }),
 
-  try {
-    const mRes = await pool.query(
+    pool.query(
       `SELECT COALESCE(SUM(total_calories),0) as kcal,
               COALESCE(SUM(total_protein),0) as protein,
               COALESCE(SUM(total_carbs),0)   as carbs,
               COALESCE(SUM(total_fat),0)     as fat
        FROM user_meals WHERE user_id=$1 AND date=$2`,
       [userId, today]
-    );
-    totals = mRes.rows[0] ?? totals;
-  } catch { /* non-fatal */ }
+    ).then((r) => { totals = r.rows[0] ?? totals; }),
 
-  try {
-    const wlRes = await pool.query(
-      `SELECT ml_logged FROM water_logs WHERE user_id=$1 AND date=$2`,
+    pool.query(
+      `SELECT date, ml_logged FROM water_logs WHERE user_id=$1 AND date=$2`,
       [userId, today]
-    );
-    waterMl = wlRes.rows[0]?.ml_logged ?? 0;
-  } catch { /* non-fatal */ }
+    ).then((r) => { waterMl = r.rows[0]?.ml_logged ?? 0; }),
+
+    // Meal-level rows for today (used by mempalace snapshot)
+    pool.query(
+      `SELECT meal_name, logged_at, total_calories, total_protein, total_carbs, total_fat
+       FROM user_meals WHERE user_id=$1 AND date=$2
+       ORDER BY logged_at ASC`,
+      [userId, today]
+    ).then((r) => { meals = r.rows ?? []; }),
+  ]);
 
   try {
-    // Pass recentWeightKg explicitly so computeDailyTargets uses the logged weight
-    // not user.weightKg (profile weight which may be the target weight or outdated)
     const recentKg = latestWeight?.weight_kg ?? user.weight_kg ?? user.weightKg;
     targets = computeDailyTargets(user, undefined, today, recentKg);
   } catch { /* non-fatal */ }
+
+  return { today, user, latestWeight, totals, waterMl, targets, meals };
+}
+
+async function buildLiveContext(userId: string, rawUser: any, liveData?: LiveData): Promise<string> {
+  const data = liveData ?? await fetchLiveData(userId, rawUser);
+  const { today, user, latestWeight, totals, waterMl, targets } = data;
 
   // Meet countdown
   let meetLine = "";
@@ -350,7 +378,12 @@ async function buildLiveContext(userId: string, rawUser: any): Promise<string> {
 
 // ─── System Prompt ────────────────────────────────────────────────────────────
 
-function buildSystemPrompt(profile: any, liveContext: string, tone: string): string {
+function buildSystemPrompt(
+  profile: any,
+  liveContext: string,
+  tone: string,
+  mempalaceBlock: string = ""
+): string {
   const toneDesc =
     tone === "coach"
       ? "You are motivational, encouraging, and speak in plain English. Keep math brief."
@@ -362,8 +395,15 @@ function buildSystemPrompt(profile: any, liveContext: string, tone: string): str
     ? "This user is a WVU student. ONLY use the get_dining_menu tool when the user explicitly asks what is on the menu, what is being served, or what to eat at a specific dining hall. Do NOT call this tool just because the user mentions a dining hall name or says they ate there."
     : "This user is NOT a WVU student. Do not reference WVU dining.";
 
-  const memorySection = profile?.rollingSummary
-    ? `\n--- WHAT YOU KNOW ABOUT THIS USER (from memory) ---\n${profile.rollingSummary}\n--- END MEMORY ---\n`
+  // Rolling summary from compaction (long-term prose)
+  const rollingSummaryBlock = profile?.rollingSummary
+    ? `\n--- WHAT YOU KNOW ABOUT THIS USER (rolling summary) ---\n${profile.rollingSummary}\n--- END SUMMARY ---\n`
+    : "";
+
+  // Structured mempalace snapshot: daily data + meal rows + top coaching memories
+  // This gives local (no-tool) models the same informational depth as cloud tool-calling models.
+  const mempalaceSection = mempalaceBlock
+    ? `\n${mempalaceBlock}\n`
     : "";
 
   return `You are Macro Coach, an expert AI health and nutrition assistant embedded in the Macro app.
@@ -389,8 +429,7 @@ GOAL UPDATES:
 - Confirm the change back to the user clearly.
 
 ${wvuNote}
-
-${memorySection}
+${rollingSummaryBlock}${mempalaceSection}
 ${liveContext}`;
 }
 
@@ -615,7 +654,7 @@ async function callOpenAICompat(
   tools: any[],
   isOpenRouter = false
 ): Promise<any> {
-  // Strip tools for OpenRouter models that don\'t support function calling
+  // Strip tools for OpenRouter models that don't support function calling
   const effectiveTools = (isOpenRouter && OPENROUTER_NO_TOOLS.has(model)) ? [] : tools;
 
   const body: any = { model, messages, max_tokens: 1024, temperature: 0.7 };
@@ -773,6 +812,56 @@ Return ONLY the summary text, no preamble.`;
   } catch (err: any) {
     console.error("[coach] compaction failed (non-fatal):", err.message);
   }
+}
+
+// ─── Post-chat Memory Mining ───────────────────────────────────────────────────
+
+/**
+ * After the assistant replies, scan the response for durable coaching insights
+ * and store them in mempalace. Fire-and-forget — never blocks the response.
+ *
+ * Heuristics (order of priority):
+ *   milestone  — hit a PR, reached a weight goal, completed a cut
+ *   preference — user stated a food/training preference
+ *   decision   — user decided to change goal/protocol
+ *   problem    — user reported an issue (injury, plateau, adherence gap)
+ *   general    — any other substantive coaching exchange
+ */
+function mineMemoryFromReply(
+  userId: string,
+  userMessage: string,
+  assistantReply: string
+): void {
+  // Run async, non-blocking, non-throwing
+  (async () => {
+    try {
+      const combined = `User: ${userMessage}\nCoach: ${assistantReply}`;
+
+      // Heuristic classification — no LLM call needed, just pattern matching
+      let memType = "general";
+      if (/\b(PR|personal record|all-time|best lift|hit my goal|reached my target|made weight)\b/i.test(combined)) {
+        memType = "milestone";
+      } else if (/\b(I (don't|do not|hate|love|prefer|can't eat|am allergic|avoid))\b/i.test(combined)) {
+        memType = "preference";
+      } else if (/\b(I('m| am) (going to|starting|switching|cutting|bulking|trying))\b/i.test(combined)) {
+        memType = "decision";
+      } else if (/\b(pain|injury|hurt|plateau|struggling|stalled|can't seem)\b/i.test(combined)) {
+        memType = "problem";
+      }
+
+      // Only store if the exchange is substantive (> 80 chars total)
+      if (combined.length < 80) return;
+
+      // Compact the exchange to ≤ 300 chars for the memory store
+      const text = combined.length > 300
+        ? combined.slice(0, 297) + "..."
+        : combined;
+
+      await storeMempalace(userId, text, memType, "coach_conversation");
+    } catch {
+      // Completely silent — memory mining is best-effort
+    }
+  })();
 }
 
 // ─── Route Registration ───────────────────────────────────────────────────────
@@ -1065,10 +1154,27 @@ export function registerCoachRoutes(app: Express): void {
       if (!user) return res.status(401).json({ error: "User not found" });
       const profile = await getOrCreateProfile(userId);
 
-      // Build context
-      const liveContext = await buildLiveContext(userId, user);
+      // Fetch all live data in a single shared pass (totals, meals, water, weight, targets)
+      const liveData = await fetchLiveData(userId, user);
+
+      // Build standard live context string (bio + aggregate numbers + Garmin)
+      const liveContext = await buildLiveContext(userId, user, liveData);
+
+      // Build mempalace snapshot: daily totals + meal rows + coaching memories
+      // This gives no-tool models (local/Groq) the same context depth as cloud tool-calling models.
+      const mempalaceBlock = await getMempalaceContextSnapshot(userId, {
+        today:    liveData.today,
+        totals:   liveData.totals,
+        targets:  liveData.targets,
+        meals:    liveData.meals,
+        water_ml: liveData.waterMl,
+        weight:   liveData.latestWeight
+          ? { weight_kg: liveData.latestWeight.weight_kg, date: liveData.latestWeight.date }
+          : null,
+      });
+
       const tone = profile?.coachTone ?? "balanced";
-      const systemPrompt = buildSystemPrompt(profile, liveContext, tone);
+      const systemPrompt = buildSystemPrompt(profile, liveContext, tone, mempalaceBlock);
 
       // Save user message
       await saveMessage(userId, "user", message);
@@ -1149,7 +1255,10 @@ export function registerCoachRoutes(app: Express): void {
       // Save assistant response
       await saveMessage(userId, "assistant", safeOutput);
 
-      // Async compaction — don't await, fire and forget
+      // Async post-processing — fire and forget, never block response
+      // 1. Mine coaching insights from this exchange into mempalace
+      mineMemoryFromReply(userId, message, safeOutput);
+      // 2. Rolling compaction of old chat messages into summary
       maybeCompact(userId, aiConfig).catch((e) =>
         console.error("[coach] background compact error:", e.message)
       );
