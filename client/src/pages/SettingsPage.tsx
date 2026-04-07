@@ -551,13 +551,17 @@ export default function SettingsPage() {
             { id: "E2B" as ModelVariant, label: "Gemma 4 E2B", size: "~3.5 GB", desc: "Faster download, good for coaching" },
             { id: "E4B" as ModelVariant, label: "Gemma 4 E4B", size: "~6 GB", desc: "Larger, better structured responses" },
           ]).map((opt) => {
-            // Model is "installed" if this variant is stored — regardless of whether it's
-            // fully loaded into memory yet (ready). It may be reloading from cache on mount.
             const isThisVariant = localModel.variant === opt.id;
-            const isInstalled = isThisVariant && (localModel.ready || localModel.loading);
+            // Model is fully ready: variant matches, loaded into memory, not currently loading
             const isFullyReady = isThisVariant && localModel.ready && !localModel.loading;
+            // Model is reloading from cache (mount reload, no downloadingVariant set)
             const isReloading = isThisVariant && localModel.loading && !localModel.downloadingVariant;
+            // Model variant is stored but not yet loaded (brief window before mount effect fires,
+            // or between renders) — treat as "pending reload"
+            const isPendingReload = isThisVariant && !localModel.ready && !localModel.loading;
+            // Fresh download in progress for this specific variant
             const isDownloading = localModel.loading && localModel.downloadingVariant === opt.id;
+            // Any loading happening (disable all download buttons)
             const isCurrentlyDownloading = localModel.loading;
 
             return (
@@ -582,7 +586,7 @@ export default function SettingsPage() {
                         <X className="w-3.5 h-3.5" />
                       </Button>
                     </div>
-                  ) : isReloading ? (
+                  ) : (isReloading || isPendingReload) ? (
                     <div className="flex items-center gap-2">
                       <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />
                       <span className="text-xs text-muted-foreground">Loading from cache...</span>

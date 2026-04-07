@@ -73,11 +73,12 @@ export function useLocalModel(): LocalModelState {
   // Track whether we're doing a background cache-reload (don't nuke localStorage on failure)
   const isReloadRef = useRef(false);
 
-  // If model was previously downloaded, try to reload from cache on mount.
-  // This is a background reload — if it fails, we preserve the localStorage flags
-  // so the user still sees "Installed" and can retry or use the download button.
+  // If a model variant was previously downloaded, try to reload from browser cache on mount.
+  // We check `variant` (persisted in localStorage), NOT `ready` — because `ready` may have
+  // been set to "false" by an earlier failed reload while the actual model files are still
+  // in Cache Storage. The reload will either succeed (setting ready=true) or fail gracefully.
   useEffect(() => {
-    if (variant && ready && !modelRef.current && !loading) {
+    if (variant && !modelRef.current && !loading) {
       isReloadRef.current = true;
       loadModel(variant);
     }
