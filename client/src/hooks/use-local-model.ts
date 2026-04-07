@@ -1,34 +1,31 @@
 /**
  * useLocalModel — React hook for managing a local Gemma 4 model via @huggingface/transformers.
  *
+ * Uses Gemma4ForConditionalGeneration + AutoProcessor (NOT pipeline()) since
+ * the ONNX community models are multimodal conditional-generation models.
+ *
  * - Lazy-loads @huggingface/transformers via dynamic import (never in main bundle)
  * - Manages model download, progress, localStorage persistence, and inference
- * - Exposes pipeline for use by coach chat and photo logging
+ * - Exposes generateText (coach chat) and analyzeImage (photo logging)
  */
 import { useState, useEffect, useRef, useCallback } from "react";
 
 export type ModelVariant = "E2B" | "E4B";
 
-interface DownloadProgress {
-  status: string; // "initiate" | "download" | "progress" | "done" | "ready" | "progress_total"
-  file?: string;
-  progress?: number;
-  loaded?: number;
-  total?: number;
-}
-
 interface LocalModelState {
   /** Which variant is installed (null = none) */
   variant: ModelVariant | null;
-  /** Whether the model pipeline is ready for inference */
+  /** Which variant is currently being downloaded (tracks in-flight download) */
+  downloadingVariant: ModelVariant | null;
+  /** Whether the model is ready for inference */
   ready: boolean;
   /** Whether the model is currently being downloaded/loaded */
   loading: boolean;
   /** Download progress (0-100) */
   downloadProgress: number;
-  /** Bytes downloaded */
+  /** Bytes downloaded (per-file, for display) */
   downloadedBytes: number;
-  /** Total bytes to download */
+  /** Total bytes (per-file, for display) */
   totalBytes: number;
   /** Current status text */
   statusText: string;
@@ -42,7 +39,7 @@ interface LocalModelState {
   removeModel: () => Promise<void>;
   /** Run text generation (for coach chat) */
   generateText: (messages: Array<{ role: string; content: string }>) => Promise<string>;
-  /** Run image-to-text (for photo logging) */
+  /** Run image analysis (for photo logging) */
   analyzeImage: (imageData: string, prompt: string) => Promise<string>;
 }
 
@@ -55,6 +52,7 @@ export function useLocalModel(): LocalModelState {
   const [variant, setVariant] = useState<ModelVariant | null>(() => {
     return (localStorage.getItem("localModelVariant") as ModelVariant) || null;
   });
+  const [downloadingVariant, setDownloadingVariant] = useState<ModelVariant | null>(null);
   const [ready, setReady] = useState(() => {
     return localStorage.getItem("localModelReady") === "true";
   });
@@ -66,8 +64,9 @@ export function useLocalModel(): LocalModelState {
   const [error, setError] = useState<string | null>(null);
   const [hasWebGPU, setHasWebGPU] = useState(false);
 
-  // Hold the pipeline reference
-  const pipelineRef = useRef<any>(null);
+  // Hold the model + processor references (not pipeline)
+  const modelRef = useRef<any>(null);
+  const processorRef = useRef<any>(null);
   const transformersRef = useRef<any>(null);
 
   // Check WebGPU availability
@@ -77,54 +76,80 @@ export function useLocalModel(): LocalModelState {
 
   // If model was previously downloaded, try to load on mount
   useEffect(() => {
-    if (variant && ready && !pipelineRef.current && !loading) {
+    if (variant && ready && !modelRef.current && !loading) {
       loadModel(variant);
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadTransformers = async () => {
     if (transformersRef.current) return transformersRef.current;
-    // Lazy-load @huggingface/transformers — Vite will code-split this into a separate chunk
+    console.log("[useLocalModel] Lazy-loading @huggingface/transformers...");
     const mod = await import("@huggingface/transformers");
     transformersRef.current = mod;
+    console.log("[useLocalModel] @huggingface/transformers loaded successfully");
     return mod;
+  };
+
+  /**
+   * progress_callback handler for transformers.js v4.
+   * - "progress_total": aggregate progress across all files (0-100)
+   * - "initiate": a file download is starting
+   * - "progress": per-file byte progress (loaded/total)
+   * - "download": file download actively happening
+   * - "done": a file finished downloading
+   * - "ready": everything loaded
+   */
+  const handleProgress = (p: any) => {
+    if (p.status === "progress_total") {
+      const pct = Math.round(p.progress ?? 0);
+      setDownloadProgress(pct);
+      setStatusText(`Downloading model... ${pct}%`);
+    } else if (p.status === "initiate") {
+      setStatusText(`Preparing ${p.file ?? "model files"}...`);
+    } else if (p.status === "progress") {
+      // Per-file byte tracking for the MB counter
+      if (p.loaded != null) setDownloadedBytes(p.loaded);
+      if (p.total != null) setTotalBytes(p.total);
+    } else if (p.status === "download") {
+      setStatusText(`Downloading ${p.file ?? "model files"}...`);
+    } else if (p.status === "done") {
+      setStatusText("Loading model into memory...");
+    } else if (p.status === "ready") {
+      setStatusText("Model ready");
+    }
   };
 
   const loadModel = async (v: ModelVariant) => {
     try {
       setLoading(true);
+      setDownloadingVariant(v);
       setError(null);
-      setStatusText("Loading model...");
+      setStatusText("Initializing...");
 
       const transformers = await loadTransformers();
       const modelId = MODEL_IDS[v];
       const device = hasWebGPU ? "webgpu" : "wasm";
 
-      const pipe = await transformers.pipeline("text-generation", modelId, {
+      console.log(`[useLocalModel] Loading ${modelId} on ${device}...`);
+
+      // Load processor (tokenizer + image/audio processor)
+      setStatusText("Loading processor...");
+      const processor = await transformers.AutoProcessor.from_pretrained(modelId, {
+        progress_callback: handleProgress,
+      });
+      processorRef.current = processor;
+      console.log("[useLocalModel] Processor loaded");
+
+      // Load the model itself — this is the big download
+      setStatusText("Downloading model weights...");
+      const model = await transformers.Gemma4ForConditionalGeneration.from_pretrained(modelId, {
         dtype: "q4f16",
         device,
-        progress_callback: (p: DownloadProgress) => {
-          if (p.status === "progress_total") {
-            // Aggregate progress across all files (0-100)
-            setDownloadProgress(Math.round(p.progress ?? 0));
-            setStatusText(`Downloading... ${Math.round(p.progress ?? 0)}%`);
-          } else if (p.status === "initiate") {
-            setStatusText(`Preparing ${p.file ?? "model files"}...`);
-          } else if (p.status === "progress") {
-            // Per-file byte progress — update byte counters
-            if (p.loaded != null) setDownloadedBytes(p.loaded);
-            if (p.total != null) setTotalBytes(p.total);
-          } else if (p.status === "download") {
-            setStatusText(`Downloading ${p.file ?? "model files"}...`);
-          } else if (p.status === "done") {
-            setStatusText("Loading model into memory...");
-          } else if (p.status === "ready") {
-            setStatusText("Model ready");
-          }
-        },
+        progress_callback: handleProgress,
       });
+      modelRef.current = model;
+      console.log("[useLocalModel] Model loaded");
 
-      pipelineRef.current = pipe;
       setReady(true);
       setVariant(v);
       localStorage.setItem("localModelVariant", v);
@@ -138,6 +163,7 @@ export function useLocalModel(): LocalModelState {
       localStorage.setItem("localModelReady", "false");
     } finally {
       setLoading(false);
+      setDownloadingVariant(null);
     }
   };
 
@@ -150,29 +176,9 @@ export function useLocalModel(): LocalModelState {
   }, [loading, hasWebGPU]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const removeModel = useCallback(async () => {
-    // Use ModelRegistry API if available
-    try {
-      const transformers = await loadTransformers();
-      if (transformers.ModelRegistry && variant) {
-        await transformers.ModelRegistry.clear_pipeline_cache(
-          "text-generation",
-          MODEL_IDS[variant],
-          { dtype: "q4f16" }
-        );
-      }
-    } catch {
-      // Fallback to manual cache clearing
-      try {
-        const cacheNames = await caches.keys();
-        for (const name of cacheNames) {
-          if (name.includes("transformers") || name.includes("onnx")) {
-            await caches.delete(name);
-          }
-        }
-      } catch { /* Cache API may not be available */ }
-    }
-
-    pipelineRef.current = null;
+    const currentVariant = variant;
+    modelRef.current = null;
+    processorRef.current = null;
     setVariant(null);
     setReady(false);
     setDownloadProgress(0);
@@ -182,55 +188,118 @@ export function useLocalModel(): LocalModelState {
     setError(null);
     localStorage.removeItem("localModelVariant");
     localStorage.setItem("localModelReady", "false");
-  }, [variant]);
+
+    // Use ModelRegistry API if available (transformers.js v4)
+    if (currentVariant) {
+      try {
+        const transformers = await loadTransformers();
+        if (transformers.ModelRegistry?.clear_pipeline_cache) {
+          await transformers.ModelRegistry.clear_pipeline_cache(
+            "text-generation",
+            MODEL_IDS[currentVariant],
+            { dtype: "q4f16" }
+          );
+          console.log("[useLocalModel] Cache cleared via ModelRegistry");
+          return;
+        }
+      } catch {
+        // Fall through to manual cache clearing
+      }
+    }
+
+    // Fallback: manually clear Cache Storage
+    try {
+      const cacheNames = await caches.keys();
+      for (const name of cacheNames) {
+        if (name.includes("transformers") || name.includes("onnx")) {
+          await caches.delete(name);
+        }
+      }
+      console.log("[useLocalModel] Cache cleared manually");
+    } catch {
+      // Cache API may not be available
+    }
+  }, [variant]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const generateText = useCallback(async (messages: Array<{ role: string; content: string }>): Promise<string> => {
-    if (!pipelineRef.current) {
+    const model = modelRef.current;
+    const processor = processorRef.current;
+    if (!model || !processor) {
       throw new Error("Local model not loaded");
     }
-    const output = await pipelineRef.current(messages, {
-      max_new_tokens: 1024,
-      temperature: 0.7,
-      do_sample: true,
+
+    // Build the prompt via the processor's chat template
+    const prompt = processor.apply_chat_template(messages, {
+      enable_thinking: false,
+      add_generation_prompt: true,
     });
-    // Pipeline returns array of generated outputs
-    const result = output?.[0]?.generated_text;
-    if (Array.isArray(result)) {
-      // Chat-style output: array of messages, get the last assistant message
-      const lastMsg = result[result.length - 1];
-      return lastMsg?.content ?? "";
-    }
-    return typeof result === "string" ? result : JSON.stringify(result);
+
+    // Tokenize (text-only, no image/audio)
+    const inputs = await processor(prompt, null, null, { add_special_tokens: false });
+
+    const outputs = await model.generate({
+      ...inputs,
+      max_new_tokens: 1024,
+      do_sample: true,
+      temperature: 0.7,
+    });
+
+    // Decode only the new tokens (skip the input prompt)
+    const decoded = processor.batch_decode(
+      outputs.slice(null, [inputs.input_ids.dims.at(-1), null]),
+      { skip_special_tokens: true },
+    );
+    return decoded[0] ?? "";
   }, []);
 
   const analyzeImage = useCallback(async (imageData: string, prompt: string): Promise<string> => {
-    if (!pipelineRef.current) {
+    const model = modelRef.current;
+    const processor = processorRef.current;
+    if (!model || !processor) {
       throw new Error("Local model not loaded");
     }
+
+    const transformers = transformersRef.current;
+
+    // Build multimodal message
     const messages = [
       {
         role: "user",
         content: [
-          { type: "image", image: imageData },
+          { type: "image" },
           { type: "text", text: prompt },
         ],
       },
     ];
-    const output = await pipelineRef.current(messages, {
-      max_new_tokens: 1024,
-      temperature: 0.3,
-      do_sample: true,
+
+    const chatPrompt = processor.apply_chat_template(messages, {
+      enable_thinking: false,
+      add_generation_prompt: true,
     });
-    const result = output?.[0]?.generated_text;
-    if (Array.isArray(result)) {
-      const lastMsg = result[result.length - 1];
-      return lastMsg?.content ?? "";
-    }
-    return typeof result === "string" ? result : JSON.stringify(result);
+
+    // Load the image via transformers.js helper
+    const image = await transformers.RawImage.read(imageData);
+
+    // Process text + image together
+    const inputs = await processor(chatPrompt, image, null, { add_special_tokens: false });
+
+    const outputs = await model.generate({
+      ...inputs,
+      max_new_tokens: 1024,
+      do_sample: false,
+      temperature: 0.3,
+    });
+
+    const decoded = processor.batch_decode(
+      outputs.slice(null, [inputs.input_ids.dims.at(-1), null]),
+      { skip_special_tokens: true },
+    );
+    return decoded[0] ?? "";
   }, []);
 
   return {
     variant,
+    downloadingVariant,
     ready,
     loading,
     downloadProgress,

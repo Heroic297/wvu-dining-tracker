@@ -552,7 +552,7 @@ export default function SettingsPage() {
             { id: "E4B" as ModelVariant, label: "Gemma 4 E4B", size: "~6 GB", desc: "Larger, better structured responses" },
           ]).map((opt) => {
             const isInstalled = localModel.variant === opt.id && localModel.ready;
-            const isLoading = localModel.loading && localModel.variant === opt.id;
+            const isLoading = localModel.loading && localModel.downloadingVariant === opt.id;
             const isCurrentlyDownloading = localModel.loading;
 
             return (
