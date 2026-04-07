@@ -4,49 +4,30 @@
  * Uses Gemma4ForConditionalGeneration + AutoProcessor (NOT pipeline()) since
  * the ONNX community models are multimodal conditional-generation models.
  *
- * - Lazy-loads @huggingface/transformers via dynamic import (never in main bundle)
- * - Manages model download, progress, localStorage persistence, and inference
- * - Exposes generateText (coach chat) and analyzeImage (photo logging)
- *
- * Fix (2026-04-07): WebGPU buffer crash on Windows (Invalid Buffer / mapAsync failure).
- * Root cause: ONNX Runtime WebGPU backend on Windows has a sequencing issue where
- * GPUBuffers can enter an invalid state mid-inference. The fix wraps model.generate()
- * in a try/catch that resets modelRef/processorRef on any OrtRun/GPUBuffer error so
- * the model reinitialises cleanly on the next call, rather than hanging in a broken
- * GPU state. Also fixes the outputs.slice() tensor slicing call and caps max_new_tokens.
+ * Fix (2026-04-07 v2): Auto-retry on WebGPU OrtRun/mapAsync buffer failure.
+ * Root cause: ONNX Runtime WebGPU backend on Windows invalidates GPUBuffers on the
+ * first inference call after model load. Previous fix reset refs and threw, requiring
+ * manual retry. This version reloads the model silently then re-runs the same
+ * inference automatically — user never sees a failure on the first call.
  */
 import { useState, useEffect, useRef, useCallback } from "react";
 
 export type ModelVariant = "E2B" | "E4B";
 
 interface LocalModelState {
-  /** Which variant is installed (null = none) */
   variant: ModelVariant | null;
-  /** Which variant is currently being downloaded (tracks in-flight download) */
   downloadingVariant: ModelVariant | null;
-  /** Whether the model is ready for inference */
   ready: boolean;
-  /** Whether the model is currently being downloaded/loaded */
   loading: boolean;
-  /** Download progress (0-100) */
   downloadProgress: number;
-  /** Bytes downloaded (per-file, for display) */
   downloadedBytes: number;
-  /** Total bytes (per-file, for display) */
   totalBytes: number;
-  /** Current status text */
   statusText: string;
-  /** Whether WebGPU is available */
   hasWebGPU: boolean;
-  /** Error message if something went wrong */
   error: string | null;
-  /** Start downloading/loading a model variant */
   downloadModel: (variant: ModelVariant) => Promise<void>;
-  /** Remove the installed model from cache and reset state */
   removeModel: () => Promise<void>;
-  /** Run text generation (for coach chat) */
   generateText: (messages: Array<{ role: string; content: string }>) => Promise<string>;
-  /** Run image analysis (for photo logging) */
   analyzeImage: (imageData: string, prompt: string) => Promise<string>;
 }
 
@@ -54,6 +35,16 @@ const MODEL_IDS: Record<ModelVariant, string> = {
   E2B: "onnx-community/gemma-4-E2B-it-ONNX",
   E4B: "onnx-community/gemma-4-E4B-it-ONNX",
 };
+
+function isWebGpuBufferError(err: any): boolean {
+  const msg: string = err?.message ?? "";
+  return (
+    msg.includes("GPUBuffer") ||
+    msg.includes("OrtRun") ||
+    msg.includes("mapAsync") ||
+    msg.includes("Invalid Buffer")
+  );
+}
 
 export function useLocalModel(): LocalModelState {
   const [variant, setVariant] = useState<ModelVariant | null>(() => {
@@ -69,31 +60,28 @@ export function useLocalModel(): LocalModelState {
   const [totalBytes, setTotalBytes] = useState(0);
   const [statusText, setStatusText] = useState("");
   const [error, setError] = useState<string | null>(null);
-  // Detect WebGPU synchronously at init — no effect needed
   const [hasWebGPU] = useState(() => !!(navigator as any).gpu);
 
-  // Hold the model + processor references
   const modelRef = useRef<any>(null);
   const processorRef = useRef<any>(null);
   const transformersRef = useRef<any>(null);
-
-  // Track whether we're doing a background cache-reload (don't nuke localStorage on failure)
+  const variantRef = useRef<ModelVariant | null>(null);
   const isReloadRef = useRef(false);
 
-  // If a model variant was previously downloaded, try to reload from browser cache on mount.
+  // Keep variantRef in sync so loadModelInternal can read it without stale closure
+  useEffect(() => { variantRef.current = variant; }, [variant]);
+
   useEffect(() => {
     if (variant && !modelRef.current && !loading) {
       isReloadRef.current = true;
-      loadModel(variant);
+      loadModelInternal(variant);
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadTransformers = async () => {
     if (transformersRef.current) return transformersRef.current;
-    console.log("[useLocalModel] Lazy-loading @huggingface/transformers...");
     const mod = await import("@huggingface/transformers");
     transformersRef.current = mod;
-    console.log("[useLocalModel] @huggingface/transformers loaded successfully");
     return mod;
   };
 
@@ -116,57 +104,77 @@ export function useLocalModel(): LocalModelState {
     }
   };
 
-  const loadModel = async (v: ModelVariant) => {
+  /**
+   * Core loader — can be called both for initial download and for silent reload
+   * after a WebGPU buffer error. When silent=true it skips UI state updates so
+   * the user doesn't see a loading screen mid-conversation.
+   */
+  const loadModelInternal = async (v: ModelVariant, silent = false) => {
     try {
-      setLoading(true);
-      setDownloadingVariant(v);
-      setError(null);
-      setStatusText("Initializing...");
+      if (!silent) {
+        setLoading(true);
+        setDownloadingVariant(v);
+        setError(null);
+        setStatusText("Initializing...");
+      }
 
       const transformers = await loadTransformers();
       const modelId = MODEL_IDS[v];
       const device = hasWebGPU ? "webgpu" : "wasm";
 
-      console.log(`[useLocalModel] Loading ${modelId} on ${device}...`);
+      console.log(`[useLocalModel] Loading ${modelId} on ${device} (silent=${silent})...`);
 
-      setStatusText("Loading processor...");
       const processor = await transformers.AutoProcessor.from_pretrained(modelId, {
-        progress_callback: handleProgress,
+        progress_callback: silent ? undefined : handleProgress,
       });
       processorRef.current = processor;
-      console.log("[useLocalModel] Processor loaded");
 
-      setStatusText("Downloading model weights...");
       const model = await transformers.Gemma4ForConditionalGeneration.from_pretrained(modelId, {
         dtype: "q4f16",
         device,
-        progress_callback: handleProgress,
+        progress_callback: silent ? undefined : handleProgress,
       });
       modelRef.current = model;
-      console.log("[useLocalModel] Model loaded");
 
-      setReady(true);
-      setVariant(v);
+      console.log(`[useLocalModel] Model loaded (silent=${silent})`);
+
+      if (!silent) {
+        setReady(true);
+        setVariant(v);
+        setStatusText("Model ready");
+      } else {
+        // Restore ready state after silent reload
+        setReady(true);
+      }
+
+      variantRef.current = v;
       localStorage.setItem("localModelVariant", v);
       localStorage.setItem("localModelReady", "true");
-      setStatusText("Model ready");
     } catch (err: any) {
-      console.error("[useLocalModel] load error:", err);
-
-      if (isReloadRef.current) {
-        console.warn("[useLocalModel] Cache reload failed — model may need re-download.");
-        setError("Model needs to be reloaded. Tap the button to retry.");
-        setStatusText("");
+      console.error(`[useLocalModel] load error (silent=${silent}):`, err);
+      if (!silent) {
+        if (isReloadRef.current) {
+          setError("Model needs to be reloaded. Tap the button to retry.");
+          setStatusText("");
+        } else {
+          setError(err.message ?? "Failed to load model");
+          setStatusText("");
+          setReady(false);
+          localStorage.setItem("localModelReady", "false");
+        }
       } else {
-        setError(err.message ?? "Failed to load model");
-        setStatusText("");
+        // Silent reload failed — surface error now
+        setError("GPU context lost and could not recover. Please refresh the page.");
         setReady(false);
         localStorage.setItem("localModelReady", "false");
+        throw err;
       }
     } finally {
-      setLoading(false);
-      setDownloadingVariant(null);
-      isReloadRef.current = false;
+      if (!silent) {
+        setLoading(false);
+        setDownloadingVariant(null);
+        isReloadRef.current = false;
+      }
     }
   };
 
@@ -175,11 +183,11 @@ export function useLocalModel(): LocalModelState {
     setDownloadProgress(0);
     setDownloadedBytes(0);
     setTotalBytes(0);
-    await loadModel(v);
+    await loadModelInternal(v);
   }, [loading, hasWebGPU]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const removeModel = useCallback(async () => {
-    const currentVariant = variant;
+    const currentVariant = variantRef.current;
     modelRef.current = null;
     processorRef.current = null;
     setVariant(null);
@@ -201,12 +209,9 @@ export function useLocalModel(): LocalModelState {
             MODEL_IDS[currentVariant],
             { dtype: "q4f16" }
           );
-          console.log("[useLocalModel] Cache cleared via ModelRegistry");
           return;
         }
-      } catch {
-        // Fall through to manual cache clearing
-      }
+      } catch { /* fall through */ }
     }
 
     try {
@@ -216,135 +221,98 @@ export function useLocalModel(): LocalModelState {
           await caches.delete(name);
         }
       }
-      console.log("[useLocalModel] Cache cleared manually");
-    } catch {
-      // Cache API may not be available
-    }
-  }, [variant]); // eslint-disable-line react-hooks/exhaustive-deps
+    } catch { /* Cache API may not be available */ }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── generateText ────────────────────────────────────────────────────────────
-  // Fix: wraps model.generate() in try/catch. On any WebGPU/OrtRun buffer error
-  // (common on Windows due to ONNX WebGPU sequencing issues), the model and
-  // processor refs are cleared and ready is set to false so the next call
-  // triggers a clean reload rather than re-using a broken GPU context.
-  const generateText = useCallback(async (messages: Array<{ role: string; content: string }>): Promise<string> => {
+  /**
+   * Run inference, with one automatic silent reload+retry on WebGPU buffer failure.
+   * Pattern:
+   *   1. Try generate()
+   *   2. If OrtRun/GPUBuffer/mapAsync error → silently reload model from cache
+   *   3. Re-run generate() with the fresh model
+   *   4. If second attempt also fails → throw so caller can surface the error
+   */
+  async function runGenerate(
+    buildInputs: (processor: any) => Promise<{ inputs: any; inputLen: number }>,
+    genOptions: object,
+    attempt = 0
+  ): Promise<string> {
     const model = modelRef.current;
     const processor = processorRef.current;
-    if (!model || !processor) {
-      throw new Error("Local model not loaded");
-    }
+    if (!model || !processor) throw new Error("Local model not loaded");
 
-    const prompt = processor.apply_chat_template(messages, {
-      enable_thinking: false,
-      add_generation_prompt: true,
-    });
-
-    const inputs = await processor(prompt, null, null, { add_special_tokens: false });
-
-    const inputLen = inputs.input_ids.dims[inputs.input_ids.dims.length - 1] as number;
+    const { inputs, inputLen } = await buildInputs(processor);
 
     try {
-      const outputs = await model.generate({
-        ...inputs,
-        max_new_tokens: 512,
-        do_sample: true,
-        temperature: 0.7,
-      });
-
-      // Slice only the newly generated tokens (skip the input prefix).
-      // outputs is a 2D tensor [batch, seq_len]; we want columns [inputLen:]
+      const outputs = await model.generate({ ...inputs, ...genOptions });
       const newTokens = outputs.slice(null, [inputLen, null]);
       const decoded = processor.batch_decode(newTokens, { skip_special_tokens: true });
       return decoded[0] ?? "";
     } catch (err: any) {
-      const msg: string = err?.message ?? "";
-      console.error("[useLocalModel] generate error:", msg);
+      console.error(`[useLocalModel] generate error (attempt ${attempt}):`, err?.message);
 
-      // WebGPU buffer corruption — reset model refs so next call gets a fresh context
-      if (
-        msg.includes("GPUBuffer") ||
-        msg.includes("OrtRun") ||
-        msg.includes("mapAsync") ||
-        msg.includes("Invalid Buffer")
-      ) {
-        console.warn("[useLocalModel] WebGPU buffer error detected — resetting model refs for clean reload");
+      if (isWebGpuBufferError(err) && attempt === 0) {
+        console.warn("[useLocalModel] WebGPU buffer error — silently reloading model and retrying...");
         modelRef.current = null;
         processorRef.current = null;
-        setReady(false);
-        localStorage.setItem("localModelReady", "false");
-        throw new Error(
-          "GPU buffer error during inference. The model will reload automatically — please try again."
-        );
+
+        const v = variantRef.current;
+        if (!v) throw new Error("No model variant stored — cannot reload.");
+
+        // Silent reload from browser cache (no UI loading state)
+        await loadModelInternal(v, true);
+
+        // Recursive retry with fresh refs
+        return runGenerate(buildInputs, genOptions, 1);
       }
 
       throw err;
     }
-  }, []);
+  }
 
-  // ── analyzeImage ────────────────────────────────────────────────────────────
-  const analyzeImage = useCallback(async (imageData: string, prompt: string): Promise<string> => {
-    const model = modelRef.current;
-    const processor = processorRef.current;
-    if (!model || !processor) {
-      throw new Error("Local model not loaded");
-    }
-
-    const transformers = transformersRef.current;
-
-    const messages = [
-      {
-        role: "user",
-        content: [
-          { type: "image" },
-          { type: "text", text: prompt },
-        ],
+  const generateText = useCallback(async (
+    messages: Array<{ role: string; content: string }>
+  ): Promise<string> => {
+    return runGenerate(
+      async (processor) => {
+        const prompt = processor.apply_chat_template(messages, {
+          enable_thinking: false,
+          add_generation_prompt: true,
+        });
+        const inputs = await processor(prompt, null, null, { add_special_tokens: false });
+        const inputLen = inputs.input_ids.dims[inputs.input_ids.dims.length - 1] as number;
+        return { inputs, inputLen };
       },
-    ];
+      { max_new_tokens: 512, do_sample: true, temperature: 0.7 }
+    );
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-    const chatPrompt = processor.apply_chat_template(messages, {
-      enable_thinking: false,
-      add_generation_prompt: true,
-    });
-
-    const image = await transformers.RawImage.read(imageData);
-    const inputs = await processor(chatPrompt, image, null, { add_special_tokens: false });
-
-    const inputLen = inputs.input_ids.dims[inputs.input_ids.dims.length - 1] as number;
-
-    try {
-      const outputs = await model.generate({
-        ...inputs,
-        max_new_tokens: 512,
-        do_sample: false,
-        temperature: 0.3,
-      });
-
-      const newTokens = outputs.slice(null, [inputLen, null]);
-      const decoded = processor.batch_decode(newTokens, { skip_special_tokens: true });
-      return decoded[0] ?? "";
-    } catch (err: any) {
-      const msg: string = err?.message ?? "";
-      console.error("[useLocalModel] analyzeImage generate error:", msg);
-
-      if (
-        msg.includes("GPUBuffer") ||
-        msg.includes("OrtRun") ||
-        msg.includes("mapAsync") ||
-        msg.includes("Invalid Buffer")
-      ) {
-        console.warn("[useLocalModel] WebGPU buffer error in analyzeImage — resetting model refs");
-        modelRef.current = null;
-        processorRef.current = null;
-        setReady(false);
-        localStorage.setItem("localModelReady", "false");
-        throw new Error(
-          "GPU buffer error during image analysis. The model will reload automatically — please try again."
-        );
-      }
-
-      throw err;
-    }
-  }, []);
+  const analyzeImage = useCallback(async (
+    imageData: string,
+    prompt: string
+  ): Promise<string> => {
+    return runGenerate(
+      async (processor) => {
+        const transformers = transformersRef.current;
+        const messages = [{
+          role: "user",
+          content: [
+            { type: "image" },
+            { type: "text", text: prompt },
+          ],
+        }];
+        const chatPrompt = processor.apply_chat_template(messages, {
+          enable_thinking: false,
+          add_generation_prompt: true,
+        });
+        const image = await transformers.RawImage.read(imageData);
+        const inputs = await processor(chatPrompt, image, null, { add_special_tokens: false });
+        const inputLen = inputs.input_ids.dims[inputs.input_ids.dims.length - 1] as number;
+        return { inputs, inputLen };
+      },
+      { max_new_tokens: 512, do_sample: false, temperature: 0.3 }
+    );
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return {
     variant,
