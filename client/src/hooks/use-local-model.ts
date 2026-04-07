@@ -84,9 +84,8 @@ export function useLocalModel(): LocalModelState {
 
   const loadTransformers = async () => {
     if (transformersRef.current) return transformersRef.current;
-    // Lazy-load @huggingface/transformers — never bundled, loaded at runtime from CDN/npm
-    const modName = "@huggingface/transformers";
-    const mod = await import(/* @vite-ignore */ modName);
+    // Lazy-load @huggingface/transformers — Vite will code-split this into a separate chunk
+    const mod = await import("@huggingface/transformers");
     transformersRef.current = mod;
     return mod;
   };
