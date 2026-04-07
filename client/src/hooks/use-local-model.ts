@@ -7,6 +7,13 @@
  * - Lazy-loads @huggingface/transformers via dynamic import (never in main bundle)
  * - Manages model download, progress, localStorage persistence, and inference
  * - Exposes generateText (coach chat) and analyzeImage (photo logging)
+ *
+ * Fix (2026-04-07): WebGPU buffer crash on Windows (Invalid Buffer / mapAsync failure).
+ * Root cause: ONNX Runtime WebGPU backend on Windows has a sequencing issue where
+ * GPUBuffers can enter an invalid state mid-inference. The fix wraps model.generate()
+ * in a try/catch that resets modelRef/processorRef on any OrtRun/GPUBuffer error so
+ * the model reinitialises cleanly on the next call, rather than hanging in a broken
+ * GPU state. Also fixes the outputs.slice() tensor slicing call and caps max_new_tokens.
  */
 import { useState, useEffect, useRef, useCallback } from "react";
 
@@ -74,9 +81,6 @@ export function useLocalModel(): LocalModelState {
   const isReloadRef = useRef(false);
 
   // If a model variant was previously downloaded, try to reload from browser cache on mount.
-  // We check `variant` (persisted in localStorage), NOT `ready` — because `ready` may have
-  // been set to "false" by an earlier failed reload while the actual model files are still
-  // in Cache Storage. The reload will either succeed (setting ready=true) or fail gracefully.
   useEffect(() => {
     if (variant && !modelRef.current && !loading) {
       isReloadRef.current = true;
@@ -93,15 +97,6 @@ export function useLocalModel(): LocalModelState {
     return mod;
   };
 
-  /**
-   * progress_callback handler for transformers.js v4.
-   * - "progress_total": aggregate progress across all files (0-100)
-   * - "initiate": a file download is starting
-   * - "progress": per-file byte progress (loaded/total)
-   * - "download": file download actively happening
-   * - "done": a file finished downloading
-   * - "ready": everything loaded
-   */
   const handleProgress = (p: any) => {
     if (p.status === "progress_total") {
       const pct = Math.round(p.progress ?? 0);
@@ -110,7 +105,6 @@ export function useLocalModel(): LocalModelState {
     } else if (p.status === "initiate") {
       setStatusText(`Preparing ${p.file ?? "model files"}...`);
     } else if (p.status === "progress") {
-      // Per-file byte tracking for the MB counter
       if (p.loaded != null) setDownloadedBytes(p.loaded);
       if (p.total != null) setTotalBytes(p.total);
     } else if (p.status === "download") {
@@ -135,7 +129,6 @@ export function useLocalModel(): LocalModelState {
 
       console.log(`[useLocalModel] Loading ${modelId} on ${device}...`);
 
-      // Load processor (tokenizer + image/audio processor)
       setStatusText("Loading processor...");
       const processor = await transformers.AutoProcessor.from_pretrained(modelId, {
         progress_callback: handleProgress,
@@ -143,7 +136,6 @@ export function useLocalModel(): LocalModelState {
       processorRef.current = processor;
       console.log("[useLocalModel] Processor loaded");
 
-      // Load the model itself — this is the big download
       setStatusText("Downloading model weights...");
       const model = await transformers.Gemma4ForConditionalGeneration.from_pretrained(modelId, {
         dtype: "q4f16",
@@ -162,15 +154,10 @@ export function useLocalModel(): LocalModelState {
       console.error("[useLocalModel] load error:", err);
 
       if (isReloadRef.current) {
-        // Cache reload failed — don't nuke localStorage.
-        // Keep variant/ready so UI still shows "Installed" and user can retry.
-        // Show a non-destructive error.
         console.warn("[useLocalModel] Cache reload failed — model may need re-download.");
         setError("Model needs to be reloaded. Tap the button to retry.");
         setStatusText("");
-        // Don't touch ready/variant/localStorage — files may still be in Cache Storage
       } else {
-        // Fresh download failed — reset everything
         setError(err.message ?? "Failed to load model");
         setStatusText("");
         setReady(false);
@@ -205,7 +192,6 @@ export function useLocalModel(): LocalModelState {
     localStorage.removeItem("localModelVariant");
     localStorage.setItem("localModelReady", "false");
 
-    // Use ModelRegistry API if available (transformers.js v4)
     if (currentVariant) {
       try {
         const transformers = await loadTransformers();
@@ -223,7 +209,6 @@ export function useLocalModel(): LocalModelState {
       }
     }
 
-    // Fallback: manually clear Cache Storage
     try {
       const cacheNames = await caches.keys();
       for (const name of cacheNames) {
@@ -237,6 +222,11 @@ export function useLocalModel(): LocalModelState {
     }
   }, [variant]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── generateText ────────────────────────────────────────────────────────────
+  // Fix: wraps model.generate() in try/catch. On any WebGPU/OrtRun buffer error
+  // (common on Windows due to ONNX WebGPU sequencing issues), the model and
+  // processor refs are cleared and ready is set to false so the next call
+  // triggers a clean reload rather than re-using a broken GPU context.
   const generateText = useCallback(async (messages: Array<{ role: string; content: string }>): Promise<string> => {
     const model = modelRef.current;
     const processor = processorRef.current;
@@ -244,30 +234,54 @@ export function useLocalModel(): LocalModelState {
       throw new Error("Local model not loaded");
     }
 
-    // Build the prompt via the processor's chat template
     const prompt = processor.apply_chat_template(messages, {
       enable_thinking: false,
       add_generation_prompt: true,
     });
 
-    // Tokenize (text-only, no image/audio)
     const inputs = await processor(prompt, null, null, { add_special_tokens: false });
 
-    const outputs = await model.generate({
-      ...inputs,
-      max_new_tokens: 1024,
-      do_sample: true,
-      temperature: 0.7,
-    });
+    const inputLen = inputs.input_ids.dims[inputs.input_ids.dims.length - 1] as number;
 
-    // Decode only the new tokens (skip the input prompt)
-    const decoded = processor.batch_decode(
-      outputs.slice(null, [inputs.input_ids.dims.at(-1), null]),
-      { skip_special_tokens: true },
-    );
-    return decoded[0] ?? "";
+    try {
+      const outputs = await model.generate({
+        ...inputs,
+        max_new_tokens: 512,
+        do_sample: true,
+        temperature: 0.7,
+      });
+
+      // Slice only the newly generated tokens (skip the input prefix).
+      // outputs is a 2D tensor [batch, seq_len]; we want columns [inputLen:]
+      const newTokens = outputs.slice(null, [inputLen, null]);
+      const decoded = processor.batch_decode(newTokens, { skip_special_tokens: true });
+      return decoded[0] ?? "";
+    } catch (err: any) {
+      const msg: string = err?.message ?? "";
+      console.error("[useLocalModel] generate error:", msg);
+
+      // WebGPU buffer corruption — reset model refs so next call gets a fresh context
+      if (
+        msg.includes("GPUBuffer") ||
+        msg.includes("OrtRun") ||
+        msg.includes("mapAsync") ||
+        msg.includes("Invalid Buffer")
+      ) {
+        console.warn("[useLocalModel] WebGPU buffer error detected — resetting model refs for clean reload");
+        modelRef.current = null;
+        processorRef.current = null;
+        setReady(false);
+        localStorage.setItem("localModelReady", "false");
+        throw new Error(
+          "GPU buffer error during inference. The model will reload automatically — please try again."
+        );
+      }
+
+      throw err;
+    }
   }, []);
 
+  // ── analyzeImage ────────────────────────────────────────────────────────────
   const analyzeImage = useCallback(async (imageData: string, prompt: string): Promise<string> => {
     const model = modelRef.current;
     const processor = processorRef.current;
@@ -277,7 +291,6 @@ export function useLocalModel(): LocalModelState {
 
     const transformers = transformersRef.current;
 
-    // Build multimodal message
     const messages = [
       {
         role: "user",
@@ -293,24 +306,44 @@ export function useLocalModel(): LocalModelState {
       add_generation_prompt: true,
     });
 
-    // Load the image via transformers.js helper
     const image = await transformers.RawImage.read(imageData);
-
-    // Process text + image together
     const inputs = await processor(chatPrompt, image, null, { add_special_tokens: false });
 
-    const outputs = await model.generate({
-      ...inputs,
-      max_new_tokens: 1024,
-      do_sample: false,
-      temperature: 0.3,
-    });
+    const inputLen = inputs.input_ids.dims[inputs.input_ids.dims.length - 1] as number;
 
-    const decoded = processor.batch_decode(
-      outputs.slice(null, [inputs.input_ids.dims.at(-1), null]),
-      { skip_special_tokens: true },
-    );
-    return decoded[0] ?? "";
+    try {
+      const outputs = await model.generate({
+        ...inputs,
+        max_new_tokens: 512,
+        do_sample: false,
+        temperature: 0.3,
+      });
+
+      const newTokens = outputs.slice(null, [inputLen, null]);
+      const decoded = processor.batch_decode(newTokens, { skip_special_tokens: true });
+      return decoded[0] ?? "";
+    } catch (err: any) {
+      const msg: string = err?.message ?? "";
+      console.error("[useLocalModel] analyzeImage generate error:", msg);
+
+      if (
+        msg.includes("GPUBuffer") ||
+        msg.includes("OrtRun") ||
+        msg.includes("mapAsync") ||
+        msg.includes("Invalid Buffer")
+      ) {
+        console.warn("[useLocalModel] WebGPU buffer error in analyzeImage — resetting model refs");
+        modelRef.current = null;
+        processorRef.current = null;
+        setReady(false);
+        localStorage.setItem("localModelReady", "false");
+        throw new Error(
+          "GPU buffer error during image analysis. The model will reload automatically — please try again."
+        );
+      }
+
+      throw err;
+    }
   }, []);
 
   return {
