@@ -10,7 +10,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 export type ModelVariant = "E2B" | "E4B";
 
 interface DownloadProgress {
-  status: string;
+  status: string; // "initiate" | "download" | "progress" | "done" | "ready" | "progress_total"
   file?: string;
   progress?: number;
   loaded?: number;
@@ -104,17 +104,22 @@ export function useLocalModel(): LocalModelState {
         dtype: "q4f16",
         device,
         progress_callback: (p: DownloadProgress) => {
-          if (p.progress != null) {
-            setDownloadProgress(Math.round(p.progress));
-          }
-          if (p.loaded != null) setDownloadedBytes(p.loaded);
-          if (p.total != null) setTotalBytes(p.total);
-          if (p.status === "download") {
-            setStatusText(`Downloading ${p.file ?? "model files"}...`);
-          } else if (p.status === "progress") {
+          if (p.status === "progress_total") {
+            // Aggregate progress across all files (0-100)
+            setDownloadProgress(Math.round(p.progress ?? 0));
             setStatusText(`Downloading... ${Math.round(p.progress ?? 0)}%`);
+          } else if (p.status === "initiate") {
+            setStatusText(`Preparing ${p.file ?? "model files"}...`);
+          } else if (p.status === "progress") {
+            // Per-file byte progress — update byte counters
+            if (p.loaded != null) setDownloadedBytes(p.loaded);
+            if (p.total != null) setTotalBytes(p.total);
+          } else if (p.status === "download") {
+            setStatusText(`Downloading ${p.file ?? "model files"}...`);
           } else if (p.status === "done") {
             setStatusText("Loading model into memory...");
+          } else if (p.status === "ready") {
+            setStatusText("Model ready");
           }
         },
       });
@@ -145,6 +150,28 @@ export function useLocalModel(): LocalModelState {
   }, [loading, hasWebGPU]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const removeModel = useCallback(async () => {
+    // Use ModelRegistry API if available
+    try {
+      const transformers = await loadTransformers();
+      if (transformers.ModelRegistry && variant) {
+        await transformers.ModelRegistry.clear_pipeline_cache(
+          "text-generation",
+          MODEL_IDS[variant],
+          { dtype: "q4f16" }
+        );
+      }
+    } catch {
+      // Fallback to manual cache clearing
+      try {
+        const cacheNames = await caches.keys();
+        for (const name of cacheNames) {
+          if (name.includes("transformers") || name.includes("onnx")) {
+            await caches.delete(name);
+          }
+        }
+      } catch { /* Cache API may not be available */ }
+    }
+
     pipelineRef.current = null;
     setVariant(null);
     setReady(false);
@@ -155,19 +182,7 @@ export function useLocalModel(): LocalModelState {
     setError(null);
     localStorage.removeItem("localModelVariant");
     localStorage.setItem("localModelReady", "false");
-
-    // Try to clear the cached model from Cache Storage
-    try {
-      const cacheNames = await caches.keys();
-      for (const name of cacheNames) {
-        if (name.includes("transformers") || name.includes("onnx")) {
-          await caches.delete(name);
-        }
-      }
-    } catch {
-      // Cache API may not be available
-    }
-  }, []);
+  }, [variant]);
 
   const generateText = useCallback(async (messages: Array<{ role: string; content: string }>): Promise<string> => {
     if (!pipelineRef.current) {
