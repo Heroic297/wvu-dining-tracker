@@ -792,7 +792,7 @@ export default function LogMealPage() {
               >
                 <ScanBarcode className="w-4 h-4" />
               </Button>
-              {localModel.ready && (
+              {localModel.variant && (
                 <>
                   <input
                     ref={photoInputRef}

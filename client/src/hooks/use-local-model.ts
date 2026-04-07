@@ -62,21 +62,23 @@ export function useLocalModel(): LocalModelState {
   const [totalBytes, setTotalBytes] = useState(0);
   const [statusText, setStatusText] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [hasWebGPU, setHasWebGPU] = useState(false);
+  // Detect WebGPU synchronously at init — no effect needed
+  const [hasWebGPU] = useState(() => !!(navigator as any).gpu);
 
-  // Hold the model + processor references (not pipeline)
+  // Hold the model + processor references
   const modelRef = useRef<any>(null);
   const processorRef = useRef<any>(null);
   const transformersRef = useRef<any>(null);
 
-  // Check WebGPU availability
-  useEffect(() => {
-    setHasWebGPU(!!(navigator as any).gpu);
-  }, []);
+  // Track whether we're doing a background cache-reload (don't nuke localStorage on failure)
+  const isReloadRef = useRef(false);
 
-  // If model was previously downloaded, try to load on mount
+  // If model was previously downloaded, try to reload from cache on mount.
+  // This is a background reload — if it fails, we preserve the localStorage flags
+  // so the user still sees "Installed" and can retry or use the download button.
   useEffect(() => {
     if (variant && ready && !modelRef.current && !loading) {
+      isReloadRef.current = true;
       loadModel(variant);
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -157,13 +159,26 @@ export function useLocalModel(): LocalModelState {
       setStatusText("Model ready");
     } catch (err: any) {
       console.error("[useLocalModel] load error:", err);
-      setError(err.message ?? "Failed to load model");
-      setStatusText("");
-      setReady(false);
-      localStorage.setItem("localModelReady", "false");
+
+      if (isReloadRef.current) {
+        // Cache reload failed — don't nuke localStorage.
+        // Keep variant/ready so UI still shows "Installed" and user can retry.
+        // Show a non-destructive error.
+        console.warn("[useLocalModel] Cache reload failed — model may need re-download.");
+        setError("Model needs to be reloaded. Tap the button to retry.");
+        setStatusText("");
+        // Don't touch ready/variant/localStorage — files may still be in Cache Storage
+      } else {
+        // Fresh download failed — reset everything
+        setError(err.message ?? "Failed to load model");
+        setStatusText("");
+        setReady(false);
+        localStorage.setItem("localModelReady", "false");
+      }
     } finally {
       setLoading(false);
       setDownloadingVariant(null);
+      isReloadRef.current = false;
     }
   };
 
