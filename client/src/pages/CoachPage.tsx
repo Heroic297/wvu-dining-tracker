@@ -700,7 +700,7 @@ const MODEL_LABELS: Record<string, string> = {
   "llama-3.3-70b-versatile":                     "Llama 3.3 70B",
   "llama-3.1-8b-instant":                        "Llama 3.1 8B",
 };
-const PROVIDER_LABELS: Record<string, string> = { groq: "Groq", openrouter: "OpenRouter" };
+const PROVIDER_LABELS: Record<string, string> = { groq: "Groq", openrouter: "OpenRouter", local: "On-Device" };
 
 function MessageBubble({ msg }: { msg: Message }) {
   const isUser = msg.role === "user";
@@ -1000,8 +1000,13 @@ ${memory}`;
             </h1>
           </div>
           <div className="flex items-center gap-2">
-            {/* Model selector — shown whenever user has a key */}
-            {profile?.hasOwnKey && (() => {
+            {/* Model selector — when local model is active, show it; otherwise cloud selector */}
+            {localModel.ready && localModel.variant ? (
+              <div className="flex items-center gap-1.5 h-7 px-2 rounded-md border border-emerald-700/50 bg-emerald-900/30 text-emerald-300 text-xs">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                Gemma 4 {localModel.variant} (Local)
+              </div>
+            ) : profile?.hasOwnKey && (() => {
               const provider = profile.provider ?? "groq";
               // Fallback catalog — kept in sync with server FREE_MODEL_CATALOG (no dead models)
               const FALLBACK: Record<string, Array<{id:string;label:string}>> = {
