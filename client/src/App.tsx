@@ -4,6 +4,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
 import { Toaster } from "@/components/ui/toaster";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
+import { LocalModelProvider } from "@/contexts/LocalModelContext";
 import Layout from "@/components/Layout";
 import LoginPage from "@/pages/LoginPage";
 import OnboardingPage from "@/pages/OnboardingPage";
@@ -57,11 +58,13 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
-        {/* Single Router at the top — Layout's useHashLocation and all Links share this context */}
-        <Router hook={useHashLocation}>
-          <AppRoutes />
-          <Toaster />
-        </Router>
+        <LocalModelProvider>
+          {/* Single Router at the top — Layout's useHashLocation and all Links share this context */}
+          <Router hook={useHashLocation}>
+            <AppRoutes />
+            <Toaster />
+          </Router>
+        </LocalModelProvider>
       </AuthProvider>
     </QueryClientProvider>
   );

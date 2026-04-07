@@ -378,7 +378,7 @@ export async function registerRoutes(
           return res.status(400).json({ error: "Query parameter 'q' required" });
         }
         // Text search always uses AI — barcode route uses USDA/Open Food Facts
-        const result = await lookupNutrition(foodName.trim(), { forceAi: true });
+        const result = await lookupNutrition(foodName.trim(), { forceAi: true, userId: req.user!.id });
         if (!result) {
           return res.status(404).json({
             error: "Could not find nutrition info — please enter manually",
@@ -405,6 +405,7 @@ export async function registerRoutes(
           return res.status(400).json({ error: "Query parameter 'upc' required" });
         }
 
+        console.log(`[barcode] Looking up UPC: ${upc}`);
         const axios = (await import("axios")).default;
         const USDA_KEY = process.env.USDA_API_KEY || "DEMO_KEY";
         const USDA_BASE = "https://api.nal.usda.gov/fdc/v1";
@@ -416,6 +417,7 @@ export async function registerRoutes(
           const usdaResp = await axios.get(`${USDA_BASE}/foods/search`, {
             params: {
               query: upc,
+              gtinUpc: upc,
               dataType: "Branded",
               pageSize: 5,
               api_key: USDA_KEY,
@@ -424,7 +426,7 @@ export async function registerRoutes(
           });
 
           const foods: any[] = usdaResp.data?.foods ?? [];
-          // Filter to exact UPC/GTIN match
+          // Filter to exact UPC/GTIN match (handles leading-zero variations)
           const match = foods.find(
             (f: any) =>
               f.gtinUpc === upc ||
@@ -433,6 +435,7 @@ export async function registerRoutes(
           );
 
           if (match) {
+            console.log(`[barcode] USDA Branded exact match found for UPC ${upc}: ${match.description} (fdcId ${match.fdcId})`);
             // USDA /foods/search returns nutrients per 100g for branded foods.
             // We must scale by (servingSize / 100) to get per-serving values.
             const servingGrams: number = parseFloat(match.servingSize) || 100;
@@ -474,6 +477,8 @@ export async function registerRoutes(
                 breakdown: [],
               });
             }
+          } else {
+            console.log(`[barcode] USDA Branded: no exact gtinUpc match for UPC ${upc} (${foods.length} results returned)`);
           }
         } catch (usdaErr: any) {
           console.warn("[barcode] USDA branded lookup failed:", usdaErr.message);
@@ -516,18 +521,25 @@ export async function registerRoutes(
                 confidence: "high",
                 breakdown: [],
               });
+            } else {
+              console.log(`[barcode] Open Food Facts: product found but zero calories for UPC ${upc}`);
             }
+          } else {
+            console.log(`[barcode] Open Food Facts: product not found for UPC ${upc} (status=${offResp.data?.status})`);
           }
         } catch (offErr: any) {
           console.warn("[barcode] Open Food Facts lookup failed:", offErr.message);
         }
 
         // ── 3. AI fallback — last resort, AI tries to identify product by UPC ─────
+        console.log(`[barcode] All database lookups failed for UPC ${upc}, trying AI fallback`);
         const result = await lookupNutrition(`barcode product UPC ${upc}`);
         if (result) {
+          console.log(`[barcode] AI fallback found: ${result.foodName} for UPC ${upc}`);
           return res.json(result);
         }
 
+        console.log(`[barcode] All lookups failed for UPC ${upc} — returning 404`);
         return res.status(404).json({
           error: "Product not found in USDA or Open Food Facts. Try typing the food name instead.",
         });
