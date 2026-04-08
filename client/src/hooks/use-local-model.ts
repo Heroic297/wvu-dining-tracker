@@ -4,12 +4,15 @@
  * Uses Gemma4ForConditionalGeneration + AutoProcessor (NOT pipeline()) since
  * the ONNX community models are multimodal conditional-generation models.
  *
- * Fix (2026-04-07 v4): On WebGPU OrtRun/mapAsync/GPUBuffer crash, switch to
- * wasm backend AND q4 dtype for the silent reload.
- * Root cause of v3 regression: q4f16 uses GatherBlockQuantized (a WebGPU-only
- * kernel) so reloading with dtype="q4f16" on the WASM/CPU EP always fails with
- * ERROR_CODE: 9 / Kernel not found. The fix passes overrideDtype="q4" for the
- * fallback load, which is supported by the WASM execution provider.
+ * Fix (2026-04-07 v5): On WebGPU OrtRun/mapAsync/GPUBuffer crash, switch to
+ * wasm backend AND dtype="q8" (maps to _quantized ONNX files) for the silent reload.
+ *
+ * Root cause of v4 regression: BOTH q4f16 AND q4 for this Gemma4 model use
+ * GatherBlockQuantized (block-quantized embeddings). That op is WebGPU-only and
+ * is not implemented in the browser WASM ORT build. The only dtypes that avoid it
+ * are those mapping to the _quantized suffix ("q8" / "int8" / "uint8" — all alias
+ * to _quantized files, which use standard INT8 MatMul supported by the WASM EP).
+ * "q8" is the correct WASM-safe fallback dtype for onnx-community Gemma4 models.
  */
 import { useState, useEffect, useRef, useCallback } from "react";
 
@@ -281,10 +284,12 @@ export function useLocalModel(): LocalModelState {
         const v = variantRef.current;
         if (!v) throw new Error("No model variant stored — cannot reload.");
 
-        // Explicitly pass device="wasm" and dtype="q4" — q4f16 uses
-        // GatherBlockQuantized which is a WebGPU-only kernel unsupported by
-        // the WASM/CPU execution provider. q4 is the correct WASM fallback dtype.
-        await loadModelInternal(v, true, "wasm", "q4");
+        // Explicitly pass device="wasm" and dtype="q8".
+        // Both q4f16 AND q4 use GatherBlockQuantized (block-quantized embeddings),
+        // a WebGPU-only ONNX op not present in the browser WASM ORT build.
+        // "q8" maps to the _quantized ONNX file suffix which uses standard INT8
+        // MatMul — the only 4/8-bit dtype supported by the WASM execution provider.
+        await loadModelInternal(v, true, "wasm", "q8");
 
         return runGenerate(buildInputs, genOptions, 1);
       }
