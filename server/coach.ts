@@ -16,6 +16,7 @@ import { lookupNutrition } from "./nutrition.js";
 import { computeDailyTargets, analyzeWaterCut } from "./tdee.js";
 import { storage } from "./storage.js";
 import { getGarminCoachContext } from "./garmin.js";
+import { buildContextSnapshot } from "./memoryBridge.js";
 import { z } from "zod";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -280,6 +281,25 @@ async function buildLiveContext(userId: string, rawUser: any): Promise<string> {
     totals = mRes.rows[0] ?? totals;
   } catch { /* non-fatal */ }
 
+  // Fetch per-meal rows for the snapshot
+  let meals: Array<{
+    meal_name?: string;
+    logged_at?: string;
+    total_calories?: number;
+    total_protein?: number;
+    total_carbs?: number;
+    total_fat?: number;
+  }> = [];
+  try {
+    const mealsRes = await pool.query(
+      `SELECT meal_name, logged_at, total_calories, total_protein, total_carbs, total_fat
+       FROM user_meals WHERE user_id=$1 AND date=$2
+       ORDER BY logged_at ASC NULLS LAST`,
+      [userId, today]
+    );
+    meals = mealsRes.rows;
+  } catch { /* non-fatal */ }
+
   try {
     const wlRes = await pool.query(
       `SELECT ml_logged FROM water_logs WHERE user_id=$1 AND date=$2`,
@@ -338,6 +358,28 @@ async function buildLiveContext(userId: string, rawUser: any): Promise<string> {
     `--- END LIVE CONTEXT ---`,
   ].filter(Boolean).join("\n");
 
+  // Build and inject the per-meal nutrition snapshot (pure-TS, no sidecar)
+  const snapshot = buildContextSnapshot({
+    today,
+    totals: {
+      kcal:    Number(totals.kcal),
+      protein: Number(totals.protein),
+      carbs:   Number(totals.carbs),
+      fat:     Number(totals.fat),
+    },
+    targets,
+    meals,
+    water_ml: waterMl,
+    weight: latestWeight
+      ? { weight_kg: latestWeight.weight_kg, date: latestWeight.date }
+      : null,
+  });
+
+  // Splice snapshot in before --- END LIVE CONTEXT ---
+  const liveLines = lines.split("\n");
+  if (snapshot) liveLines.splice(liveLines.length - 1, 0, snapshot);
+  const liveContext = liveLines.join("\n");
+
   // Append Garmin wearable data if connected and available (gated — only when detected)
   let garminContext = "";
   try {
@@ -345,7 +387,7 @@ async function buildLiveContext(userId: string, rawUser: any): Promise<string> {
     if (gc) garminContext = "\n" + gc;
   } catch { /* non-fatal — coach works fine without wearable data */ }
 
-  return lines + garminContext;
+  return liveContext + garminContext;
 }
 
 // ─── System Prompt ────────────────────────────────────────────────────────────
@@ -615,7 +657,7 @@ async function callOpenAICompat(
   tools: any[],
   isOpenRouter = false
 ): Promise<any> {
-  // Strip tools for OpenRouter models that don\'t support function calling
+  // Strip tools for OpenRouter models that don't support function calling
   const effectiveTools = (isOpenRouter && OPENROUTER_NO_TOOLS.has(model)) ? [] : tools;
 
   const body: any = { model, messages, max_tokens: 1024, temperature: 0.7 };
