@@ -11,6 +11,15 @@
  * execution provider — the browser WASM/CPU ORT build does not have it. The fp16/fp32
  * variants avoid GatherBlockQuantized but are 11–47 GB, which OOMs any browser tab.
  *
+ * Windows Chrome WebGPU KV-cache bug workaround:
+ *   By default transformers.js sets preferredOutputLocation='gpu-buffer' for all KV
+ *   cache outputs, keeping them on GPU between decode steps. On Windows Chrome with
+ *   certain drivers the GPU buffer becomes invalid between prefill and first decode
+ *   (driver GC / context reset), causing OrtRun ERROR_CODE:1 / mapAsync failure.
+ *   Fix: pass session_options: { preferredOutputLocation: 'cpu' } so KV cache tensors
+ *   stay in CPU memory. This adds one extra host↔GPU copy per decode step but is
+ *   universally stable across drivers.
+ *
  * On WebGPU buffer crash (OrtRun ERROR_CODE:1 / mapAsync / GPUBuffer invalid):
  *   - Surface a clear "WebGPU failed — try refreshing or use a different GPU" message
  *   - Clear model refs so the hook is clean
@@ -151,6 +160,12 @@ export function useLocalModel(): LocalModelState {
         dtype: "q4f16",
         device: "webgpu",
         progress_callback: handleProgress,
+        // Keep KV cache tensors in CPU memory instead of gpu-buffer.
+        // Prevents the OrtRun mapAsync / GPUBuffer invalid error on Windows Chrome
+        // caused by the driver invalidating GPU buffers between prefill and decode.
+        session_options: {
+          preferredOutputLocation: "cpu",
+        },
       });
       modelRef.current = model;
 
