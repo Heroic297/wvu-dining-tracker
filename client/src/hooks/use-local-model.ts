@@ -4,25 +4,18 @@
  * Uses Gemma4ForConditionalGeneration + AutoProcessor (NOT pipeline()) since
  * the ONNX community models are multimodal conditional-generation models.
  *
- * Fix (2026-04-07 v6): Remove the silent WASM fallback reload entirely.
+ * WebGPU is REQUIRED — there is no WASM/CPU fallback.
+ * Root cause: Gemma 4 E2B/E4B use Per-Layer Embeddings (PLE). Every quantized
+ * dtype variant (q4f16, q4, q8/_quantized) uses the com.microsoft.GatherBlockQuantized
+ * ONNX op in the embed_tokens session. That op is only implemented in the WebGPU
+ * execution provider — the browser WASM/CPU ORT build does not have it. The fp16/fp32
+ * variants avoid GatherBlockQuantized but are 11–47 GB, which OOMs any browser tab.
  *
- * Root cause of the infinite spinner in v3–v5:
- *   The silent wasm reload downloads a completely different set of ONNX files
- *   (different dtype suffix = different filenames = cache miss). For a ~4B model
- *   this means downloading 1–2 GB in the background with zero UI feedback, which
- *   either hangs indefinitely, OOMs the browser tab, or (for q4/q4f16) hits a
- *   GatherBlockQuantized kernel-not-found error anyway.
- *
- * Correct behavior on WebGPU buffer crash:
- *   1. Mark forceWasmRef = true so subsequent page loads use wasm from the start.
- *   2. Surface an explicit, actionable error to the user immediately.
- *   3. Do NOT attempt a silent background reload — there is no valid recovery path
- *      that doesn't require a full page refresh with wasm pre-selected.
- *
- * Users on WebGPU-broken browsers will see: "Your GPU ran into an issue. The
- * model has been set to CPU mode — please refresh the page to reload it."
- * On next load, forceWasmRef is re-initialised from localStorage("localModelWasm")
- * and loadModelInternal picks wasm from the start, with full progress UI.
+ * On WebGPU buffer crash (OrtRun ERROR_CODE:1 / mapAsync / GPUBuffer invalid):
+ *   - Surface a clear "WebGPU failed — try refreshing or use a different GPU" message
+ *   - Clear model refs so the hook is clean
+ *   - Throw so the caller's onError handler clears the pending chat message
+ *   - Do NOT set a wasm flag — there is no valid WASM recovery path for this model
  */
 import { useState, useEffect, useRef, useCallback } from "react";
 
@@ -50,8 +43,8 @@ const MODEL_IDS: Record<ModelVariant, string> = {
   E4B: "onnx-community/gemma-4-E4B-it-ONNX",
 };
 
-const WEBGPU_ERROR_MSG =
-  "Your GPU ran into an issue. The model has been set to CPU mode — please refresh the page to reload it.";
+const WEBGPU_CRASH_MSG =
+  "GPU error during generation — try refreshing the page. If this keeps happening, use the cloud model instead.";
 
 function isWebGpuBufferError(err: any): boolean {
   const msg: string = err?.message ?? "";
@@ -87,16 +80,22 @@ export function useLocalModel(): LocalModelState {
   const transformersRef = useRef<any>(null);
   const variantRef = useRef<ModelVariant | null>(null);
   const isReloadRef = useRef(false);
-  // Persisted across page loads via localStorage — once a WebGPU crash is seen,
-  // all future loads in the same browser use wasm from the start (full progress UI).
-  const forceWasmRef = useRef(
-    localStorage.getItem("localModelForceWasm") === "true"
-  );
+
+  // Clean up any stale forceWasm flag from previous versions — there is no WASM path
+  useEffect(() => {
+    localStorage.removeItem("localModelForceWasm");
+    // If WebGPU is not available at all, mark model as not ready so the user
+    // doesn't get stuck in an unrecoverable state from a previous session
+    if (!hasWebGPU && localStorage.getItem("localModelReady") === "true") {
+      localStorage.setItem("localModelReady", "false");
+      setReady(false);
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { variantRef.current = variant; }, [variant]);
 
   useEffect(() => {
-    if (variant && !modelRef.current && !loading) {
+    if (variant && !modelRef.current && !loading && hasWebGPU) {
       isReloadRef.current = true;
       loadModelInternal(variant);
     }
@@ -129,15 +128,9 @@ export function useLocalModel(): LocalModelState {
   };
 
   /**
-   * Core loader. Always runs with full UI feedback (no silent mode).
-   * Device priority: forceWasm flag → WebGPU capability check.
-   * dtype: "q4f16" on webgpu, "q8" on wasm (q4/q4f16 use GatherBlockQuantized,
-   * a WebGPU-only kernel not present in the browser WASM ORT build).
+   * Core loader. Always WebGPU + q4f16. No silent mode, no WASM path.
    */
-  const loadModelInternal = async (
-    v: ModelVariant,
-    overrideDevice?: "webgpu" | "wasm"
-  ) => {
+  const loadModelInternal = async (v: ModelVariant) => {
     try {
       setLoading(true);
       setDownloadingVariant(v);
@@ -147,15 +140,7 @@ export function useLocalModel(): LocalModelState {
       const transformers = await loadTransformers();
       const modelId = MODEL_IDS[v];
 
-      // Device priority: explicit override → forceWasm flag → capability check
-      const device: "webgpu" | "wasm" =
-        overrideDevice ?? (forceWasmRef.current ? "wasm" : hasWebGPU ? "webgpu" : "wasm");
-
-      // q4f16 uses GatherBlockQuantized (WebGPU-only); q8 maps to _quantized
-      // files that use standard INT8 ops supported by the WASM execution provider.
-      const dtype = device === "wasm" ? "q8" : "q4f16";
-
-      console.log(`[useLocalModel] Loading ${modelId} on ${device} (dtype=${dtype})...`);
+      console.log(`[useLocalModel] Loading ${modelId} on webgpu (dtype=q4f16)...`);
 
       const processor = await transformers.AutoProcessor.from_pretrained(modelId, {
         progress_callback: handleProgress,
@@ -163,13 +148,13 @@ export function useLocalModel(): LocalModelState {
       processorRef.current = processor;
 
       const model = await transformers.Gemma4ForConditionalGeneration.from_pretrained(modelId, {
-        dtype,
-        device,
+        dtype: "q4f16",
+        device: "webgpu",
         progress_callback: handleProgress,
       });
       modelRef.current = model;
 
-      console.log(`[useLocalModel] Model loaded on ${device} (dtype=${dtype})`);
+      console.log(`[useLocalModel] Model loaded on webgpu (dtype=q4f16)`);
 
       setReady(true);
       setVariant(v);
@@ -180,7 +165,7 @@ export function useLocalModel(): LocalModelState {
     } catch (err: any) {
       console.error(`[useLocalModel] load error:`, err);
       if (isReloadRef.current) {
-        setError("Model needs to be reloaded. Tap the button to retry.");
+        setError("Model needs to be reloaded. Tap Download to retry.");
         setStatusText("");
       } else {
         setError(err.message ?? "Failed to load model");
@@ -201,7 +186,7 @@ export function useLocalModel(): LocalModelState {
     setDownloadedBytes(0);
     setTotalBytes(0);
     await loadModelInternal(v);
-  }, [loading, hasWebGPU]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [loading]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const removeModel = useCallback(async () => {
     const currentVariant = variantRef.current;
@@ -243,12 +228,10 @@ export function useLocalModel(): LocalModelState {
 
   /**
    * Run inference. On WebGPU buffer crash:
-   *   1. Persist the wasm preference to localStorage (survives page reload).
-   *   2. Mark the model as not ready and surface an actionable error.
-   *   3. Throw so the caller's onError handler clears the pending message.
-   *   Do NOT attempt a silent background reload — the wasm fallback requires
-   *   downloading different ONNX files (q8/_quantized suffix) which takes
-   *   minutes with no UI feedback and will hang the tab.
+   *   - Surface an actionable error message
+   *   - Clear model refs (hook is clean for next attempt)
+   *   - Throw so caller's onError clears the pending message
+   *   There is no WASM fallback for this model architecture.
    */
   async function runGenerate(
     buildInputs: (processor: any) => Promise<{ inputs: any; inputLen: number }>,
@@ -269,17 +252,11 @@ export function useLocalModel(): LocalModelState {
       console.error(`[useLocalModel] generate error:`, err?.message);
 
       if (isWebGpuBufferError(err)) {
-        console.warn(
-          "[useLocalModel] WebGPU buffer/kernel error — marking wasm preference and prompting refresh."
-        );
-        // Persist so the NEXT page load auto-selects wasm with full download UI
-        forceWasmRef.current = true;
-        localStorage.setItem("localModelForceWasm", "true");
-        // Mark model as unavailable so the UI doesn't try to use it again
+        console.warn("[useLocalModel] WebGPU buffer error — clearing model refs and surfacing error.");
         modelRef.current = null;
         processorRef.current = null;
         setReady(false);
-        setError(WEBGPU_ERROR_MSG);
+        setError(WEBGPU_CRASH_MSG);
         localStorage.setItem("localModelReady", "false");
       }
 
