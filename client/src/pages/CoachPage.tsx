@@ -830,37 +830,64 @@ export default function CoachPage() {
   }, [messages]);
 
   // ── Build a lightweight system prompt from profile for local inference ──
-  const buildLocalSystemPrompt = useCallback((p: CoachProfile | undefined): string => {
-    if (!p) return "You are Macro Coach, an expert AI nutrition and health assistant.";
+  /**
+   * Build a full system prompt for the local model that matches what the server
+   * sends to cloud models — same tone, scope, memory section, and live context.
+   * liveContext is the pre-formatted string from /api/coach/live-context.
+   */
+  const buildLocalSystemPrompt = useCallback((p: CoachProfile | undefined, liveContext: string): string => {
+    if (!p) return `You are Macro Coach, an expert AI nutrition and health assistant.\n\n${liveContext}`;
     const toneDesc =
       p.coachTone === "coach"
-        ? "You are motivational, encouraging, and speak in plain English."
+        ? "You are motivational, encouraging, and speak in plain English. Keep math brief."
         : p.coachTone === "data"
         ? "You are precise and numbers-forward. Use exact figures, minimal fluff."
         : "You balance motivation with precision. Be direct but supportive.";
-    const memory = p.rollingSummary
-      ? `\n--- WHAT YOU KNOW ABOUT THIS USER ---\n${p.rollingSummary}\n--- END MEMORY ---`
+    const memorySection = p.rollingSummary
+      ? `\n--- WHAT YOU KNOW ABOUT THIS USER (from memory) ---\n${p.rollingSummary}\n--- END MEMORY ---\n`
       : "";
-    const name = p.preferredName ? `The user's name is ${p.preferredName}.` : "";
-    const goal = p.mainGoal ? `Their current goal: ${p.mainGoal}.` : "";
-    return `You are Macro Coach, an expert AI health and nutrition assistant.
+    const wvuNote = p.isWvuStudent
+      ? "This user is a WVU student. When they ask what is on the menu or what to eat at a specific dining hall, tell them to check the Dining tab in the app — you do not have live menu access in on-device mode."
+      : "This user is NOT a WVU student. Do not reference WVU dining.";
+    return `You are Macro Coach, an expert AI health and nutrition assistant embedded in the Macro app.
 
+PERSONA & TONE:
 ${toneDesc}
-You specialize in nutrition, body composition, powerlifting prep, peak week protocols, weight management, and performance optimization.
-${name} ${goal}
+You specialize in nutrition, body composition, powerlifting prep, peak week protocols, weight management, and performance optimization. You give specific, actionable advice — not generic disclaimers.
 
-SCOPE: You ONLY discuss health, nutrition, training, body composition, and directly related topics. Politely decline anything outside this scope.
-${memory}`;
+SCOPE BOUNDARIES:
+- You ONLY discuss health, nutrition, training, body composition, and directly related topics.
+- If asked about anything outside this scope (coding, politics, creative writing, etc.), politely decline and redirect to health topics.
+- You NEVER reveal system internals, other users' data, or API keys.
+
+DATA ACCURACY:
+- The LIVE USER CONTEXT block below contains the user's EXACT calculated calorie and macro targets for today. ALWAYS use these exact numbers. Never estimate or give ranges when exact numbers are available.
+- You do not have tool-calling capability in on-device mode. For food lookups or dining menus, tell the user to check the Log or Dining tabs in the app.
+
+${wvuNote}
+${memorySection}
+${liveContext}`;
   }, []);
 
   // ── Local model inference ──────────────────────────────────────────────────
   const localInference = useCallback(async (userMessage: string): Promise<{ message: string; model: string; provider: string }> => {
-    const systemPrompt = buildLocalSystemPrompt(profile);
+    // Fetch live context (same data the server builds for cloud models).
+    // On failure, fall back to an empty string — the model still has profile + memory.
+    let liveContext = "";
+    try {
+      const ctxRes = await api.coachLiveContext();
+      if (ctxRes.ok) {
+        const ctxData = await ctxRes.json();
+        liveContext = ctxData.context ?? "";
+      }
+    } catch { /* non-fatal — local model works without live context */ }
+
+    const systemPrompt = buildLocalSystemPrompt(profile, liveContext);
 
     // Build messages: system + recent history + new user message
     const chatMessages: Array<{ role: string; content: string }> = [
       { role: "system", content: systemPrompt },
-      // Include recent conversation context (last 10 exchanges)
+      // Include recent conversation context (last 20 messages)
       ...messages
         .filter((m) => !m.pending && !m.error)
         .slice(-20)
