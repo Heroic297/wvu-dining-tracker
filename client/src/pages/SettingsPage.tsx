@@ -530,10 +530,10 @@ export default function SettingsPage() {
         </p>
 
         {!localModel.hasWebGPU && (
-          <div className="flex items-start gap-2 bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3">
-            <AlertTriangle className="w-4 h-4 text-yellow-500 flex-shrink-0 mt-0.5" />
-            <p className="text-xs text-yellow-600 dark:text-yellow-400">
-              Your browser does not support WebGPU. The local model will use a slower fallback (WASM). Response times may be 20-40 seconds on mobile.
+          <div className="flex items-start gap-2 bg-destructive/10 border border-destructive/30 rounded-lg p-3">
+            <AlertTriangle className="w-4 h-4 text-destructive flex-shrink-0 mt-0.5" />
+            <p className="text-xs text-destructive">
+              WebGPU is not available in this browser. The local model requires WebGPU — use Chrome 113+ or Edge 113+ on desktop, or use the cloud model instead.
             </p>
           </div>
         )}
