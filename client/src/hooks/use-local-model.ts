@@ -4,11 +4,11 @@
  * Uses Gemma4ForConditionalGeneration + AutoProcessor (NOT pipeline()) since
  * the ONNX community models are multimodal conditional-generation models.
  *
- * Fix (2026-04-07 v2): Auto-retry on WebGPU OrtRun/mapAsync buffer failure.
- * Root cause: ONNX Runtime WebGPU backend on Windows invalidates GPUBuffers on the
- * first inference call after model load. Previous fix reset refs and threw, requiring
- * manual retry. This version reloads the model silently then re-runs the same
- * inference automatically — user never sees a failure on the first call.
+ * Fix (2026-04-07 v3): On WebGPU OrtRun/mapAsync/GPUBuffer crash, switch to
+ * wasm backend for the silent reload instead of retrying on webgpu.
+ * Root cause of v2 regression: loadModelInternal always re-selected webgpu
+ * (via hasWebGPU check), so the silent reload landed on the same broken backend
+ * and attempt 1 failed identically to attempt 0.
  */
 import { useState, useEffect, useRef, useCallback } from "react";
 
@@ -42,7 +42,8 @@ function isWebGpuBufferError(err: any): boolean {
     msg.includes("GPUBuffer") ||
     msg.includes("OrtRun") ||
     msg.includes("mapAsync") ||
-    msg.includes("Invalid Buffer")
+    msg.includes("Invalid Buffer") ||
+    msg.includes("buffer_manager")
   );
 }
 
@@ -67,8 +68,9 @@ export function useLocalModel(): LocalModelState {
   const transformersRef = useRef<any>(null);
   const variantRef = useRef<ModelVariant | null>(null);
   const isReloadRef = useRef(false);
+  // Once set, all subsequent loads (including page-session reloads) use wasm.
+  const forceWasmRef = useRef(false);
 
-  // Keep variantRef in sync so loadModelInternal can read it without stale closure
   useEffect(() => { variantRef.current = variant; }, [variant]);
 
   useEffect(() => {
@@ -105,11 +107,14 @@ export function useLocalModel(): LocalModelState {
   };
 
   /**
-   * Core loader — can be called both for initial download and for silent reload
-   * after a WebGPU buffer error. When silent=true it skips UI state updates so
-   * the user doesn't see a loading screen mid-conversation.
+   * Core loader. When silent=true, skips UI state updates.
+   * overrideDevice forces a specific backend regardless of hasWebGPU/forceWasmRef.
    */
-  const loadModelInternal = async (v: ModelVariant, silent = false) => {
+  const loadModelInternal = async (
+    v: ModelVariant,
+    silent = false,
+    overrideDevice?: "webgpu" | "wasm"
+  ) => {
     try {
       if (!silent) {
         setLoading(true);
@@ -120,7 +125,10 @@ export function useLocalModel(): LocalModelState {
 
       const transformers = await loadTransformers();
       const modelId = MODEL_IDS[v];
-      const device = hasWebGPU ? "webgpu" : "wasm";
+
+      // Device priority: explicit override → forceWasm flag → capability check
+      const device: "webgpu" | "wasm" =
+        overrideDevice ?? (forceWasmRef.current ? "wasm" : hasWebGPU ? "webgpu" : "wasm");
 
       console.log(`[useLocalModel] Loading ${modelId} on ${device} (silent=${silent})...`);
 
@@ -136,14 +144,13 @@ export function useLocalModel(): LocalModelState {
       });
       modelRef.current = model;
 
-      console.log(`[useLocalModel] Model loaded (silent=${silent})`);
+      console.log(`[useLocalModel] Model loaded on ${device} (silent=${silent})`);
 
       if (!silent) {
         setReady(true);
         setVariant(v);
         setStatusText("Model ready");
       } else {
-        // Restore ready state after silent reload
         setReady(true);
       }
 
@@ -163,8 +170,7 @@ export function useLocalModel(): LocalModelState {
           localStorage.setItem("localModelReady", "false");
         }
       } else {
-        // Silent reload failed — surface error now
-        setError("GPU context lost and could not recover. Please refresh the page.");
+        setError("Model failed to recover (wasm fallback). Please refresh the page.");
         setReady(false);
         localStorage.setItem("localModelReady", "false");
         throw err;
@@ -225,12 +231,15 @@ export function useLocalModel(): LocalModelState {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   /**
-   * Run inference, with one automatic silent reload+retry on WebGPU buffer failure.
-   * Pattern:
-   *   1. Try generate()
-   *   2. If OrtRun/GPUBuffer/mapAsync error → silently reload model from cache
-   *   3. Re-run generate() with the fresh model
-   *   4. If second attempt also fails → throw so caller can surface the error
+   * Run inference with one automatic silent reload+retry on WebGPU buffer failure.
+   *
+   * On attempt 0 WebGPU crash:
+   *   1. Set forceWasmRef = true (persists for the page session)
+   *   2. Null model/processor refs
+   *   3. Silent-reload with device="wasm" explicitly
+   *   4. Retry generate on the fresh wasm model
+   *
+   * If attempt 1 also fails, throw — caller surfaces the error.
    */
   async function runGenerate(
     buildInputs: (processor: any) => Promise<{ inputs: any; inputLen: number }>,
@@ -252,17 +261,20 @@ export function useLocalModel(): LocalModelState {
       console.error(`[useLocalModel] generate error (attempt ${attempt}):`, err?.message);
 
       if (isWebGpuBufferError(err) && attempt === 0) {
-        console.warn("[useLocalModel] WebGPU buffer error — silently reloading model and retrying...");
+        console.warn("[useLocalModel] WebGPU buffer error — switching to wasm and retrying...");
+
+        // Permanently mark this session as wasm-only to avoid re-selecting webgpu
+        forceWasmRef.current = true;
+
         modelRef.current = null;
         processorRef.current = null;
 
         const v = variantRef.current;
         if (!v) throw new Error("No model variant stored — cannot reload.");
 
-        // Silent reload from browser cache (no UI loading state)
-        await loadModelInternal(v, true);
+        // Explicitly pass device="wasm" so this reload never picks webgpu
+        await loadModelInternal(v, true, "wasm");
 
-        // Recursive retry with fresh refs
         return runGenerate(buildInputs, genOptions, 1);
       }
 
