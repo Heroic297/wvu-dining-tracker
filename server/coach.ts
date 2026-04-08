@@ -821,6 +821,23 @@ Return ONLY the summary text, no preamble.`;
 
 export function registerCoachRoutes(app: Express): void {
 
+  // GET /api/coach/live-context
+  // Returns the exact same pre-built context string the server injects into every
+  // cloud-model system prompt, so the local (on-device) model gets identical context.
+  app.get("/api/coach/live-context", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const userId = req.user!.id;
+      const userRes = await pool.query("SELECT * FROM users WHERE id=$1", [userId]);
+      const rawUser = userRes.rows[0];
+      if (!rawUser) return res.status(404).json({ error: "User not found" });
+      const liveContext = await buildLiveContext(userId, rawUser);
+      res.json({ context: liveContext });
+    } catch (err: any) {
+      console.error("[coach] live-context error:", err.message);
+      res.status(500).json({ error: "Failed to build context" });
+    }
+  });
+
   // GET /api/coach/profile
   app.get("/api/coach/profile", requireAuth, async (req: AuthRequest, res) => {
     try {
