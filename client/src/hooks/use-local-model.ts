@@ -4,11 +4,12 @@
  * Uses Gemma4ForConditionalGeneration + AutoProcessor (NOT pipeline()) since
  * the ONNX community models are multimodal conditional-generation models.
  *
- * Fix (2026-04-07 v3): On WebGPU OrtRun/mapAsync/GPUBuffer crash, switch to
- * wasm backend for the silent reload instead of retrying on webgpu.
- * Root cause of v2 regression: loadModelInternal always re-selected webgpu
- * (via hasWebGPU check), so the silent reload landed on the same broken backend
- * and attempt 1 failed identically to attempt 0.
+ * Fix (2026-04-07 v4): On WebGPU OrtRun/mapAsync/GPUBuffer crash, switch to
+ * wasm backend AND q4 dtype for the silent reload.
+ * Root cause of v3 regression: q4f16 uses GatherBlockQuantized (a WebGPU-only
+ * kernel) so reloading with dtype="q4f16" on the WASM/CPU EP always fails with
+ * ERROR_CODE: 9 / Kernel not found. The fix passes overrideDtype="q4" for the
+ * fallback load, which is supported by the WASM execution provider.
  */
 import { useState, useEffect, useRef, useCallback } from "react";
 
@@ -43,7 +44,9 @@ function isWebGpuBufferError(err: any): boolean {
     msg.includes("OrtRun") ||
     msg.includes("mapAsync") ||
     msg.includes("Invalid Buffer") ||
-    msg.includes("buffer_manager")
+    msg.includes("buffer_manager") ||
+    msg.includes("GatherBlockQuantized") ||
+    msg.includes("Kernel not found")
   );
 }
 
@@ -109,11 +112,14 @@ export function useLocalModel(): LocalModelState {
   /**
    * Core loader. When silent=true, skips UI state updates.
    * overrideDevice forces a specific backend regardless of hasWebGPU/forceWasmRef.
+   * overrideDtype forces a specific dtype (e.g. "q4" for WASM fallback);
+   *   defaults to "q4f16" when not provided.
    */
   const loadModelInternal = async (
     v: ModelVariant,
     silent = false,
-    overrideDevice?: "webgpu" | "wasm"
+    overrideDevice?: "webgpu" | "wasm",
+    overrideDtype?: string
   ) => {
     try {
       if (!silent) {
@@ -137,8 +143,11 @@ export function useLocalModel(): LocalModelState {
       });
       processorRef.current = processor;
 
+      const dtype = overrideDtype ?? "q4f16";
+      console.log(`[useLocalModel] Using dtype=${dtype} on ${device} (silent=${silent})`);
+
       const model = await transformers.Gemma4ForConditionalGeneration.from_pretrained(modelId, {
-        dtype: "q4f16",
+        dtype,
         device,
         progress_callback: silent ? undefined : handleProgress,
       });
@@ -170,7 +179,7 @@ export function useLocalModel(): LocalModelState {
           localStorage.setItem("localModelReady", "false");
         }
       } else {
-        setError("Model failed to recover (wasm fallback). Please refresh the page.");
+        setError("Model failed to recover — GPU not available and CPU fallback failed. Please refresh the page.");
         setReady(false);
         localStorage.setItem("localModelReady", "false");
         throw err;
@@ -272,8 +281,10 @@ export function useLocalModel(): LocalModelState {
         const v = variantRef.current;
         if (!v) throw new Error("No model variant stored — cannot reload.");
 
-        // Explicitly pass device="wasm" so this reload never picks webgpu
-        await loadModelInternal(v, true, "wasm");
+        // Explicitly pass device="wasm" and dtype="q4" — q4f16 uses
+        // GatherBlockQuantized which is a WebGPU-only kernel unsupported by
+        // the WASM/CPU execution provider. q4 is the correct WASM fallback dtype.
+        await loadModelInternal(v, true, "wasm", "q4");
 
         return runGenerate(buildInputs, genOptions, 1);
       }
