@@ -134,7 +134,10 @@ function parseMenuJson(html: string): TenKitesItem[] {
   // The JSON is in data-menu-json attribute on a div.k10-data element
   let rawJson = $("[data-menu-json]").attr("data-menu-json");
 
-  if (!rawJson) return [];
+  if (!rawJson) {
+    console.log(`[scraper] No data-menu-json attribute found in HTML (page length: ${html.length} chars)`);
+    return [];
+  }
 
   // Cheerio already HTML-decodes attribute values
   try {
@@ -167,6 +170,7 @@ function parsePeriodOptions(html: string): Array<{ name: string; guid: string }>
   const $ = cheerio.load(html);
   const periods: Array<{ name: string; guid: string }> = [];
 
+  // Primary selector: TenKites meal period options
   $(".k10-menu-selector__option").each((_i, el) => {
     const guid = $(el).attr("data-menu-identifier");
     const name = $(el).text().trim();
@@ -174,6 +178,20 @@ function parsePeriodOptions(html: string): Array<{ name: string; guid: string }>
       periods.push({ name, guid });
     }
   });
+
+  // Fallback selector: any element with data-menu-identifier (in case class name changed)
+  if (periods.length === 0) {
+    $("[data-menu-identifier]").each((_i, el) => {
+      const guid = $(el).attr("data-menu-identifier");
+      const name = $(el).text().trim();
+      if (guid && guid !== "00000000-0000-0000-0000-000000000000" && name) {
+        periods.push({ name, guid });
+      }
+    });
+    if (periods.length > 0) {
+      console.log(`[scraper] Period options found via fallback selector (${periods.length} periods)`);
+    }
+  }
 
   return periods;
 }
@@ -214,8 +232,11 @@ export async function scrapeLocationDate(
   }
 
   const periods = parsePeriodOptions(defaultHtml);
+  console.log(`[scraper] ${locationSlug} ${dateStr}: found ${periods.length} meal periods${periods.length > 0 ? ` (${periods.map(p => p.name).join(", ")})` : ""}`);
   if (periods.length === 0) {
-    console.log(`[scraper] ${locationSlug} is closed / no menu on ${dateStr}`);
+    // Log a snippet of the HTML to help debug selector issues
+    const snippet = defaultHtml.substring(0, 500).replace(/\n/g, " ").trim();
+    console.log(`[scraper] ${locationSlug} is closed / no menu on ${dateStr}. HTML preview: ${snippet.substring(0, 200)}...`);
     return false;
   }
 
@@ -239,10 +260,12 @@ export async function scrapeLocationDate(
     }
 
     const items = parseMenuJson(html);
+    console.log(`[scraper] ${locationSlug}/${period.name}/${dateStr}: parsed ${items.length} total items from menu JSON`);
     const recipes = items.filter((x) => x.itemType === "recipe" && x.recipeName);
 
     if (recipes.length === 0) {
-      console.log(`[scraper] No items found for ${locationSlug}/${period.name}/${dateStr}`);
+      const types = Array.from(new Set(items.map(i => i.itemType)));
+      console.log(`[scraper] No recipe items found for ${locationSlug}/${period.name}/${dateStr} (item types: ${types.join(",")})`);
       continue;
     }
 
@@ -289,19 +312,32 @@ export async function scrapeLocationDate(
 
     // Upsert items with conflict handling using onConflictDoUpdate
     if (diningItemsArray.length > 0) {
-      await db
-        .insert(diningItems)
-        .values(diningItemsArray)
-        .onConflictDoUpdate({
-          target: [diningItems.menuId, diningItems.name],
-          set: {
-            calories: sql`EXCLUDED.calories`,
-            proteinG: sql`EXCLUDED.proteinG`,
-            carbsG: sql`EXCLUDED.carbsG`,
-            fatG: sql`EXCLUDED.fatG`,
-            rawMetadata: sql`EXCLUDED.rawMetadata`,
-          },
-        });
+      try {
+        await db
+          .insert(diningItems)
+          .values(diningItemsArray)
+          .onConflictDoUpdate({
+            target: [diningItems.menuId, diningItems.name],
+            set: {
+              calories: sql`EXCLUDED.calories`,
+              proteinG: sql`EXCLUDED.protein_g`,
+              carbsG: sql`EXCLUDED.carbs_g`,
+              fatG: sql`EXCLUDED.fat_g`,
+              rawMetadata: sql`EXCLUDED.raw_metadata`,
+            },
+          });
+      } catch (err: any) {
+        console.error(`[scraper] Failed to upsert items for ${locationSlug}/${mealType}/${dateStr}:`, err.message);
+        // Fallback: delete existing items and reinsert
+        try {
+          await db.delete(diningItems).where(sql`${diningItems.menuId} = ${menu.id}`);
+          await db.insert(diningItems).values(diningItemsArray);
+          console.log(`[scraper] Fallback insert succeeded for ${locationSlug}/${mealType}/${dateStr}`);
+        } catch (fallbackErr: any) {
+          console.error(`[scraper] Fallback insert also failed:`, fallbackErr.message);
+          continue;
+        }
+      }
     }
     
     console.log(

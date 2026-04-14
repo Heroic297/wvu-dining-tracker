@@ -326,7 +326,12 @@ export async function registerRoutes(
           console.log(
             `[routes] On-demand scrape for ${locationSlug}/${mealType}/${date}`
           );
-          await scrapeLocationDate(locationSlug, date);
+          try {
+            const scraped = await scrapeLocationDate(locationSlug, date);
+            console.log(`[routes] On-demand scrape result for ${locationSlug}/${date}: ${scraped ? "success" : "no data found"}`);
+          } catch (scrapeErr: any) {
+            console.error(`[routes] On-demand scrape failed for ${locationSlug}/${date}:`, scrapeErr.message);
+          }
           menu = await storage.getDiningMenu(location.id, date, mealType);
         }
 

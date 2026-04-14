@@ -343,13 +343,13 @@ export class PgStorage implements IStorage {
         target: [diningItems.menuId, diningItems.name],
         set: {
           calories: sql`EXCLUDED.calories`,
-          proteinG: sql`EXCLUDED.proteinG`,
-          carbsG: sql`EXCLUDED.carbsG`,
-          fatG: sql`EXCLUDED.fatG`,
-          rawMetadata: sql`EXCLUDED.rawMetadata`,
+          proteinG: sql`EXCLUDED.protein_g`,
+          carbsG: sql`EXCLUDED.carbs_g`,
+          fatG: sql`EXCLUDED.fat_g`,
+          rawMetadata: sql`EXCLUDED.raw_metadata`,
         },
       })
-      .execute();
+      .returning();
   }
 
   async deleteDiningItemsByMenu(menuId: string) {

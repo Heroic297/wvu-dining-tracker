@@ -21,9 +21,11 @@ export function startScheduler() {
 
   // Daily WVU menu scrape at 06:00 AM EST = 11:00 UTC
   cron.schedule("0 11 * * *", async () => {
-    console.log("[scheduler] Running daily menu scrape...");
+    const dateStr = todayString();
+    console.log(`[scheduler] Running daily menu scrape for ${dateStr}...`);
     try {
-      await scrapeAllLocations(todayString());
+      await scrapeAllLocations(dateStr);
+      console.log(`[scheduler] Daily scrape completed for ${dateStr}`);
     } catch (err) {
       console.error("[scheduler] Daily scrape failed:", err);
     }
