@@ -189,15 +189,25 @@ async function runMigrations() {
     await pool.query(`
       ALTER TABLE weight_log ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'manual'
     `);
-    // Prevent duplicate dining items by adding unique constraint
-    // Note: PostgreSQL does not support ADD CONSTRAINT IF NOT EXISTS, so we
-    // check the catalog first to avoid an error on repeated runs.
+    // Prevent duplicate dining items by adding unique constraint.
+    // First, purge any pre-existing duplicate (menu_id, name) rows so the
+    // unique index can be built.  We keep the row with the latest `id`
+    // (UUIDs are random so "max" is an arbitrary but deterministic pick).
+    // Then create the constraint only if it doesn't already exist.
     await pool.query(`
       DO $$
       BEGIN
         IF NOT EXISTS (
           SELECT 1 FROM pg_constraint WHERE conname = 'dining_items_unique_menu_name'
         ) THEN
+          -- Remove duplicates: keep the row with the MAX id per (menu_id, name)
+          DELETE FROM dining_items
+          WHERE id NOT IN (
+            SELECT MAX(id)
+            FROM dining_items
+            GROUP BY menu_id, name
+          );
+
           ALTER TABLE dining_items ADD CONSTRAINT dining_items_unique_menu_name UNIQUE (menu_id, name);
         END IF;
       END
