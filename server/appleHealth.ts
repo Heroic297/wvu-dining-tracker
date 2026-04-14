@@ -30,6 +30,16 @@ const pushBodySchema = z.object({
   hrv_ms: z.number().nonnegative().optional(),
   weight_kg: z.number().positive().optional(),
   body_fat_pct: z.number().positive().optional(),
+  workouts: z.array(z.object({
+    activity_type: z.string(),
+    duration_min: z.number(),
+    calories: z.number(),
+    distance_km: z.number().optional(),
+    avg_heart_rate: z.number().optional(),
+    date: z.string().optional(),
+  })).optional(),
+  vo2_max: z.number().positive().optional(),
+  respiratory_rate: z.number().positive().optional(),
 });
 
 // ─── Route registration ────────────────────────────────────────────────────
@@ -64,17 +74,26 @@ export function registerAppleHealthRoutes(app: Express): void {
           process.env.APP_URL ?? "https://wvu-dining-tracker.onrender.com";
         const webhookUrl = `${baseUrl}/api/apple-health/push/${token}`;
 
-        // Deep link into iOS Shortcuts app to create a new shortcut
-        const shortcutUrl = `https://www.icloud.com/shortcuts/`;
-
         res.json({
           webhookUrl,
-          shortcutUrl,
+          recommendedApp: {
+            name: "Health Auto Export",
+            appStoreUrl: "https://apps.apple.com/app/health-auto-export-json-csv/id1115567069",
+            description: "Free app that auto-syncs Apple Health data to your webhook. No coding needed.",
+          },
           setupGuide: [
-            "1. Open the iOS Shortcuts app on your iPhone.",
-            "2. Create a new shortcut that reads Health data (steps, calories, sleep, etc.).",
-            "3. Add a 'Get Contents of URL' action pointing to your webhook URL above (POST, JSON body).",
-            "4. Run the shortcut manually or set it to run daily via Automation.",
+            "Install 'Health Auto Export' from the App Store (it's free).",
+            "Open the app and go to Automations → REST API.",
+            "Paste your Webhook URL (copied below) as the endpoint.",
+            "Set export format to JSON, period to 'Today', and aggregation to 'Day'.",
+            "Select all health metrics: Steps, Sleep Analysis, Heart Rate, HRV, Resting Heart Rate, Active Calories, Weight, Workouts, Body Fat %.",
+            "Enable automatic sync — the app will push your data daily.",
+          ],
+          manualShortcutGuide: [
+            "Alternatively, use the iOS Shortcuts app:",
+            "1. Create a new Shortcut with 'Find Health Samples' actions for each metric.",
+            "2. Add 'Get Contents of URL' pointing to your Webhook URL (POST, JSON body).",
+            "3. Set an Automation to run it daily at 11 PM.",
           ],
         });
       } catch (err: any) {
@@ -121,8 +140,9 @@ export function registerAppleHealthRoutes(app: Express): void {
           `INSERT INTO apple_health_daily
              (user_id, date, total_steps, calories_burned, active_minutes,
               sleep_duration_min, deep_sleep_min, rem_sleep_min,
-              resting_heart_rate, avg_overnight_hrv, weight_kg, body_fat_pct, synced_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now())
+              resting_heart_rate, avg_overnight_hrv, weight_kg, body_fat_pct,
+              workouts, vo2_max, respiratory_rate, synced_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, now())
            ON CONFLICT (user_id, date) DO UPDATE SET
              total_steps        = COALESCE(EXCLUDED.total_steps,        apple_health_daily.total_steps),
              calories_burned    = COALESCE(EXCLUDED.calories_burned,    apple_health_daily.calories_burned),
@@ -134,6 +154,9 @@ export function registerAppleHealthRoutes(app: Express): void {
              avg_overnight_hrv  = COALESCE(EXCLUDED.avg_overnight_hrv,  apple_health_daily.avg_overnight_hrv),
              weight_kg          = COALESCE(EXCLUDED.weight_kg,          apple_health_daily.weight_kg),
              body_fat_pct       = COALESCE(EXCLUDED.body_fat_pct,       apple_health_daily.body_fat_pct),
+             workouts           = COALESCE(EXCLUDED.workouts,           apple_health_daily.workouts),
+             vo2_max            = COALESCE(EXCLUDED.vo2_max,            apple_health_daily.vo2_max),
+             respiratory_rate   = COALESCE(EXCLUDED.respiratory_rate,   apple_health_daily.respiratory_rate),
              synced_at          = now()`,
           [
             userId,
@@ -148,6 +171,9 @@ export function registerAppleHealthRoutes(app: Express): void {
             data.hrv_ms ?? null,
             data.weight_kg ?? null,
             data.body_fat_pct ?? null,
+            data.workouts ? JSON.stringify(data.workouts) : null,
+            data.vo2_max ?? null,
+            data.respiratory_rate ?? null,
           ]
         );
 
@@ -191,20 +217,16 @@ export function registerAppleHealthRoutes(app: Express): void {
         );
         const connected = !!userRows[0]?.apple_health_token;
 
-        // Get last sync info
-        const { rows: syncRows } = await pool.query(
-          `SELECT date, synced_at
-           FROM apple_health_daily
-           WHERE user_id = $1
-           ORDER BY date DESC
-           LIMIT 1`,
+        // Get last sync info + latest data
+        const { rows: dataRows } = await pool.query(
+          `SELECT * FROM apple_health_daily WHERE user_id = $1 ORDER BY date DESC LIMIT 1`,
           [userId]
         );
 
-        const lastSyncDate: string | null = syncRows[0]?.date ?? null;
-        const lastSyncAt: string | null = syncRows[0]?.synced_at ?? null;
+        const lastSyncDate: string | null = dataRows[0]?.date ?? null;
+        const lastSyncAt: string | null = dataRows[0]?.synced_at ?? null;
 
-        res.json({ connected, lastSyncDate, lastSyncAt });
+        res.json({ connected, lastSyncDate, lastSyncAt, latestData: dataRows[0] ?? null });
       } catch (err: any) {
         console.error("[apple-health] status error:", err.message);
         res.status(500).json({ error: "Failed to fetch status" });

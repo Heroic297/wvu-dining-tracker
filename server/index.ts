@@ -213,6 +213,11 @@ async function runMigrations() {
       )
     `);
 
+    // ── Apple Health extra columns (workouts, VO2, respiratory) ─────────
+    await pool.query(`ALTER TABLE apple_health_daily ADD COLUMN IF NOT EXISTS workouts JSONB`);
+    await pool.query(`ALTER TABLE apple_health_daily ADD COLUMN IF NOT EXISTS vo2_max REAL`);
+    await pool.query(`ALTER TABLE apple_health_daily ADD COLUMN IF NOT EXISTS respiratory_rate REAL`);
+
     // ── Micronutrient columns on user_meal_items ──────────────────────────
     await pool.query(`ALTER TABLE user_meal_items ADD COLUMN IF NOT EXISTS fiber_g REAL`);
     await pool.query(`ALTER TABLE user_meal_items ADD COLUMN IF NOT EXISTS sugar_g REAL`);

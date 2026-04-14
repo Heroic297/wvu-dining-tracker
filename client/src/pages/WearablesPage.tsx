@@ -10,7 +10,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import {
   Watch, RefreshCw, Loader2, CheckCircle, XCircle, AlertCircle,
   Footprints, Moon, Heart, Brain, Battery, Activity, Scale,
-  Eye, EyeOff, Unplug, Smartphone, Copy, ExternalLink,
+  Eye, EyeOff, Unplug, Smartphone, Copy, ExternalLink, ChevronDown,
 } from "lucide-react";
 
 interface SleepLevel {
@@ -164,7 +164,12 @@ export default function WearablesPage() {
   });
 
   // Apple Health
-  const { data: appleHealthStatus } = useQuery<{ connected: boolean; lastSyncDate: string | null; lastSyncAt: string | null }>({
+  const { data: appleHealthStatus } = useQuery<{
+    connected: boolean;
+    lastSyncDate: string | null;
+    lastSyncAt: string | null;
+    latestData: any | null;
+  }>({
     queryKey: ["apple-health-status"],
     queryFn: async () => {
       const res = await apiRequest("GET", "/api/apple-health/status");
@@ -172,15 +177,19 @@ export default function WearablesPage() {
     },
   });
   const [ahSetupLoading, setAhSetupLoading] = useState(false);
-  const [ahWebhookUrl, setAhWebhookUrl] = useState<string | null>(null);
-  const [ahSetupGuide, setAhSetupGuide] = useState<string[]>([]);
+  const [ahSetupData, setAhSetupData] = useState<{
+    webhookUrl: string;
+    recommendedApp: { name: string; appStoreUrl: string; description: string };
+    setupGuide: string[];
+    manualShortcutGuide: string[];
+  } | null>(null);
+  const [ahShowManualGuide, setAhShowManualGuide] = useState(false);
   const handleAppleHealthSetup = useCallback(async () => {
     setAhSetupLoading(true);
     try {
       const res = await apiRequest("GET", "/api/apple-health/setup");
       const data = await res.json();
-      setAhWebhookUrl(data.webhookUrl);
-      setAhSetupGuide(data.setupGuide ?? []);
+      setAhSetupData(data);
     } catch (err: any) {
       toast({ title: "Setup failed", description: err.message, variant: "destructive" });
     } finally {
@@ -559,52 +568,101 @@ export default function WearablesPage() {
       <section className="bg-card border border-border rounded-xl p-4 space-y-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-pink-500/10 rounded-lg flex items-center justify-center">
-              <Smartphone className="w-5 h-5 text-pink-400" />
+            <div className="w-10 h-10 rounded-lg flex items-center justify-center" style={{ background: "linear-gradient(135deg, rgba(244,63,94,0.15), rgba(236,72,153,0.15))" }}>
+              <Heart className="w-5 h-5 text-pink-400" />
             </div>
             <div>
               <h2 className="font-semibold text-sm">Apple Health</h2>
               <p className="text-xs text-muted-foreground">
-                {appleHealthStatus?.connected ? "Connected" : "Not connected"} — via iOS Shortcut webhook
+                {appleHealthStatus?.connected
+                  ? <span className="flex items-center gap-1"><CheckCircle className="w-3 h-3 text-green-400 inline" /> Connected</span>
+                  : "Not connected"}
               </p>
             </div>
           </div>
-          {appleHealthStatus?.connected && (
-            <CheckCircle className="w-5 h-5 text-green-400" />
+          {appleHealthStatus?.connected && appleHealthStatus.lastSyncAt && (
+            <span className="text-[11px] text-muted-foreground">
+              Synced {fmtTime(appleHealthStatus.lastSyncAt)}
+            </span>
           )}
         </div>
 
-        {appleHealthStatus?.lastSyncAt && (
-          <p className="text-xs text-muted-foreground">
-            Last sync: {new Date(appleHealthStatus.lastSyncAt).toLocaleString()}
-          </p>
+        {/* Connected state — show Apple Health data cards */}
+        {appleHealthStatus?.connected && appleHealthStatus.latestData && (
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+            {appleHealthStatus.latestData.total_steps != null && (
+              <DataCard icon={Footprints} label="Steps" iconColor="text-green-400"
+                value={Number(appleHealthStatus.latestData.total_steps).toLocaleString()} />
+            )}
+            {appleHealthStatus.latestData.calories_burned != null && (
+              <DataCard icon={Activity} label="Active Calories" iconColor="text-orange-400"
+                value={`${appleHealthStatus.latestData.calories_burned} kcal`} />
+            )}
+            {appleHealthStatus.latestData.sleep_duration_min != null && (
+              <DataCard icon={Moon} label="Sleep" iconColor="text-indigo-400"
+                value={`${Math.floor(appleHealthStatus.latestData.sleep_duration_min / 60)}h ${appleHealthStatus.latestData.sleep_duration_min % 60}m`} />
+            )}
+            {appleHealthStatus.latestData.resting_heart_rate != null && (
+              <DataCard icon={Heart} label="Resting HR" iconColor="text-red-400"
+                value={`${appleHealthStatus.latestData.resting_heart_rate} bpm`} />
+            )}
+            {appleHealthStatus.latestData.avg_overnight_hrv != null && (
+              <DataCard icon={Heart} label="HRV" iconColor="text-emerald-400"
+                value={`${Math.round(appleHealthStatus.latestData.avg_overnight_hrv)} ms`} />
+            )}
+            {appleHealthStatus.latestData.weight_kg != null && (
+              <DataCard icon={Scale} label="Weight" iconColor="text-blue-400"
+                value={`${kgToLbs(appleHealthStatus.latestData.weight_kg)} lbs`} />
+            )}
+          </div>
         )}
 
-        {!ahWebhookUrl ? (
+        {/* Not connected / setup flow */}
+        {!appleHealthStatus?.connected && !ahSetupData && (
           <Button
             variant="outline"
             size="sm"
             onClick={handleAppleHealthSetup}
             disabled={ahSetupLoading}
+            className="w-full"
           >
-            {ahSetupLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <ExternalLink className="w-3.5 h-3.5 mr-1" />}
-            Set Up Apple Health
+            {ahSetupLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <Heart className="w-3.5 h-3.5 mr-1 text-pink-400" />}
+            Connect Apple Health
           </Button>
-        ) : (
-          <div className="space-y-3">
-            <div className="space-y-1">
-              <Label className="text-xs">Webhook URL</Label>
+        )}
+
+        {/* Setup instructions */}
+        {ahSetupData && (
+          <div className="space-y-4">
+            {/* Step 1: Install app */}
+            <div className="bg-slate-900 border border-slate-800/60 rounded-xl p-4 space-y-2">
+              <div className="flex items-center gap-2">
+                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-pink-500/20 text-pink-400 text-xs font-bold">1</span>
+                <span className="text-sm font-semibold">Install {ahSetupData.recommendedApp.name}</span>
+              </div>
+              <p className="text-xs text-muted-foreground">{ahSetupData.recommendedApp.description}</p>
+              <a
+                href={ahSetupData.recommendedApp.appStoreUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 text-xs font-medium text-pink-400 hover:text-pink-300"
+              >
+                <ExternalLink className="w-3.5 h-3.5" /> Open in App Store
+              </a>
+            </div>
+
+            {/* Step 2: Webhook URL */}
+            <div className="bg-slate-900 border border-slate-800/60 rounded-xl p-4 space-y-2">
+              <div className="flex items-center gap-2">
+                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-pink-500/20 text-pink-400 text-xs font-bold">2</span>
+                <span className="text-sm font-semibold">Copy your Webhook URL</span>
+              </div>
               <div className="flex gap-2">
-                <Input
-                  readOnly
-                  value={ahWebhookUrl}
-                  className="text-xs font-mono"
-                />
+                <Input readOnly value={ahSetupData.webhookUrl} className="text-xs font-mono" />
                 <Button
-                  size="sm"
-                  variant="outline"
+                  size="sm" variant="outline"
                   onClick={() => {
-                    navigator.clipboard.writeText(ahWebhookUrl);
+                    navigator.clipboard.writeText(ahSetupData.webhookUrl);
                     toast({ title: "Copied to clipboard" });
                   }}
                 >
@@ -612,13 +670,30 @@ export default function WearablesPage() {
                 </Button>
               </div>
             </div>
-            {ahSetupGuide.length > 0 && (
-              <div className="space-y-1">
-                <p className="text-xs font-medium text-muted-foreground">Setup Guide</p>
-                <ol className="text-xs text-muted-foreground space-y-0.5 list-decimal list-inside">
-                  {ahSetupGuide.map((step, i) => <li key={i}>{step}</li>)}
-                </ol>
+
+            {/* Step 3: Setup guide steps */}
+            <div className="bg-slate-900 border border-slate-800/60 rounded-xl p-4 space-y-2">
+              <div className="flex items-center gap-2">
+                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-pink-500/20 text-pink-400 text-xs font-bold">3</span>
+                <span className="text-sm font-semibold">Configure the app</span>
               </div>
+              <ol className="text-xs text-muted-foreground space-y-1 list-decimal list-inside ml-1">
+                {ahSetupData.setupGuide.map((step, i) => <li key={i}>{step}</li>)}
+              </ol>
+            </div>
+
+            {/* Collapsible manual guide */}
+            <button
+              onClick={() => setAhShowManualGuide(v => !v)}
+              className="w-full flex items-center justify-between text-xs text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <span>Advanced: Manual Shortcut Setup</span>
+              <ChevronDown className={`w-3.5 h-3.5 transition-transform ${ahShowManualGuide ? "rotate-180" : ""}`} />
+            </button>
+            {ahShowManualGuide && (
+              <ol className="text-xs text-muted-foreground space-y-0.5 list-decimal list-inside ml-1 border-t border-border pt-2">
+                {ahSetupData.manualShortcutGuide.map((step, i) => <li key={i}>{step}</li>)}
+              </ol>
             )}
           </div>
         )}

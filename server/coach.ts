@@ -393,7 +393,8 @@ async function buildLiveContext(userId: string, rawUser: any): Promise<string> {
   try {
     const ahRes = await pool.query(
       `SELECT total_steps, calories_burned, active_minutes, sleep_duration_min,
-              resting_heart_rate, avg_overnight_hrv, weight_kg, body_fat_pct
+              resting_heart_rate, avg_overnight_hrv, weight_kg, body_fat_pct,
+              workouts, vo2_max
        FROM apple_health_daily WHERE user_id=$1 AND date=$2`,
       [userId, today]
     );
@@ -407,13 +408,96 @@ async function buildLiveContext(userId: string, rawUser: any): Promise<string> {
       if (ah.resting_heart_rate) parts.push(`RHR: ${ah.resting_heart_rate} bpm`);
       if (ah.avg_overnight_hrv) parts.push(`HRV: ${ah.avg_overnight_hrv.toFixed(1)} ms`);
       if (ah.weight_kg) parts.push(`Weight: ${(ah.weight_kg * 2.20462).toFixed(1)} lbs`);
+      if (ah.workouts) {
+        const workouts = typeof ah.workouts === 'string' ? JSON.parse(ah.workouts) : ah.workouts;
+        if (Array.isArray(workouts) && workouts.length > 0) {
+          const workoutStr = workouts.map((w: any) =>
+            `${w.activity_type}: ${w.duration_min}min, ${w.calories}cal${w.avg_heart_rate ? `, avg HR ${w.avg_heart_rate}` : ''}`
+          ).join("; ");
+          parts.push(`Workouts: ${workoutStr}`);
+        }
+      }
+      if (ah.vo2_max) parts.push(`VO2 Max: ${ah.vo2_max}`);
       if (parts.length > 0) {
         appleHealthContext = "\n[Apple Health Today] " + parts.join(" | ");
       }
     }
   } catch { /* non-fatal */ }
 
-  return liveContext + garminContext + appleHealthContext;
+  // Append active training program + today's workout + recent logs
+  let trainingContext = "";
+  try {
+    const progRes = await pool.query(
+      `SELECT id, name, source, parsed_blocks, created_at FROM training_programs
+       WHERE user_id = $1 AND is_active = true LIMIT 1`,
+      [userId]
+    );
+    const activeProgram = progRes.rows[0];
+
+    if (activeProgram) {
+      const createdAt = new Date(activeProgram.created_at);
+      const weekNumber = Math.floor((Date.now() - createdAt.getTime()) / (7 * 24 * 60 * 60 * 1000));
+      const dayOfWeek = new Date().getDay();
+
+      let todayWorkout = "";
+      try {
+        const blocks = typeof activeProgram.parsed_blocks === 'string'
+          ? JSON.parse(activeProgram.parsed_blocks)
+          : activeProgram.parsed_blocks;
+        const week = blocks?.weeks?.find((w: any) => w.weekNumber === weekNumber);
+        const day = week?.days?.[dayOfWeek];
+        if (day) {
+          const exercises = day.exercises?.map((e: any) =>
+            `${e.name}: ${e.sets}x${e.reps}${e.weight ? ` @${e.weight}` : ''}${e.rpe ? ` RPE ${e.rpe}` : ''}`
+          ).join(", ");
+          todayWorkout = `Today's workout (${day.label || `Day ${dayOfWeek + 1}`}): ${exercises}`;
+        } else {
+          todayWorkout = "No workout scheduled for today in program";
+        }
+      } catch { todayWorkout = "Could not parse today's workout"; }
+
+      // Get last 3 workout logs for context
+      const logsRes = await pool.query(
+        `SELECT day_label, date, exercises, notes FROM workout_logs
+         WHERE user_id = $1 ORDER BY date DESC LIMIT 3`,
+        [userId]
+      );
+      const recentLogs = logsRes.rows.map((log: any) => {
+        const exList = (typeof log.exercises === 'string' ? JSON.parse(log.exercises) : log.exercises) || [];
+        const summary = exList.map((e: any) => {
+          const bestSet = e.sets?.reduce((best: any, s: any) =>
+            (s.weight > (best?.weight || 0)) ? s : best, null);
+          return bestSet ? `${e.name}: ${bestSet.reps}x${bestSet.weight}lbs` : e.name;
+        }).join(", ");
+        return `${log.date} (${log.day_label}): ${summary}${log.notes ? ` — "${log.notes}"` : ''}`;
+      }).join(" | ");
+
+      trainingContext = `\n[Training Program] Active: "${activeProgram.name}" (Week ${weekNumber + 1})`;
+      if (todayWorkout) trainingContext += `\n${todayWorkout}`;
+      if (recentLogs) trainingContext += `\n[Recent Workouts] ${recentLogs}`;
+    }
+  } catch { /* non-fatal */ }
+
+  // Append today's supplement logs
+  let supplementContext = "";
+  try {
+    const suppRes = await pool.query(
+      `SELECT s.name, s.brand, sl.servings, sl.logged_at
+       FROM supplement_logs sl
+       JOIN supplements s ON s.id = sl.supplement_id
+       WHERE sl.user_id = $1 AND sl.date = $2
+       ORDER BY sl.logged_at`,
+      [userId, today]
+    );
+    if (suppRes.rows.length > 0) {
+      const suppList = suppRes.rows.map((r: any) =>
+        `${r.name}${r.brand ? ` (${r.brand})` : ''} x${r.servings}`
+      ).join(", ");
+      supplementContext = `\n[Supplements Today] ${suppList}`;
+    }
+  } catch { /* non-fatal */ }
+
+  return liveContext + garminContext + appleHealthContext + trainingContext + supplementContext;
 }
 
 // ─── System Prompt ────────────────────────────────────────────────────────────

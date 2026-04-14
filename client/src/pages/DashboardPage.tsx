@@ -1,10 +1,11 @@
+import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { fmt1, todayStr, formatDate, kgToLbs, api } from "@/lib/api";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
-import { PlusCircle, Flame, TrendingUp, UtensilsCrossed, Trophy, Droplets, Plus, Minus } from "lucide-react";
+import { PlusCircle, Flame, TrendingUp, UtensilsCrossed, Trophy, Droplets, Plus, Minus, ChevronDown, Pill } from "lucide-react";
 import ProgressRing from "@/components/ProgressRing";
 
 // Hex fallbacks for macro colours
@@ -299,6 +300,9 @@ export default function DashboardPage() {
           </div>
         </div>
 
+        {/* Daily Micronutrients */}
+        <DailyMicros date={today} />
+
         {/* Recent Meals */}
         <div className="space-y-3">
           <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">Recent Meals</p>
@@ -463,5 +467,73 @@ export default function DashboardPage() {
         </p>
       </div>
     </div>
+  );
+}
+
+// ── Daily Micronutrients (collapsible) ────────────────────────────────────────
+function DailyMicros({ date }: { date: string }) {
+  const { data: micros } = useQuery({
+    queryKey: ["/api/nutrition/daily-micros", date],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/nutrition/daily-micros?date=${date}`);
+      return res.json();
+    },
+  });
+
+  const [expanded, setExpanded] = useState(false);
+
+  if (!micros || Object.values(micros).every(v => !v)) return null;
+
+  const items = [
+    { label: "Fiber",       value: micros.fiber_g,         unit: "g",  dv: 28,   color: "#a78bfa" },
+    { label: "Sugar",       value: micros.sugar_g,         unit: "g",  dv: 50,   color: "#fb923c" },
+    { label: "Sat. Fat",    value: micros.saturated_fat_g, unit: "g",  dv: 20,   color: "#f87171" },
+    { label: "Cholesterol", value: micros.cholesterol_mg,  unit: "mg", dv: 300,  color: "#fbbf24" },
+    { label: "Sodium",      value: micros.sodium_mg,       unit: "mg", dv: 2300, color: "#60a5fa" },
+    { label: "Potassium",   value: micros.potassium_mg,    unit: "mg", dv: 4700, color: "#34d399" },
+    { label: "Vitamin C",   value: micros.vitamin_c_mg,    unit: "mg", dv: 90,   color: "#fde047" },
+    { label: "Calcium",     value: micros.calcium_mg,      unit: "mg", dv: 1300, color: "#e2e8f0" },
+    { label: "Iron",        value: micros.iron_mg,         unit: "mg", dv: 18,   color: "#a3a3a3" },
+    { label: "Vitamin D",   value: micros.vitamin_d_iu,    unit: "IU", dv: 800,  color: "#fdba74" },
+  ].filter(item => item.value != null && item.value > 0);
+
+  if (items.length === 0) return null;
+
+  return (
+    <section className="rounded-2xl bg-slate-900 border border-slate-800/60 p-4">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center justify-between"
+      >
+        <h3 className="text-sm font-semibold flex items-center gap-2 text-slate-200">
+          <Pill className="w-4 h-4 text-purple-400" />
+          Daily Micronutrients
+        </h3>
+        <ChevronDown className={`w-4 h-4 text-slate-500 transition-transform ${expanded ? "rotate-180" : ""}`} />
+      </button>
+
+      {expanded && (
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          {items.map(item => {
+            const pct = Math.min(100, (item.value / item.dv) * 100);
+            return (
+              <div key={item.label} className="space-y-1">
+                <div className="flex justify-between text-xs">
+                  <span className="text-slate-500">{item.label}</span>
+                  <span className="font-medium text-slate-300">{item.value}{item.unit}</span>
+                </div>
+                <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                  <div
+                    className="h-full rounded-full transition-all"
+                    style={{ width: `${pct}%`, backgroundColor: item.color }}
+                  />
+                </div>
+                <span className="text-[10px] text-slate-500">{Math.round(pct)}% DV</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
   );
 }

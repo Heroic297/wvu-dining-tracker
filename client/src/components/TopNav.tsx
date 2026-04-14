@@ -1,14 +1,8 @@
 import { Link } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
-import { Home, UtensilsCrossed, Activity, MessageCircle, Settings, CalendarDays } from "lucide-react";
+import { Home, UtensilsCrossed, Activity, MessageCircle, Settings, CalendarDays, Dumbbell, Camera } from "lucide-react";
 import { cn } from "@/lib/utils";
-
-const PRIMARY_TABS = [
-  { href: "/",          label: "Home",   icon: Home             },
-  { href: "/log",       label: "Log",    icon: UtensilsCrossed  },
-  { href: "/wearables", label: "Health", icon: Activity         },
-  { href: "/coach",     label: "Coach",  icon: MessageCircle    },
-];
+import { useAuth } from "@/contexts/AuthContext";
 
 /** Inline "M" mark — two overlapping peaks, emerald on dark pill */
 function LogoMark({ size = 28 }: { size?: number }) {
@@ -33,6 +27,17 @@ function LogoMark({ size = 28 }: { size?: number }) {
 
 export default function TopNav() {
   const [loc] = useHashLocation();
+  const { user } = useAuth();
+  const showPhysique = user?.enablePhysiqueTracking === true;
+
+  const PRIMARY_TABS = [
+    { href: "/",          label: "Home",   icon: Home             },
+    { href: "/log",       label: "Log",    icon: UtensilsCrossed  },
+    { href: "/train",     label: "Train",  icon: Dumbbell         },
+    ...(showPhysique ? [{ href: "/physique", label: "Physique", icon: Camera }] : []),
+    { href: "/wearables", label: "Health", icon: Activity         },
+    { href: "/coach",     label: "Coach",  icon: MessageCircle    },
+  ];
 
   return (
     <header className="hidden md:flex items-center h-14 border-b border-border bg-slate-950/80 backdrop-blur-md px-4 gap-6 flex-shrink-0">
