@@ -320,11 +320,26 @@ export async function registerRoutes(
 
         // Check if menu is already cached
         let menu = await storage.getDiningMenu(location.id, date, mealType);
+        let items: Awaited<ReturnType<typeof storage.getDiningItems>> = [];
 
-        if (!menu) {
-          // On-demand scrape
+        if (menu) {
+          items = await storage.getDiningItems(menu.id);
+        }
+
+        // Trigger on-demand scrape if no menu row exists OR if the menu
+        // row exists but has zero items (orphaned by a prior failed scrape).
+        // To avoid hammering the remote site when a dining hall genuinely
+        // has no items, only re-scrape empty menus if scrapedAt is > 10 min old.
+        const RESCRAPE_COOLDOWN_MS = 10 * 60 * 1000;
+        const staleEnough = !menu?.scrapedAt ||
+          Date.now() - new Date(menu.scrapedAt).getTime() > RESCRAPE_COOLDOWN_MS;
+        const needsScrape = !menu || (items.length === 0 && staleEnough);
+        if (needsScrape) {
+          const reason = !menu
+            ? "no menu row"
+            : `menu exists but has 0 items (scraped ${menu.scrapedAt})`;
           console.log(
-            `[routes] On-demand scrape for ${locationSlug}/${mealType}/${date}`
+            `[routes] On-demand scrape for ${locationSlug}/${mealType}/${date} (${reason})`
           );
           try {
             const scraped = await scrapeLocationDate(locationSlug, date);
@@ -333,13 +348,14 @@ export async function registerRoutes(
             console.error(`[routes] On-demand scrape failed for ${locationSlug}/${date}:`, scrapeErr.message);
           }
           menu = await storage.getDiningMenu(location.id, date, mealType);
+          if (menu) {
+            items = await storage.getDiningItems(menu.id);
+          }
         }
 
         if (!menu) {
           return res.json({ menu: null, items: [], message: "No menu available for this selection" });
         }
-
-        let items = await storage.getDiningItems(menu.id);
 
         // Deduplicate items by name in case of prior double-scrape bug.
         // If duplicates exist, clean them from the DB so future reads are clean.

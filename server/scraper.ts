@@ -280,7 +280,8 @@ export async function scrapeLocationDate(
       }
     }
 
-    // Upsert menu row — returns existing row if already present
+    // Create menu row only after we have confirmed recipes to insert.
+    // This avoids orphan menu rows with zero items that block future re-scrapes.
     const menu = await storage.createDiningMenu({
       locationId: dbLocation.id,
       date: dateStr,
@@ -311,6 +312,7 @@ export async function scrapeLocationDate(
     });
 
     // Upsert items with conflict handling using onConflictDoUpdate
+    let itemsSaved = false;
     if (diningItemsArray.length > 0) {
       try {
         await db
@@ -326,6 +328,7 @@ export async function scrapeLocationDate(
               rawMetadata: sql`EXCLUDED.raw_metadata`,
             },
           });
+        itemsSaved = true;
       } catch (err: any) {
         console.error(`[scraper] Failed to upsert items for ${locationSlug}/${mealType}/${dateStr}:`, err.message);
         // Fallback: delete existing items and reinsert
@@ -333,17 +336,23 @@ export async function scrapeLocationDate(
           await db.delete(diningItems).where(sql`${diningItems.menuId} = ${menu.id}`);
           await db.insert(diningItems).values(diningItemsArray);
           console.log(`[scraper] Fallback insert succeeded for ${locationSlug}/${mealType}/${dateStr}`);
+          itemsSaved = true;
         } catch (fallbackErr: any) {
           console.error(`[scraper] Fallback insert also failed:`, fallbackErr.message);
-          continue;
         }
       }
     }
-    
-    console.log(
-      `[scraper] Saved ${diningItemsArray.length} items for ${locationSlug}/${mealType}/${dateStr}`
-    );
-    savedAny = true;
+
+    if (itemsSaved) {
+      console.log(
+        `[scraper] Saved ${diningItemsArray.length} items for ${locationSlug}/${mealType}/${dateStr}`
+      );
+      savedAny = true;
+    } else {
+      console.warn(
+        `[scraper] No items saved for ${locationSlug}/${mealType}/${dateStr} — menu row ${menu.id} exists but may be empty`
+      );
+    }
 
     // Brief pause between period requests
     await new Promise((r) => setTimeout(r, 300));
