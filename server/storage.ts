@@ -336,7 +336,20 @@ export class PgStorage implements IStorage {
 
   async createDiningItemsBulk(items: InsertDiningItem[]) {
     if (items.length === 0) return [];
-    return db.insert(diningItems).values(items).returning();
+    return db
+      .insert(diningItems)
+      .values(items)
+      .onConflictDoUpdate({
+        target: [diningItems.menuId, diningItems.name],
+        set: {
+          calories: sql`EXCLUDED.calories`,
+          proteinG: sql`EXCLUDED.proteinG`,
+          carbsG: sql`EXCLUDED.carbsG`,
+          fatG: sql`EXCLUDED.fatG`,
+          rawMetadata: sql`EXCLUDED.rawMetadata`,
+        },
+      })
+      .execute();
   }
 
   async deleteDiningItemsByMenu(menuId: string) {

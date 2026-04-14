@@ -23,7 +23,8 @@ import { z } from "zod";
 
 const FREE_DAILY_CAP = 15;
 const RECENT_WINDOW = 15;
-const COMPACT_THRESHOLD = 20;
+const COMPACT_THRESHOLD = 5;
+const INITIAL_SUMMARY_THRESHOLD = 5;
 
 // Default models per provider (all free)
 export const DEFAULT_MODELS: Record<string, string> = {
@@ -757,34 +758,59 @@ async function maybeCompact(userId: string, config: AiConfig): Promise<void> {
     [userId]
   );
   const n = parseInt(countRes.rows[0]?.n ?? "0", 10);
-  if (n <= COMPACT_THRESHOLD) return;
-
-  // Grab the oldest messages to compact (all but last RECENT_WINDOW)
-  const toCompact = await pool.query(
-    `SELECT id, role, content FROM chat_messages WHERE user_id=$1
-     ORDER BY created_at ASC LIMIT $2`,
-    [userId, n - RECENT_WINDOW]
-  );
-  if (toCompact.rows.length === 0) return;
-
-  // Get existing summary
+  
+  // Get existing summary and profile
   const profRes = await pool.query(
-    "SELECT rolling_summary FROM ai_profiles WHERE user_id=$1",
+    "SELECT rolling_summary, preferred_name, main_goal, is_wvu_student, experience_level, notes, coach_tone FROM ai_profiles WHERE user_id=$1",
     [userId]
   );
-  const existingSummary = profRes.rows[0]?.rolling_summary ?? "";
+  const profile = profRes.rows[0];
+  const existingSummary = profile?.rolling_summary ?? "";
+  
+  // Check if we need initial summary generation (no summary yet, but enough messages)
+  const needsInitialSummary = !existingSummary && n >= INITIAL_SUMMARY_THRESHOLD;
+  
+  if (!needsInitialSummary && n <= COMPACT_THRESHOLD) {
+    return;
+  }
+
+  // Get user info from users table
+  const userRes = await pool.query(
+    "SELECT preferred_name, main_goal, is_wvu_student, experience_level, notes, coach_tone FROM users WHERE id=$1",
+    [userId]
+  );
+  const user = userRes.rows[0];
+  
+  // Get recent messages for context
+  const recentRes = await pool.query(
+    `SELECT id, role, content FROM chat_messages WHERE user_id=$1
+     ORDER BY created_at ASC`,
+    [userId]
+  );
+  const messages = recentRes.rows.slice(
+    needsInitialSummary ? 0 : Math.max(0, n - RECENT_WINDOW),
+    needsInitialSummary ? n : n - RECENT_WINDOW
+  );
 
   // Build compaction prompt
-  const transcript = toCompact.rows
+  const transcript = messages
     .map((r: any) => `${r.role.toUpperCase()}: ${r.content}`)
     .join("\n");
 
   const compactionPrompt = `You are summarizing a health coaching conversation to create a compact memory record.
 
+USER PROFILE INFO:
+- Preferred Name: ${user?.preferred_name || "Not provided"}
+- Main Goal: ${user?.main_goal || "Not provided"}
+- Is WVU Student: ${user?.is_wvu_student ? "Yes" : "No"}
+- Experience Level: ${user?.experience_level || "Not provided"}
+- User Notes: ${user?.notes || "None"}
+- Coach Tone: ${user?.coach_tone || "balanced"}
+
 EXISTING SUMMARY:
 ${existingSummary || "(none yet)"}
 
-NEW CONVERSATION TO INTEGRATE:
+RECENT CONVERSATION CONTEXT:
 ${transcript}
 
 Write a new rolling summary that:
@@ -802,16 +828,20 @@ Return ONLY the summary text, no preamble.`;
     ], []);
     const newSummary = compactRes.choices?.[0]?.message?.content?.trim() ?? existingSummary;
 
-    // Save summary and delete compacted messages
+    // Save summary (and delete compacted messages if we're doing regular compaction)
     await pool.query(
       "UPDATE ai_profiles SET rolling_summary=$1, updated_at=now() WHERE user_id=$2",
       [newSummary, userId]
     );
-    const ids = toCompact.rows.map((r: any) => r.id);
-    await pool.query(
-      `DELETE FROM chat_messages WHERE id = ANY($1::varchar[])`,
-      [ids]
-    );
+    
+    // Only delete messages if we're doing regular compaction (not initial summary)
+    if (!needsInitialSummary) {
+      const ids = messages.map((r: any) => r.id);
+      await pool.query(
+        `DELETE FROM chat_messages WHERE id = ANY($1::varchar[])`,
+        [ids]
+      );
+    }
   } catch (err: any) {
     console.error("[coach] compaction failed (non-fatal):", err.message);
   }

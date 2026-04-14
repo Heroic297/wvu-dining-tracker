@@ -21,6 +21,9 @@ import axios from "axios";
 import * as cheerio from "cheerio";
 import { storage } from "./storage.js";
 import type { InsertDiningItem } from "../shared/schema.js";
+import { sql } from "drizzle-orm";
+import { db } from "./db.js";
+import { diningItems } from "../shared/schema.js";
 
 // ── Location config ───────────────────────────────────────────────────────────
 
@@ -225,14 +228,6 @@ export async function scrapeLocationDate(
       continue;
     }
 
-    // Skip if already cached
-    const existing = await storage.getDiningMenu(dbLocation.id, dateStr, mealType);
-    if (existing) {
-      console.log(`[scraper] Already cached: ${locationSlug}/${mealType}/${dateStr}`);
-      savedAny = true;
-      continue;
-    }
-
     // Step 2: fetch the specific period page
     let html: string;
     try {
@@ -269,11 +264,7 @@ export async function scrapeLocationDate(
       mealType,
     });
 
-    // Clear any previously saved items for this menu to prevent duplicates
-    // (createDiningMenu uses onConflictDoUpdate so the same menu ID is reused)
-    await storage.deleteDiningItemsByMenu(menu.id);
-
-    const diningItems: InsertDiningItem[] = recipes.map((recipe) => {
+    const diningItemsArray: InsertDiningItem[] = recipes.map((recipe) => {
       const ntrs = recipe.ntrs ?? [];
       const calories = recipe.calories != null
         ? parseInt(String(recipe.calories), 10) || null
@@ -296,9 +287,25 @@ export async function scrapeLocationDate(
       };
     });
 
-    await storage.createDiningItemsBulk(diningItems);
+    // Upsert items with conflict handling using onConflictDoUpdate
+    if (diningItemsArray.length > 0) {
+      await db
+        .insert(diningItems)
+        .values(diningItemsArray)
+        .onConflictDoUpdate({
+          target: [diningItems.menuId, diningItems.name],
+          set: {
+            calories: sql`EXCLUDED.calories`,
+            proteinG: sql`EXCLUDED.proteinG`,
+            carbsG: sql`EXCLUDED.carbsG`,
+            fatG: sql`EXCLUDED.fatG`,
+            rawMetadata: sql`EXCLUDED.rawMetadata`,
+          },
+        });
+    }
+    
     console.log(
-      `[scraper] Saved ${diningItems.length} items for ${locationSlug}/${mealType}/${dateStr}`
+      `[scraper] Saved ${diningItemsArray.length} items for ${locationSlug}/${mealType}/${dateStr}`
     );
     savedAny = true;
 

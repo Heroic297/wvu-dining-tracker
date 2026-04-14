@@ -189,6 +189,10 @@ async function runMigrations() {
     await pool.query(`
       ALTER TABLE weight_log ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'manual'
     `);
+    // Prevent duplicate dining items by adding unique constraint
+    await pool.query(`
+      ALTER TABLE dining_items ADD CONSTRAINT IF NOT EXISTS dining_items_unique_menu_name UNIQUE (menu_id, name)
+    `);
     console.log("[db] migrations complete");
   } catch (err: any) {
     console.error("[db] Migration error:", err.message);
