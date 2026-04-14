@@ -21,7 +21,7 @@ import { z } from "zod";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const FREE_DAILY_CAP = 15;
+const FREE_DAILY_CAP = 200; // Server-pooled Groq key — higher cap for all users
 const RECENT_WINDOW = 15;
 const COMPACT_THRESHOLD = 5;
 const INITIAL_SUMMARY_THRESHOLD = 5;
@@ -388,7 +388,32 @@ async function buildLiveContext(userId: string, rawUser: any): Promise<string> {
     if (gc) garminContext = "\n" + gc;
   } catch { /* non-fatal — coach works fine without wearable data */ }
 
-  return liveContext + garminContext;
+  // Append Apple Health data if available
+  let appleHealthContext = "";
+  try {
+    const ahRes = await pool.query(
+      `SELECT total_steps, calories_burned, active_minutes, sleep_duration_min,
+              resting_heart_rate, avg_overnight_hrv, weight_kg, body_fat_pct
+       FROM apple_health_daily WHERE user_id=$1 AND date=$2`,
+      [userId, today]
+    );
+    const ah = ahRes.rows[0];
+    if (ah) {
+      const parts: string[] = [];
+      if (ah.total_steps) parts.push(`Steps: ${ah.total_steps.toLocaleString()}`);
+      if (ah.calories_burned) parts.push(`Active cal burned: ${ah.calories_burned}`);
+      if (ah.active_minutes) parts.push(`Active minutes: ${ah.active_minutes}`);
+      if (ah.sleep_duration_min) parts.push(`Sleep: ${Math.floor(ah.sleep_duration_min / 60)}h ${ah.sleep_duration_min % 60}m`);
+      if (ah.resting_heart_rate) parts.push(`RHR: ${ah.resting_heart_rate} bpm`);
+      if (ah.avg_overnight_hrv) parts.push(`HRV: ${ah.avg_overnight_hrv.toFixed(1)} ms`);
+      if (ah.weight_kg) parts.push(`Weight: ${(ah.weight_kg * 2.20462).toFixed(1)} lbs`);
+      if (parts.length > 0) {
+        appleHealthContext = "\n[Apple Health Today] " + parts.join(" | ");
+      }
+    }
+  } catch { /* non-fatal */ }
+
+  return liveContext + garminContext + appleHealthContext;
 }
 
 // ─── System Prompt ────────────────────────────────────────────────────────────

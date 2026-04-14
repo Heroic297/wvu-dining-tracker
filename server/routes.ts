@@ -29,6 +29,8 @@ import { z } from "zod";
 import { randomUUID } from "crypto";
 import crypto from "crypto";
 import { registerCoachRoutes } from "./coach.js";
+import { registerAppleHealthRoutes } from "./appleHealth.js";
+import { registerProgramRoutes } from "./programs.js";
 
 const CRON_SECRET = process.env.CRON_SECRET ?? "cron-secret";
 const ADMIN_SECRET = process.env.ADMIN_SECRET ?? "";
@@ -39,6 +41,8 @@ export async function registerRoutes(
 ): Promise<Server> {
   // ── AI Coach ──────────────────────────────────────────────────────────
   registerCoachRoutes(app);
+  registerAppleHealthRoutes(app);
+  registerProgramRoutes(app);
 
   // ── Auth ───────────────────────────────────────────────────────────────────
 
@@ -217,6 +221,8 @@ export async function registerRoutes(
           mlSize: z.number().positive(),
         })).optional(),
         waterUnit: z.enum(["ml", "oz", "L", "gal"]).optional(),
+        enablePhysiqueTracking: z.boolean().optional(),
+        enableWaterCut: z.boolean().optional(),
         onboardingComplete: z.boolean().optional(),
       });
       const data = updateSchema.parse(req.body);
@@ -1358,6 +1364,270 @@ export async function registerRoutes(
       }
     }
   );
+
+  // ── Vision — Food Photo Analysis ──────────────────────────────────────────
+  app.post("/api/vision/analyze-food", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const { imageBase64 } = req.body;
+      if (!imageBase64 || typeof imageBase64 !== "string") {
+        return res.status(400).json({ error: "imageBase64 required" });
+      }
+      const base64Data = imageBase64.replace(/^data:image\/[a-z]+;base64,/, "");
+      if (!/^[A-Za-z0-9+/]+=*$/.test(base64Data.slice(0, 100))) {
+        return res.status(400).json({ error: "Invalid image data" });
+      }
+      const groqKey = process.env.GROQ_API_KEY;
+      if (!groqKey) return res.status(503).json({ error: "Vision service unavailable" });
+
+      const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${groqKey}` },
+        body: JSON.stringify({
+          model: "meta-llama/llama-4-scout-17b-16e-instruct",
+          messages: [{
+            role: "user",
+            content: [
+              { type: "image_url", image_url: { url: `data:image/jpeg;base64,${base64Data}` } },
+              { type: "text", text: `Analyze this food image. Identify each distinct food item visible.\nFor each item return a JSON array with this exact shape:\n[{ "name": string, "calories": number, "proteinG": number, "carbsG": number, "fatG": number, "servingSize": string, "confidence": "high"|"medium"|"low" }]\nUse realistic nutritional estimates based on visible portion size.\nRespond ONLY with the JSON array, no other text.` },
+            ],
+          }],
+          max_tokens: 512,
+          temperature: 0.1,
+        }),
+      });
+
+      if (!response.ok) {
+        const err = await response.text();
+        console.error("[vision] Groq error:", err);
+        return res.status(502).json({ error: "Vision analysis failed" });
+      }
+
+      const data = await response.json();
+      const content = data.choices?.[0]?.message?.content ?? "[]";
+      let items: any[] = [];
+      try {
+        const match = content.match(/\[[\s\S]*\]/);
+        items = match ? JSON.parse(match[0]) : [];
+      } catch { items = []; }
+
+      const sanitized = items.map((item: any) => ({
+        name: String(item.name ?? "Unknown food").slice(0, 100),
+        calories: Math.max(0, Number(item.calories) || 0),
+        proteinG: Math.max(0, Number(item.proteinG) || 0),
+        carbsG: Math.max(0, Number(item.carbsG) || 0),
+        fatG: Math.max(0, Number(item.fatG) || 0),
+        servingSize: String(item.servingSize ?? "1 serving").slice(0, 80),
+        confidence: ["high", "medium", "low"].includes(item.confidence) ? item.confidence : "medium",
+      }));
+      res.json({ items: sanitized });
+    } catch (err: any) {
+      console.error("[vision] error:", err.message);
+      res.status(500).json({ error: "Vision analysis failed" });
+    }
+  });
+
+  // ── Supplements ────────────────────────────────────────────────────────────
+  app.get("/api/supplements", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const userId = req.user!.id;
+      const result = await pool.query(
+        "SELECT * FROM supplements WHERE user_id=$1 AND is_active=TRUE ORDER BY name",
+        [userId]
+      );
+      res.json(result.rows);
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post("/api/supplements", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const userId = req.user!.id;
+      const { name, brand, barcode, servingSize, servingUnit, calories, proteinG, carbsG, fatG, fiberG, sodiumMg, vitaminCMg, vitaminDIu, vitaminB12Mcg, zincMg, magnesiumMg, calciumMg, ironMg, customNutrients, notes } = req.body;
+      const result = await pool.query(
+        `INSERT INTO supplements (user_id, name, brand, barcode, serving_size, serving_unit, calories, protein_g, carbs_g, fat_g, fiber_g, sodium_mg, vitamin_c_mg, vitamin_d_iu, vitamin_b12_mcg, zinc_mg, magnesium_mg, calcium_mg, iron_mg, custom_nutrients, notes)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21) RETURNING *`,
+        [userId, name, brand, barcode, servingSize, servingUnit ?? 'serving', calories, proteinG, carbsG, fatG, fiberG, sodiumMg, vitaminCMg, vitaminDIu, vitaminB12Mcg, zincMg, magnesiumMg, calciumMg, ironMg, customNutrients ? JSON.stringify(customNutrients) : null, notes]
+      );
+      res.json(result.rows[0]);
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.patch("/api/supplements/:id", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const userId = req.user!.id;
+      const { id } = req.params;
+      const fields: string[] = [];
+      const values: any[] = [];
+      let idx = 1;
+      for (const [key, val] of Object.entries(req.body)) {
+        const col = key.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
+        fields.push(`${col}=$${idx++}`);
+        values.push(val);
+      }
+      if (fields.length === 0) return res.status(400).json({ error: "No fields to update" });
+      values.push(id, userId);
+      const result = await pool.query(
+        `UPDATE supplements SET ${fields.join(", ")} WHERE id=$${idx++} AND user_id=$${idx} RETURNING *`,
+        values
+      );
+      if (!result.rows[0]) return res.status(404).json({ error: "Not found" });
+      res.json(result.rows[0]);
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.delete("/api/supplements/:id", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const userId = req.user!.id;
+      await pool.query("UPDATE supplements SET is_active=FALSE WHERE id=$1 AND user_id=$2", [req.params.id, userId]);
+      res.json({ ok: true });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.get("/api/supplements/barcode/:barcode", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const userId = req.user!.id;
+      const result = await pool.query(
+        "SELECT * FROM supplements WHERE user_id=$1 AND barcode=$2 AND is_active=TRUE LIMIT 1",
+        [userId, req.params.barcode]
+      );
+      if (result.rows[0]) return res.json(result.rows[0]);
+      res.status(404).json({ error: "Not found" });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.get("/api/supplement-logs", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const userId = req.user!.id;
+      const date = String(req.query.date ?? "").slice(0, 10) || new Date().toISOString().slice(0, 10);
+      const result = await pool.query(
+        `SELECT sl.*, s.name as supplement_name, s.brand, s.calories, s.protein_g, s.serving_size
+         FROM supplement_logs sl JOIN supplements s ON s.id = sl.supplement_id
+         WHERE sl.user_id=$1 AND sl.date=$2 ORDER BY sl.logged_at`,
+        [userId, date]
+      );
+      res.json(result.rows);
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post("/api/supplement-logs", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const userId = req.user!.id;
+      const { supplementId, date, servings } = req.body;
+      const result = await pool.query(
+        "INSERT INTO supplement_logs (user_id, supplement_id, date, servings) VALUES ($1,$2,$3,$4) RETURNING *",
+        [userId, supplementId, date ?? new Date().toISOString().slice(0, 10), servings ?? 1]
+      );
+      res.json(result.rows[0]);
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.delete("/api/supplement-logs/:id", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const userId = req.user!.id;
+      await pool.query("DELETE FROM supplement_logs WHERE id=$1 AND user_id=$2", [req.params.id, userId]);
+      res.json({ ok: true });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  // ── Physique Tracking ──────────────────────────────────────────────────────
+  app.get("/api/physique/photos", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const userId = req.user!.id;
+      const result = await pool.query(
+        "SELECT * FROM physique_photos WHERE user_id=$1 ORDER BY photo_date DESC",
+        [userId]
+      );
+      res.json(result.rows);
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post("/api/physique/photos", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const userId = req.user!.id;
+      const { photoUrl, photoDate, weightKg, bodyFatPct, notes } = req.body;
+      if (!photoUrl || !photoDate) return res.status(400).json({ error: "photoUrl and photoDate required" });
+      const result = await pool.query(
+        "INSERT INTO physique_photos (user_id, photo_url, photo_date, weight_kg, body_fat_pct, notes) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *",
+        [userId, photoUrl, photoDate, weightKg ?? null, bodyFatPct ?? null, notes ?? null]
+      );
+      res.json(result.rows[0]);
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.delete("/api/physique/photos/:id", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const userId = req.user!.id;
+      await pool.query("DELETE FROM physique_photos WHERE id=$1 AND user_id=$2", [req.params.id, userId]);
+      res.json({ ok: true });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post("/api/physique/compare", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const { photoId1, photoId2 } = req.body;
+      const userId = req.user!.id;
+      const photos = await pool.query(
+        "SELECT * FROM physique_photos WHERE id = ANY($1) AND user_id=$2",
+        [[photoId1, photoId2], userId]
+      );
+      if (photos.rows.length !== 2) return res.status(404).json({ error: "Photos not found" });
+
+      const [p1, p2] = photos.rows.sort((a: any, b: any) =>
+        new Date(a.photo_date).getTime() - new Date(b.photo_date).getTime()
+      );
+      const groqKey = process.env.GROQ_API_KEY;
+      if (!groqKey) return res.status(503).json({ error: "AI unavailable" });
+
+      const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${groqKey}` },
+        body: JSON.stringify({
+          model: "meta-llama/llama-4-scout-17b-16e-instruct",
+          messages: [{
+            role: "user",
+            content: [
+              { type: "image_url", image_url: { url: p1.photo_url } },
+              { type: "image_url", image_url: { url: p2.photo_url } },
+              { type: "text", text: `These are two physique progress photos. The first is from ${p1.photo_date}${p1.weight_kg ? ` at ${(p1.weight_kg * 2.20462).toFixed(1)} lbs` : ""}. The second is from ${p2.photo_date}${p2.weight_kg ? ` at ${(p2.weight_kg * 2.20462).toFixed(1)} lbs` : ""}.\nProvide a concise, factual comparison focusing on visible changes in muscle definition, body composition, and overall physique. Be specific and positive. Under 150 words.` }
+            ]
+          }],
+          max_tokens: 200,
+          temperature: 0.4,
+        }),
+      });
+      const data = await response.json();
+      const analysis = data.choices?.[0]?.message?.content ?? "No analysis available.";
+      await pool.query("UPDATE physique_photos SET groq_analysis=$1 WHERE id=$2", [analysis, p2.id]);
+      res.json({ analysis, photo1: p1, photo2: p2 });
+    } catch (err: any) {
+      console.error("[physique] compare error:", err.message);
+      res.status(500).json({ error: "Comparison failed" });
+    }
+  });
+
+  // ── Daily Micronutrients ───────────────────────────────────────────────────
+  app.get("/api/nutrition/daily-micros", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const date = String(req.query.date ?? "").slice(0, 10) || new Date().toISOString().slice(0, 10);
+      const userId = req.user!.id;
+      const result = await pool.query(`
+        SELECT
+          ROUND(SUM(umi.fiber_g)::numeric, 1)         as fiber_g,
+          ROUND(SUM(umi.sugar_g)::numeric, 1)         as sugar_g,
+          ROUND(SUM(umi.sodium_mg)::numeric, 0)       as sodium_mg,
+          ROUND(SUM(umi.potassium_mg)::numeric, 0)    as potassium_mg,
+          ROUND(SUM(umi.vitamin_c_mg)::numeric, 1)    as vitamin_c_mg,
+          ROUND(SUM(umi.calcium_mg)::numeric, 0)      as calcium_mg,
+          ROUND(SUM(umi.iron_mg)::numeric, 1)         as iron_mg,
+          ROUND(SUM(umi.vitamin_d_iu)::numeric, 0)    as vitamin_d_iu,
+          ROUND(SUM(umi.saturated_fat_g)::numeric, 1) as saturated_fat_g,
+          ROUND(SUM(umi.cholesterol_mg)::numeric, 0)  as cholesterol_mg
+        FROM user_meal_items umi
+        JOIN user_meals um ON um.id = umi.user_meal_id
+        WHERE um.user_id=$1 AND um.date=$2
+      `, [userId, date]);
+      res.json(result.rows[0] ?? {});
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
 
   return httpServer;
 }

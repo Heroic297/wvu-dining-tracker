@@ -4,7 +4,6 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
 import { Toaster } from "@/components/ui/toaster";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
-import { LocalModelProvider } from "@/contexts/LocalModelContext";
 import Layout from "@/components/Layout";
 import LoginPage from "@/pages/LoginPage";
 import OnboardingPage from "@/pages/OnboardingPage";
@@ -16,6 +15,8 @@ import SettingsPage from "@/pages/SettingsPage";
 import InvitePage from "@/pages/InvitePage";
 import CoachPage from "@/pages/CoachPage";
 import WearablesPage from "@/pages/WearablesPage";
+import PhysiquePage from "@/pages/PhysiquePage";
+import TrainingPage from "@/pages/TrainingPage";
 import { Loader2 } from "lucide-react";
 
 function AppRoutes() {
@@ -48,6 +49,8 @@ function AppRoutes() {
         <Route path="/wearables" component={WearablesPage} />
         <Route path="/invites" component={InvitePage} />
         <Route path="/coach" component={CoachPage} />
+        <Route path="/physique" component={PhysiquePage} />
+        <Route path="/train" component={TrainingPage} />
         <Route component={DashboardPage} />
       </Switch>
     </Layout>
@@ -58,13 +61,11 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
-        <LocalModelProvider>
-          {/* Single Router at the top — Layout's useHashLocation and all Links share this context */}
-          <Router hook={useHashLocation}>
-            <AppRoutes />
-            <Toaster />
-          </Router>
-        </LocalModelProvider>
+        {/* Single Router at the top — Layout's useHashLocation and all Links share this context */}
+        <Router hook={useHashLocation}>
+          <AppRoutes />
+          <Toaster />
+        </Router>
       </AuthProvider>
     </QueryClientProvider>
   );

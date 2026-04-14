@@ -189,6 +189,136 @@ async function runMigrations() {
     await pool.query(`
       ALTER TABLE weight_log ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'manual'
     `);
+
+    // ── Apple Health ──────────────────────────────────────────────────────
+    try { await pool.query(`ALTER TYPE wearable_source ADD VALUE IF NOT EXISTS 'apple_health'`); } catch { /* already exists */ }
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS apple_health_token TEXT`);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS apple_health_daily (
+        id                 VARCHAR(36) PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id            VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        date               DATE NOT NULL,
+        total_steps        INTEGER,
+        calories_burned    INTEGER,
+        active_minutes     INTEGER,
+        sleep_duration_min INTEGER,
+        deep_sleep_min     INTEGER,
+        rem_sleep_min      INTEGER,
+        resting_heart_rate INTEGER,
+        avg_overnight_hrv  REAL,
+        weight_kg          REAL,
+        body_fat_pct       REAL,
+        synced_at          TIMESTAMPTZ DEFAULT now(),
+        UNIQUE(user_id, date)
+      )
+    `);
+
+    // ── Micronutrient columns on user_meal_items ──────────────────────────
+    await pool.query(`ALTER TABLE user_meal_items ADD COLUMN IF NOT EXISTS fiber_g REAL`);
+    await pool.query(`ALTER TABLE user_meal_items ADD COLUMN IF NOT EXISTS sugar_g REAL`);
+    await pool.query(`ALTER TABLE user_meal_items ADD COLUMN IF NOT EXISTS sodium_mg REAL`);
+    await pool.query(`ALTER TABLE user_meal_items ADD COLUMN IF NOT EXISTS potassium_mg REAL`);
+    await pool.query(`ALTER TABLE user_meal_items ADD COLUMN IF NOT EXISTS vitamin_c_mg REAL`);
+    await pool.query(`ALTER TABLE user_meal_items ADD COLUMN IF NOT EXISTS calcium_mg REAL`);
+    await pool.query(`ALTER TABLE user_meal_items ADD COLUMN IF NOT EXISTS iron_mg REAL`);
+    await pool.query(`ALTER TABLE user_meal_items ADD COLUMN IF NOT EXISTS vitamin_d_iu REAL`);
+    await pool.query(`ALTER TABLE user_meal_items ADD COLUMN IF NOT EXISTS saturated_fat_g REAL`);
+    await pool.query(`ALTER TABLE user_meal_items ADD COLUMN IF NOT EXISTS trans_fat_g REAL`);
+    await pool.query(`ALTER TABLE user_meal_items ADD COLUMN IF NOT EXISTS cholesterol_mg REAL`);
+    await pool.query(`ALTER TABLE user_meal_items ADD COLUMN IF NOT EXISTS barcode TEXT`);
+
+    // ── Supplements ───────────────────────────────────────────────────────
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS supplements (
+        id            VARCHAR(36) PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id       VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name          TEXT NOT NULL,
+        brand         TEXT,
+        barcode       TEXT,
+        serving_size  TEXT,
+        serving_unit  TEXT DEFAULT 'serving',
+        calories      REAL,
+        protein_g     REAL,
+        carbs_g       REAL,
+        fat_g         REAL,
+        fiber_g       REAL,
+        sodium_mg     REAL,
+        vitamin_c_mg  REAL,
+        vitamin_d_iu  REAL,
+        vitamin_b12_mcg REAL,
+        zinc_mg       REAL,
+        magnesium_mg  REAL,
+        calcium_mg    REAL,
+        iron_mg       REAL,
+        custom_nutrients JSONB,
+        notes         TEXT,
+        is_active     BOOLEAN DEFAULT TRUE,
+        created_at    TIMESTAMPTZ DEFAULT now()
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS supplements_user_id ON supplements(user_id)`);
+
+    // ── Supplement Logs ───────────────────────────────────────────────────
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS supplement_logs (
+        id             VARCHAR(36) PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id        VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        supplement_id  VARCHAR(36) NOT NULL REFERENCES supplements(id) ON DELETE CASCADE,
+        date           DATE NOT NULL,
+        servings       REAL NOT NULL DEFAULT 1,
+        logged_at      TIMESTAMPTZ DEFAULT now()
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS supplement_logs_user_date ON supplement_logs(user_id, date)`);
+
+    // ── Physique Tracking ─────────────────────────────────────────────────
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS enable_physique_tracking BOOLEAN DEFAULT FALSE`);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS physique_photos (
+        id          VARCHAR(36) PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id     VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        photo_url   TEXT NOT NULL,
+        weight_kg   REAL,
+        body_fat_pct REAL,
+        notes       TEXT,
+        photo_date  DATE NOT NULL,
+        groq_analysis TEXT,
+        created_at  TIMESTAMPTZ DEFAULT now()
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS physique_photos_user_date ON physique_photos(user_id, photo_date)`);
+
+    // ── Training Programs ─────────────────────────────────────────────────
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS training_programs (
+        id            VARCHAR(36) PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id       VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name          TEXT NOT NULL,
+        source        TEXT NOT NULL DEFAULT 'manual',
+        raw_content   TEXT,
+        parsed_blocks JSONB,
+        is_active     BOOLEAN DEFAULT TRUE,
+        created_at    TIMESTAMPTZ DEFAULT now(),
+        updated_at    TIMESTAMPTZ DEFAULT now()
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS training_programs_user_id ON training_programs(user_id)`);
+
+    // ── Workout Logs ──────────────────────────────────────────────────────
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS workout_logs (
+        id              VARCHAR(36) PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id         VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        program_id      VARCHAR(36) REFERENCES training_programs(id) ON DELETE SET NULL,
+        date            DATE NOT NULL,
+        week_number     INTEGER,
+        day_label       TEXT,
+        exercises       JSONB NOT NULL DEFAULT '[]',
+        notes           TEXT,
+        logged_at       TIMESTAMPTZ DEFAULT now()
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS workout_logs_user_date ON workout_logs(user_id, date)`);
     // Prevent duplicate dining items by adding unique constraint.
     // First, purge any pre-existing duplicate (menu_id, name) rows so the
     // unique index can be built.  We keep the row with the latest `id`

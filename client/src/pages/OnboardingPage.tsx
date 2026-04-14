@@ -27,6 +27,14 @@ const schema = z.object({
   goalType: z.enum(["weight_loss", "weight_gain", "powerlifting_loss", "powerlifting_gain", "maintenance"]),
   targetWeightLbs: z.number().positive().optional(),
   targetDate: z.string().optional(),
+  // Hydration
+  enableWaterTracking: z.boolean().optional(),
+  waterUnit: z.enum(["oz", "ml", "L"]).optional(),
+  waterBottleName: z.string().optional(),
+  waterBottleMl: z.number().optional(),
+  // Physique
+  enablePhysiqueTracking: z.boolean().optional(),
+  // Powerlifting
   trainingDays: z.array(z.number()).optional(),
   meetDate: z.string().optional(),
   enableWaterCut: z.boolean().optional(),
@@ -46,6 +54,9 @@ export default function OnboardingPage() {
       sex: "male",
       activityLevel: "moderately_active",
       goalType: "maintenance",
+      enableWaterTracking: false,
+      waterUnit: "oz",
+      enablePhysiqueTracking: false,
       trainingDays: [1, 3, 5],
       enableWaterCut: false,
     },
@@ -57,6 +68,8 @@ export default function OnboardingPage() {
   const steps = [
     { title: "Body stats", subtitle: "Used to calculate your calorie targets" },
     { title: "Goal setting", subtitle: "What are you working toward?" },
+    { title: "Hydration", subtitle: "Optional water intake tracking" },
+    { title: "Physique tracking", subtitle: "Optional progress photo tracking" },
     ...(isPowerlifting ? [{ title: "Powerlifting", subtitle: "Configure your training and meet" }] : []),
   ];
 
@@ -75,6 +88,8 @@ export default function OnboardingPage() {
         goalType: data.goalType,
         trainingDays: data.trainingDays ?? [],
         enableWaterCut: data.enableWaterCut ?? false,
+        enableWaterTracking: data.enableWaterTracking ?? false,
+        enablePhysiqueTracking: data.enablePhysiqueTracking ?? false,
         onboardingComplete: true,
         burnMode: "tdee",
         // Only include optional fields when they have a value —
@@ -83,6 +98,14 @@ export default function OnboardingPage() {
         ...(data.targetDate   ? { targetDate: data.targetDate }   : {}),
         meetDate: data.meetDate || null,  // meetDate allows null on the server
       };
+
+      // Hydration setup
+      if (data.enableWaterTracking) {
+        payload.waterUnit = data.waterUnit ?? "oz";
+        if (data.waterBottleName && data.waterBottleMl) {
+          payload.waterBottles = [{ id: crypto.randomUUID(), name: data.waterBottleName, mlSize: data.waterBottleMl }];
+        }
+      }
 
       const resp = await api.updateProfile(payload);
       const updated = await resp.json();
@@ -226,8 +249,93 @@ export default function OnboardingPage() {
               </div>
             )}
 
-            {/* Step 2: Powerlifting */}
-            {step === 2 && isPowerlifting && (
+            {/* Step 2: Hydration */}
+            {step === 2 && (
+              <div className="space-y-4">
+                <p className="text-sm text-muted-foreground">
+                  Macro can track your daily water intake. This is optional — you can always enable it later in Settings.
+                </p>
+                <div className="flex items-center gap-3">
+                  <Checkbox
+                    id="enableWater"
+                    checked={form.watch("enableWaterTracking")}
+                    onCheckedChange={(v) => form.setValue("enableWaterTracking", !!v)}
+                  />
+                  <Label htmlFor="enableWater" className="cursor-pointer font-medium">
+                    Enable water tracking
+                  </Label>
+                </div>
+                {form.watch("enableWaterTracking") && (
+                  <div className="space-y-4 pt-2 border-t border-border">
+                    <div className="space-y-1.5">
+                      <Label>Preferred unit</Label>
+                      <Select
+                        onValueChange={(v) => form.setValue("waterUnit", v as any)}
+                        defaultValue="oz"
+                      >
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="oz">oz (fluid ounces)</SelectItem>
+                          <SelectItem value="ml">ml</SelectItem>
+                          <SelectItem value="L">L (liters)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Add a water bottle (optional)</Label>
+                      <p className="text-xs text-muted-foreground">
+                        Save a bottle so you can log with one tap. You can add more in Settings.
+                      </p>
+                      <div className="flex gap-2">
+                        <Input
+                          placeholder="e.g. Nalgene 32oz"
+                          value={form.watch("waterBottleName") ?? ""}
+                          onChange={(e) => form.setValue("waterBottleName", e.target.value)}
+                        />
+                        <div className="relative w-28">
+                          <Input
+                            type="number"
+                            placeholder="946"
+                            value={form.watch("waterBottleMl") ?? ""}
+                            onChange={(e) => form.setValue("waterBottleMl", Number(e.target.value))}
+                          />
+                          <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">ml</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Step 3: Physique Tracking */}
+            {step === 3 && (
+              <div className="space-y-4">
+                <p className="text-sm text-muted-foreground">
+                  Physique tracking lets you upload progress photos over time. Photos are stored privately and only visible to you.
+                </p>
+                <div className="flex items-center gap-3">
+                  <Checkbox
+                    id="enablePhysique"
+                    checked={form.watch("enablePhysiqueTracking")}
+                    onCheckedChange={(v) => form.setValue("enablePhysiqueTracking", !!v)}
+                  />
+                  <Label htmlFor="enablePhysique" className="cursor-pointer font-medium">
+                    Enable physique tracking
+                  </Label>
+                </div>
+                {form.watch("enablePhysiqueTracking") && (
+                  <div className="p-3 rounded-lg bg-muted text-sm text-muted-foreground space-y-1">
+                    <p>A <strong>Physique</strong> tab will appear in the app</p>
+                    <p>Upload front/side/back photos with date and weight</p>
+                    <p>AI-powered comparison notes (uses the server AI key)</p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Step 4: Powerlifting */}
+            {step === 4 && isPowerlifting && (
               <div className="space-y-5">
                 <div className="space-y-2">
                   <Label>Training days</Label>

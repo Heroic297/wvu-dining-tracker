@@ -46,6 +46,7 @@ export const sexEnum = pgEnum("sex", ["male", "female"]);
 export const wearableSourceEnum = pgEnum("wearable_source", [
   "garmin",
   "fitbit",
+  "apple_health",
 ]);
 
 export const nutritionSourceEnum = pgEnum("nutrition_source", [
@@ -93,6 +94,10 @@ export const users = pgTable("users", {
   waterBottles: jsonb("water_bottles").$type<Array<{id: string; name: string; mlSize: number}>>(),
   /** Preferred display unit for water */
   waterUnit: text("water_unit").$type<"ml" | "oz" | "L" | "gal">().default("oz"),
+  // Physique tracking
+  enablePhysiqueTracking: boolean("enable_physique_tracking").default(false),
+  // Apple Health
+  appleHealthToken: text("apple_health_token"),
   // Onboarding
   onboardingComplete: boolean("onboarding_complete").default(false),
   // AI Coach — per-provider encrypted API keys (AES-256-GCM, hex-encoded iv:tag:ciphertext)
@@ -337,6 +342,18 @@ export const userMealItems = pgTable(
     proteinG: real("protein_g").default(0),
     carbsG: real("carbs_g").default(0),
     fatG: real("fat_g").default(0),
+    fiberG: real("fiber_g"),
+    sugarG: real("sugar_g"),
+    sodiumMg: real("sodium_mg"),
+    potassiumMg: real("potassium_mg"),
+    vitaminCMg: real("vitamin_c_mg"),
+    calciumMg: real("calcium_mg"),
+    ironMg: real("iron_mg"),
+    vitaminDIu: real("vitamin_d_iu"),
+    saturatedFatG: real("saturated_fat_g"),
+    transFatG: real("trans_fat_g"),
+    cholesterolMg: real("cholesterol_mg"),
+    barcode: text("barcode"),
     source: nutritionSourceEnum("source").notNull(),
   },
   (t) => [index("user_meal_items_meal_id").on(t.userMealId)]
@@ -555,6 +572,198 @@ export const garminDailySummary = pgTable(
 
 export type GarminDailySummary = typeof garminDailySummary.$inferSelect;
 export type InsertGarminDailySummary = typeof garminDailySummary.$inferInsert;
+
+// ─── Apple Health Daily ──────────────────────────────────────────────────────
+
+export const appleHealthDaily = pgTable(
+  "apple_health_daily",
+  {
+    id: varchar("id", { length: 36 })
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    userId: varchar("user_id", { length: 36 })
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    date: date("date").notNull(),
+    totalSteps: integer("total_steps"),
+    caloriesBurned: integer("calories_burned"),
+    activeMinutes: integer("active_minutes"),
+    sleepDurationMin: integer("sleep_duration_min"),
+    deepSleepMin: integer("deep_sleep_min"),
+    remSleepMin: integer("rem_sleep_min"),
+    restingHeartRate: integer("resting_heart_rate"),
+    avgOvernightHrv: real("avg_overnight_hrv"),
+    weightKg: real("weight_kg"),
+    bodyFatPct: real("body_fat_pct"),
+    syncedAt: timestamp("synced_at").default(sql`now()`),
+  },
+  (t) => [uniqueIndex("apple_health_daily_user_date").on(t.userId, t.date)]
+);
+
+export type AppleHealthDaily = typeof appleHealthDaily.$inferSelect;
+
+// ─── Supplements ─────────────────────────────────────────────────────────────
+
+export const supplements = pgTable(
+  "supplements",
+  {
+    id: varchar("id", { length: 36 })
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    userId: varchar("user_id", { length: 36 })
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    brand: text("brand"),
+    barcode: text("barcode"),
+    servingSize: text("serving_size"),
+    servingUnit: text("serving_unit").default("serving"),
+    calories: real("calories"),
+    proteinG: real("protein_g"),
+    carbsG: real("carbs_g"),
+    fatG: real("fat_g"),
+    fiberG: real("fiber_g"),
+    sodiumMg: real("sodium_mg"),
+    vitaminCMg: real("vitamin_c_mg"),
+    vitaminDIu: real("vitamin_d_iu"),
+    vitaminB12Mcg: real("vitamin_b12_mcg"),
+    zincMg: real("zinc_mg"),
+    magnesiumMg: real("magnesium_mg"),
+    calciumMg: real("calcium_mg"),
+    ironMg: real("iron_mg"),
+    customNutrients: jsonb("custom_nutrients"),
+    notes: text("notes"),
+    isActive: boolean("is_active").default(true),
+    createdAt: timestamp("created_at").default(sql`now()`),
+  },
+  (t) => [index("supplements_user_id").on(t.userId)]
+);
+
+export const insertSupplementSchema = createInsertSchema(supplements).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertSupplement = z.infer<typeof insertSupplementSchema>;
+export type Supplement = typeof supplements.$inferSelect;
+
+// ─── Supplement Logs ─────────────────────────────────────────────────────────
+
+export const supplementLogs = pgTable(
+  "supplement_logs",
+  {
+    id: varchar("id", { length: 36 })
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    userId: varchar("user_id", { length: 36 })
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    supplementId: varchar("supplement_id", { length: 36 })
+      .notNull()
+      .references(() => supplements.id, { onDelete: "cascade" }),
+    date: date("date").notNull(),
+    servings: real("servings").notNull().default(1),
+    loggedAt: timestamp("logged_at").default(sql`now()`),
+  },
+  (t) => [index("supplement_logs_user_date").on(t.userId, t.date)]
+);
+
+export const insertSupplementLogSchema = createInsertSchema(supplementLogs).omit({
+  id: true,
+  loggedAt: true,
+});
+export type InsertSupplementLog = z.infer<typeof insertSupplementLogSchema>;
+export type SupplementLog = typeof supplementLogs.$inferSelect;
+
+// ─── Physique Photos ─────────────────────────────────────────────────────────
+
+export const physiquePhotos = pgTable(
+  "physique_photos",
+  {
+    id: varchar("id", { length: 36 })
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    userId: varchar("user_id", { length: 36 })
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    photoUrl: text("photo_url").notNull(),
+    weightKg: real("weight_kg"),
+    bodyFatPct: real("body_fat_pct"),
+    notes: text("notes"),
+    photoDate: date("photo_date").notNull(),
+    groqAnalysis: text("groq_analysis"),
+    createdAt: timestamp("created_at").default(sql`now()`),
+  },
+  (t) => [index("physique_photos_user_date").on(t.userId, t.photoDate)]
+);
+
+export const insertPhysiquePhotoSchema = createInsertSchema(physiquePhotos).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertPhysiquePhoto = z.infer<typeof insertPhysiquePhotoSchema>;
+export type PhysiquePhoto = typeof physiquePhotos.$inferSelect;
+
+// ─── Training Programs ───────────────────────────────────────────────────────
+
+export const trainingPrograms = pgTable(
+  "training_programs",
+  {
+    id: varchar("id", { length: 36 })
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    userId: varchar("user_id", { length: 36 })
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    source: text("source").notNull().default("manual"),
+    rawContent: text("raw_content"),
+    parsedBlocks: jsonb("parsed_blocks"),
+    isActive: boolean("is_active").default(true),
+    createdAt: timestamp("created_at").default(sql`now()`),
+    updatedAt: timestamp("updated_at").default(sql`now()`),
+  },
+  (t) => [index("training_programs_user_id").on(t.userId)]
+);
+
+export const insertTrainingProgramSchema = createInsertSchema(trainingPrograms).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertTrainingProgram = z.infer<typeof insertTrainingProgramSchema>;
+export type TrainingProgram = typeof trainingPrograms.$inferSelect;
+
+// ─── Workout Logs ────────────────────────────────────────────────────────────
+
+export const workoutLogs = pgTable(
+  "workout_logs",
+  {
+    id: varchar("id", { length: 36 })
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    userId: varchar("user_id", { length: 36 })
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    programId: varchar("program_id", { length: 36 }).references(
+      () => trainingPrograms.id,
+      { onDelete: "set null" }
+    ),
+    date: date("date").notNull(),
+    weekNumber: integer("week_number"),
+    dayLabel: text("day_label"),
+    exercises: jsonb("exercises").notNull().default(sql`'[]'`),
+    notes: text("notes"),
+    loggedAt: timestamp("logged_at").default(sql`now()`),
+  },
+  (t) => [index("workout_logs_user_date").on(t.userId, t.date)]
+);
+
+export const insertWorkoutLogSchema = createInsertSchema(workoutLogs).omit({
+  id: true,
+  loggedAt: true,
+});
+export type InsertWorkoutLog = z.infer<typeof insertWorkoutLogSchema>;
+export type WorkoutLog = typeof workoutLogs.$inferSelect;
 
 // ─── Sessions (express-session via pg) ───────────────────────────────────────
 

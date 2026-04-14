@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { api, kgToLbs } from "@/lib/api";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -10,7 +10,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import {
   Watch, RefreshCw, Loader2, CheckCircle, XCircle, AlertCircle,
   Footprints, Moon, Heart, Brain, Battery, Activity, Scale,
-  Eye, EyeOff, Unplug,
+  Eye, EyeOff, Unplug, Smartphone, Copy, ExternalLink,
 } from "lucide-react";
 
 interface SleepLevel {
@@ -162,6 +162,31 @@ export default function WearablesPage() {
       toast({ title: "Import failed", description: err.message, variant: "destructive" });
     },
   });
+
+  // Apple Health
+  const { data: appleHealthStatus } = useQuery<{ connected: boolean; lastSyncDate: string | null; lastSyncAt: string | null }>({
+    queryKey: ["apple-health-status"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/apple-health/status");
+      return res.json();
+    },
+  });
+  const [ahSetupLoading, setAhSetupLoading] = useState(false);
+  const [ahWebhookUrl, setAhWebhookUrl] = useState<string | null>(null);
+  const [ahSetupGuide, setAhSetupGuide] = useState<string[]>([]);
+  const handleAppleHealthSetup = useCallback(async () => {
+    setAhSetupLoading(true);
+    try {
+      const res = await apiRequest("GET", "/api/apple-health/setup");
+      const data = await res.json();
+      setAhWebhookUrl(data.webhookUrl);
+      setAhSetupGuide(data.setupGuide ?? []);
+    } catch (err: any) {
+      toast({ title: "Setup failed", description: err.message, variant: "destructive" });
+    } finally {
+      setAhSetupLoading(false);
+    }
+  }, [toast]);
 
   const connected = garminData?.connected ?? false;
   const summary = garminData?.summary;
@@ -529,6 +554,75 @@ export default function WearablesPage() {
           </p>
         </div>
       )}
+
+      {/* Apple Health card */}
+      <section className="bg-card border border-border rounded-xl p-4 space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-pink-500/10 rounded-lg flex items-center justify-center">
+              <Smartphone className="w-5 h-5 text-pink-400" />
+            </div>
+            <div>
+              <h2 className="font-semibold text-sm">Apple Health</h2>
+              <p className="text-xs text-muted-foreground">
+                {appleHealthStatus?.connected ? "Connected" : "Not connected"} — via iOS Shortcut webhook
+              </p>
+            </div>
+          </div>
+          {appleHealthStatus?.connected && (
+            <CheckCircle className="w-5 h-5 text-green-400" />
+          )}
+        </div>
+
+        {appleHealthStatus?.lastSyncAt && (
+          <p className="text-xs text-muted-foreground">
+            Last sync: {new Date(appleHealthStatus.lastSyncAt).toLocaleString()}
+          </p>
+        )}
+
+        {!ahWebhookUrl ? (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleAppleHealthSetup}
+            disabled={ahSetupLoading}
+          >
+            {ahSetupLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <ExternalLink className="w-3.5 h-3.5 mr-1" />}
+            Set Up Apple Health
+          </Button>
+        ) : (
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <Label className="text-xs">Webhook URL</Label>
+              <div className="flex gap-2">
+                <Input
+                  readOnly
+                  value={ahWebhookUrl}
+                  className="text-xs font-mono"
+                />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    navigator.clipboard.writeText(ahWebhookUrl);
+                    toast({ title: "Copied to clipboard" });
+                  }}
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                </Button>
+              </div>
+            </div>
+            {ahSetupGuide.length > 0 && (
+              <div className="space-y-1">
+                <p className="text-xs font-medium text-muted-foreground">Setup Guide</p>
+                <ol className="text-xs text-muted-foreground space-y-0.5 list-decimal list-inside">
+                  {ahSetupGuide.map((step, i) => <li key={i}>{step}</li>)}
+                </ol>
+              </div>
+            )}
+          </div>
+        )}
+      </section>
 
       {/* Info footer */}
       <div className="text-xs text-muted-foreground space-y-1">
