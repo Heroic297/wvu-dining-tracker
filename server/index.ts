@@ -190,8 +190,18 @@ async function runMigrations() {
       ALTER TABLE weight_log ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'manual'
     `);
     // Prevent duplicate dining items by adding unique constraint
+    // Note: PostgreSQL does not support ADD CONSTRAINT IF NOT EXISTS, so we
+    // check the catalog first to avoid an error on repeated runs.
     await pool.query(`
-      ALTER TABLE dining_items ADD CONSTRAINT IF NOT EXISTS dining_items_unique_menu_name UNIQUE (menu_id, name)
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint WHERE conname = 'dining_items_unique_menu_name'
+        ) THEN
+          ALTER TABLE dining_items ADD CONSTRAINT dining_items_unique_menu_name UNIQUE (menu_id, name);
+        END IF;
+      END
+      $$;
     `);
     console.log("[db] migrations complete");
   } catch (err: any) {
