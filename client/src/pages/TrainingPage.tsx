@@ -405,7 +405,7 @@ function ProgramsTab() {
   const activateMutation = useMutation({
     mutationFn: async (id: string) => {
       const res = await apiRequest("PATCH", `/api/programs/${id}`, {
-        isActive: true,
+        is_active: true,
       });
       return res.json();
     },

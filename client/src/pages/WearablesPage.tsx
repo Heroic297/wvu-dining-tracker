@@ -166,6 +166,7 @@ export default function WearablesPage() {
   // Apple Health
   const { data: appleHealthStatus } = useQuery<{
     connected: boolean;
+    setupComplete: boolean;
     lastSyncDate: string | null;
     lastSyncAt: string | null;
     latestData: any | null;
@@ -576,7 +577,9 @@ export default function WearablesPage() {
               <p className="text-xs text-muted-foreground">
                 {appleHealthStatus?.connected
                   ? <span className="flex items-center gap-1"><CheckCircle className="w-3 h-3 text-green-400 inline" /> Connected</span>
-                  : "Not connected"}
+                  : appleHealthStatus?.setupComplete
+                    ? <span className="flex items-center gap-1"><AlertCircle className="w-3 h-3 text-yellow-400 inline" /> Waiting for first sync...</span>
+                    : "Not connected"}
               </p>
             </div>
           </div>
@@ -617,8 +620,30 @@ export default function WearablesPage() {
           </div>
         )}
 
-        {/* Not connected / setup flow */}
-        {!appleHealthStatus?.connected && !ahSetupData && (
+        {/* Setup complete but waiting for first sync — auto-show setup guide */}
+        {!appleHealthStatus?.connected && appleHealthStatus?.setupComplete && !ahSetupData && (
+          <div className="space-y-3">
+            <div className="flex items-center gap-2 text-xs bg-yellow-500/10 border border-yellow-500/20 rounded-lg px-3 py-2">
+              <AlertCircle className="w-3.5 h-3.5 text-yellow-500 shrink-0" />
+              <span className="text-yellow-600 dark:text-yellow-400">
+                Webhook URL generated but no data received yet. Complete the setup steps below.
+              </span>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleAppleHealthSetup}
+              disabled={ahSetupLoading}
+              className="w-full"
+            >
+              {ahSetupLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <Heart className="w-3.5 h-3.5 mr-1 text-pink-400" />}
+              Show Setup Guide
+            </Button>
+          </div>
+        )}
+
+        {/* Not set up at all */}
+        {!appleHealthStatus?.connected && !appleHealthStatus?.setupComplete && !ahSetupData && (
           <Button
             variant="outline"
             size="sm"
@@ -627,7 +652,7 @@ export default function WearablesPage() {
             className="w-full"
           >
             {ahSetupLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <Heart className="w-3.5 h-3.5 mr-1 text-pink-400" />}
-            Connect Apple Health
+            Set Up Apple Health
           </Button>
         )}
 

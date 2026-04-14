@@ -210,12 +210,12 @@ export function registerAppleHealthRoutes(app: Express): void {
       try {
         const userId = req.user!.id;
 
-        // Check if user has a token configured
+        // Check if user has a token configured (webhook URL was generated)
         const { rows: userRows } = await pool.query(
           `SELECT apple_health_token FROM users WHERE id = $1`,
           [userId]
         );
-        const connected = !!userRows[0]?.apple_health_token;
+        const setupComplete = !!userRows[0]?.apple_health_token;
 
         // Get last sync info + latest data
         const { rows: dataRows } = await pool.query(
@@ -223,10 +223,12 @@ export function registerAppleHealthRoutes(app: Express): void {
           [userId]
         );
 
+        // "connected" = data has been received at least once
+        const connected = !!dataRows[0]?.synced_at;
         const lastSyncDate: string | null = dataRows[0]?.date ?? null;
         const lastSyncAt: string | null = dataRows[0]?.synced_at ?? null;
 
-        res.json({ connected, lastSyncDate, lastSyncAt, latestData: dataRows[0] ?? null });
+        res.json({ connected, setupComplete, lastSyncDate, lastSyncAt, latestData: dataRows[0] ?? null });
       } catch (err: any) {
         console.error("[apple-health] status error:", err.message);
         res.status(500).json({ error: "Failed to fetch status" });

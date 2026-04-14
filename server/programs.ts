@@ -30,33 +30,64 @@ async function parseWithGroq(rawText: string): Promise<any> {
       model: "llama-3.3-70b-versatile",
       messages: [
         {
-          role: "user",
-          content: `Parse this training program into structured JSON.
-Return a JSON object with this shape:
+          role: "system",
+          content: `You are a training program parser. You receive raw text (often CSV or pasted text) representing a strength/powerlifting/hypertrophy training program. Your job is to extract the structured program data and return ONLY valid JSON — no markdown, no explanation, no code fences.
+
+Output schema:
 {
-  "name": string,
-  "weeks": [{ "weekNumber": number, "days": [{ "dayLabel": string, "exercises": [{ "name": string, "sets": number, "reps": string, "weight": string, "rpe": number | null, "notes": string | null }] }] }]
+  "name": "Program Name",
+  "weeks": [{
+    "weekNumber": 0,
+    "days": [{
+      "label": "Day 1 - Upper",
+      "exercises": [{
+        "name": "Bench Press",
+        "sets": 4,
+        "reps": "5",
+        "weight": "225",
+        "rpe": 8,
+        "notes": "pause reps"
+      }]
+    }]
+  }]
 }
-If the program has no week structure, wrap everything in a single week.
-Return ONLY the JSON object, no other text.
-Program text:
-${rawText.slice(0, 8000)}`,
+
+Rules:
+- If the program text uses CSV columns, the first row is usually headers. Parse accordingly.
+- If there are no explicit weeks, wrap all days in a single week with weekNumber: 0.
+- "reps" should be a string (could be "5", "8-12", "AMRAP", etc.)
+- "weight" should be a string (could be absolute like "225", percentage like "75%", or empty string)
+- rpe and notes can be null if not present.
+- Preserve exercise order as written.
+- If a day label is not clear, use "Day 1", "Day 2", etc.`,
+        },
+        {
+          role: "user",
+          content: `Parse this training program:\n\n${rawText.slice(0, 12000)}`,
         },
       ],
-      max_tokens: 4096,
-      temperature: 0.1,
+      max_tokens: 8192,
+      temperature: 0.05,
     }),
   });
   const data = await resp.json();
   const content = data.choices?.[0]?.message?.content ?? "{}";
-  const match = content.match(/\{[\s\S]*\}/);
+
+  // Strip markdown code fences if present
+  const cleaned = content.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+  const match = cleaned.match(/\{[\s\S]*\}/);
   return match ? JSON.parse(match[0]) : {};
 }
 
 async function fetchGoogleSheets(url: string): Promise<string> {
-  const match = url.match(/\/spreadsheets\/d\/([^/]+)/);
-  if (!match) throw new Error("Invalid Google Sheets URL");
-  const csvUrl = `https://docs.google.com/spreadsheets/d/${match[1]}/export?format=csv`;
+  const idMatch = url.match(/\/spreadsheets\/d\/([^/]+)/);
+  if (!idMatch) throw new Error("Invalid Google Sheets URL");
+  const sheetId = idMatch[1];
+
+  const gidMatch = url.match(/gid=(\d+)/);
+  const gidParam = gidMatch ? `&gid=${gidMatch[1]}` : "";
+
+  const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv${gidParam}`;
   const resp = await fetch(csvUrl);
   if (!resp.ok)
     throw new Error(
@@ -103,6 +134,9 @@ Format as a clear weekly program with Day 1, Day 2, etc.`;
   const data = await resp.json();
   return data.choices?.[0]?.message?.content ?? "";
 }
+
+// Column aliases so the API returns camelCase keys the client expects
+const PROGRAM_COLS = `id, user_id, name, source, is_active AS "isActive", parsed_blocks AS "parsedBlocks", raw_content AS "rawContent", created_at AS "createdAt", updated_at AS "updatedAt"`;
 
 // ─── Route registration ──────────────────────────────────────────────────────
 
@@ -175,7 +209,7 @@ export function registerProgramRoutes(app: Express): void {
         const result = await pool.query(
           `INSERT INTO training_programs (user_id, name, source, raw_content, parsed_blocks)
            VALUES ($1, $2, $3, $4, $5)
-           RETURNING *`,
+           RETURNING ${PROGRAM_COLS}`,
           [
             userId,
             parsed.name || "Imported Program",
@@ -215,7 +249,7 @@ export function registerProgramRoutes(app: Express): void {
         const result = await pool.query(
           `INSERT INTO training_programs (user_id, name, source, raw_content, parsed_blocks)
            VALUES ($1, $2, $3, $4, $5)
-           RETURNING *`,
+           RETURNING ${PROGRAM_COLS}`,
           [
             userId,
             parsed.name || "Generated Program",
@@ -243,7 +277,7 @@ export function registerProgramRoutes(app: Express): void {
       try {
         const userId = req.user!.id;
         const result = await pool.query(
-          `SELECT * FROM training_programs WHERE user_id = $1 ORDER BY created_at DESC`,
+          `SELECT ${PROGRAM_COLS} FROM training_programs WHERE user_id = $1 ORDER BY created_at DESC`,
           [userId]
         );
         res.json(result.rows);
@@ -263,7 +297,7 @@ export function registerProgramRoutes(app: Express): void {
         const userId = req.user!.id;
         const { id } = req.params;
         const result = await pool.query(
-          `SELECT * FROM training_programs WHERE id = $1 AND user_id = $2`,
+          `SELECT ${PROGRAM_COLS} FROM training_programs WHERE id = $1 AND user_id = $2`,
           [id, userId]
         );
         if (result.rows.length === 0) {
@@ -337,7 +371,7 @@ export function registerProgramRoutes(app: Express): void {
           `UPDATE training_programs
            SET ${setClauses.join(", ")}
            WHERE id = $${idx++} AND user_id = $${idx++}
-           RETURNING *`,
+           RETURNING ${PROGRAM_COLS}`,
           values
         );
 
