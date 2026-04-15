@@ -122,7 +122,17 @@ function normalizeHealthPayload(body: any): any[] {
 
   for (const date of dateSet) {
     const steps       = getForDate(date, "step_count", "steps", "stepCount");
-    const activeKcal  = getForDate(date, "active_energy", "activeEnergy", "active_energy_burned", "basal_energy_burned", "basalEnergy", "basalEnergyBurned");
+    // Active energy = move-ring / workout calories (active_energy in HAE JSON).
+    // Basal energy  = resting metabolic rate calories (basal_energy_burned in HAE JSON).
+    // Keep them separate so calories_burned = active + basal = total TDEE, matching
+    // the "Total Calories" figure shown in Apple Health's Summary tab.
+    // DO NOT alias basal into the active slot — they are semantically distinct.
+    const activeKcal  = getForDate(date, "active_energy", "activeEnergy");
+    const basalKcal   = getForDate(date, "basal_energy_burned", "basalEnergy", "basalEnergyBurned");
+    // Total calories = active + basal (both may be null independently)
+    const totalKcal   = (activeKcal ?? 0) + (basalKcal ?? 0);
+    // Only store if at least one component is non-null
+    const caloriesForRow = (activeKcal != null || basalKcal != null) ? totalKcal : null;
     const exerciseMin = getForDate(date, "apple_exercise_time", "appleExerciseTime", "active_minutes", "exercise_time", "exercise_time_minutes");
     const rhr         = getForDate(date, "resting_heart_rate", "restingHeartRate");
     const hrv         = getForDate(date, "heart_rate_variability_sdnn", "heartRateVariabilitySDNN", "hrv_sdnn", "hrv", "heartRateVariability");
@@ -180,8 +190,8 @@ function normalizeHealthPayload(body: any): any[] {
     }));
 
     const row: any = { date };
-    if (steps       != null) row.steps             = Math.round(steps);
-    if (activeKcal  != null) row.calories_burned   = Math.round(activeKcal);
+    if (steps            != null) row.steps           = Math.round(steps);
+    if (caloriesForRow   != null) row.calories_burned = Math.round(caloriesForRow);
     if (exerciseMin != null) row.active_minutes    = Math.round(exerciseMin);
     if (sleepMin    != null) row.sleep_duration_min = sleepMin;
     if (deepMin     != null) row.deep_sleep_min    = deepMin;
@@ -295,7 +305,7 @@ export function registerAppleHealthRoutes(app: Express): void {
         if (req.body?.data?.metrics) {
           const names = req.body.data.metrics.map((m: any) => m.name);
           console.log("[apple-health] metrics received:", names.join(", "), `| dates: ${normalizedRows.map((r: any) => r.date).join(", ")}`);
-          const KNOWN_METRICS = ["step_count", "steps", "stepCount", "active_energy", "activeEnergy", "active_energy_burned", "basal_energy_burned", "basalEnergy", "basalEnergyBurned", "apple_exercise_time", "appleExerciseTime", "exercise_time", "exercise_time_minutes", "sleep_analysis", "sleepAnalysis", "sleep", "resting_heart_rate", "restingHeartRate", "heart_rate_variability_sdnn", "heartRateVariabilitySDNN", "hrv_sdnn", "hrv", "heartRateVariability", "body_mass", "bodyMass", "weight", "weight_body_mass", "body_fat_percentage", "bodyFatPercentage", "vo2_max", "vo2Max", "VO2Max", "respiratory_rate", "respiratoryRate"];
+          const KNOWN_METRICS = ["step_count", "steps", "stepCount", "active_energy", "activeEnergy", "basal_energy_burned", "basalEnergy", "basalEnergyBurned", "apple_exercise_time", "appleExerciseTime", "exercise_time", "exercise_time_minutes", "sleep_analysis", "sleepAnalysis", "sleep", "resting_heart_rate", "restingHeartRate", "heart_rate_variability_sdnn", "heartRateVariabilitySDNN", "heart_rate_variability", "hrv_sdnn", "hrv", "heartRateVariability", "body_mass", "bodyMass", "weight", "weight_body_mass", "body_fat_percentage", "bodyFatPercentage", "vo2_max", "vo2Max", "VO2Max", "respiratory_rate", "respiratoryRate"];
           const unknown = names.filter((n: string) => !KNOWN_METRICS.includes(n));
           if (unknown.length > 0) {
             console.log(`[apple-health] UNRECOGNIZED metric names (add aliases): ${unknown.join(", ")}`);
@@ -417,31 +427,47 @@ export function registerAppleHealthRoutes(app: Express): void {
           [userId]
         );
 
-        // Today's row (may be partial — has sleep/RHR from overnight push)
+        // Today's row (may be partial — has intraday steps/calories but not yet overnight sleep/HRV)
         const todayRow = dataRows.find((r: any) => r.date?.toISOString?.()?.startsWith(today) || String(r.date).startsWith(today)) ?? null;
-        // Most recently synced row (has steps/weight from yesterday push)
+        // Most recently synced row overall
         const recentRow = dataRows[0] ?? null;
 
-        // Merge: prefer today's row for each field, fall back to recentRow for nulls
-        const merged = (todayRow && recentRow && todayRow !== recentRow)
-          ? {
-              ...recentRow,
-              // Override with today's non-null values
-              ...(todayRow.resting_heart_rate != null ? { resting_heart_rate: todayRow.resting_heart_rate } : {}),
-              ...(todayRow.sleep_duration_min  != null ? { sleep_duration_min:  todayRow.sleep_duration_min  } : {}),
-              ...(todayRow.deep_sleep_min      != null ? { deep_sleep_min:      todayRow.deep_sleep_min      } : {}),
-              ...(todayRow.rem_sleep_min       != null ? { rem_sleep_min:       todayRow.rem_sleep_min       } : {}),
-              ...(todayRow.avg_overnight_hrv   != null ? { avg_overnight_hrv:   todayRow.avg_overnight_hrv   } : {}),
-              ...(todayRow.total_steps         != null ? { total_steps:         todayRow.total_steps         } : {}),
-              ...(todayRow.calories_burned     != null ? { calories_burned:     todayRow.calories_burned     } : {}),
-              ...(todayRow.active_minutes      != null ? { active_minutes:      todayRow.active_minutes      } : {}),
-              ...(todayRow.weight_kg           != null ? { weight_kg:           todayRow.weight_kg           } : {}),
-              ...(todayRow.body_fat_pct        != null ? { body_fat_pct:        todayRow.body_fat_pct        } : {}),
-              ...(todayRow.vo2_max             != null ? { vo2_max:             todayRow.vo2_max             } : {}),
-              ...(todayRow.respiratory_rate    != null ? { respiratory_rate:    todayRow.respiratory_rate    } : {}),
-              synced_at: recentRow.synced_at, // most recent sync timestamp
-            }
-          : (todayRow ?? recentRow);
+        // Sleep in HAE is attributed to the date the sleep SESSION STARTED (not the wake date).
+        // This means last night's sleep lands on yesterday's row, not today's.
+        // Find the most recent row that actually has sleep data, regardless of date.
+        const sleepRow = dataRows.find((r: any) => r.sleep_duration_min != null) ?? null;
+        // Similarly, HRV and RHR may be on yesterday's row if today's hasn't been computed yet.
+        const hrvRow   = dataRows.find((r: any) => r.avg_overnight_hrv != null) ?? null;
+        const rhrRow   = dataRows.find((r: any) => r.resting_heart_rate != null) ?? null;
+
+        // Build merged view: start with the most recent row for all base fields,
+        // then overlay today's intraday values (steps, calories, weight),
+        // and fill sleep/HRV/RHR from the most recent row that has them.
+        const base = recentRow ?? {};
+        const merged = {
+          ...base,
+          // Today's intraday metrics (override if non-null)
+          ...(todayRow?.total_steps     != null ? { total_steps:     todayRow.total_steps     } : {}),
+          ...(todayRow?.calories_burned != null ? { calories_burned: todayRow.calories_burned } : {}),
+          ...(todayRow?.active_minutes  != null ? { active_minutes:  todayRow.active_minutes  } : {}),
+          ...(todayRow?.weight_kg       != null ? { weight_kg:       todayRow.weight_kg       } : {}),
+          ...(todayRow?.body_fat_pct    != null ? { body_fat_pct:    todayRow.body_fat_pct    } : {}),
+          // Overnight metrics: use most recent row that actually has the data,
+          // whether that's today's row or yesterday's (sleep is always yesterday's date in HAE).
+          ...(sleepRow != null ? {
+            sleep_duration_min: sleepRow.sleep_duration_min,
+            deep_sleep_min:     sleepRow.deep_sleep_min,
+            rem_sleep_min:      sleepRow.rem_sleep_min,
+          } : {}),
+          ...(hrvRow?.avg_overnight_hrv  != null ? { avg_overnight_hrv:  hrvRow.avg_overnight_hrv  } : {}),
+          ...(rhrRow?.resting_heart_rate != null ? { resting_heart_rate: rhrRow.resting_heart_rate } : {}),
+          // Static / infrequently-updated metrics — take from most recent non-null row
+          ...(todayRow?.vo2_max           != null ? { vo2_max:          todayRow.vo2_max          } :
+              recentRow?.vo2_max          != null ? { vo2_max:          recentRow.vo2_max          } : {}),
+          ...(todayRow?.respiratory_rate  != null ? { respiratory_rate: todayRow.respiratory_rate  } :
+              recentRow?.respiratory_rate != null ? { respiratory_rate: recentRow.respiratory_rate } : {}),
+          synced_at: recentRow?.synced_at ?? null,
+        };
 
         // "connected" = data has been received at least once
         const connected = !!recentRow?.synced_at;
