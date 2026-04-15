@@ -182,6 +182,11 @@ export function registerAppleHealthRoutes(app: Express): void {
 
         // Parse and validate the request body
         const normalized = normalizeHealthPayload(req.body);
+        // Debug: log metric names and normalized result so we can verify field mapping
+        if (req.body?.data?.metrics) {
+          console.log("[apple-health] raw metric names:", req.body.data.metrics.map((m: any) => m.name));
+        }
+        console.log("[apple-health] normalized payload:", JSON.stringify(normalized, null, 2));
         const parsed = pushBodySchema.safeParse(normalized);
         if (!parsed.success) {
           return res
