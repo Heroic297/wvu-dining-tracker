@@ -474,7 +474,11 @@ export function registerAppleHealthRoutes(app: Express): void {
         const lastSyncDate: string | null = recentRow?.date ?? null;
         const lastSyncAt: string | null = recentRow?.synced_at ?? null;
 
-        res.json({ connected, setupComplete, lastSyncDate, lastSyncAt, latestData: merged });
+        // Expose the date the sleep data comes from so the frontend can label it
+        // correctly ("Last night" vs "2 nights ago").
+        const sleepDate: string | null = sleepRow ? String(sleepRow.date) : null;
+
+        res.json({ connected, setupComplete, lastSyncDate, lastSyncAt, sleepDate, latestData: merged });
       } catch (err: any) {
         console.error("[apple-health] status error:", err.message);
         res.status(500).json({ error: "Failed to fetch status" });
