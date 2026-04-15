@@ -612,6 +612,19 @@ export default function WearablesPage() {
           const deepMin: number | null = d.deep_sleep_min ?? null;
           const remMin: number | null = d.rem_sleep_min ?? null;
           const hasSleepBreakdown = sleepMin != null && (deepMin != null || remMin != null);
+          // Compute a human label for the sleep date ("Last night", "2 nights ago", etc.)
+          const sleepDateLabel = (() => {
+            const sd = appleHealthStatus?.sleepDate;
+            if (!sd) return null;
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            const sleepD = new Date(sd + "T00:00:00");
+            const diffDays = Math.round((today.getTime() - sleepD.getTime()) / 86400000);
+            if (diffDays === 1) return "Last night";
+            if (diffDays === 2) return "2 nights ago";
+            if (diffDays > 2) return `${diffDays} nights ago`;
+            return null;
+          })();
           const workouts: any[] | null = (() => {
             try { return d.workouts ? (typeof d.workouts === "string" ? JSON.parse(d.workouts) : d.workouts) : null; } catch { return null; }
           })();
@@ -628,7 +641,8 @@ export default function WearablesPage() {
                   value={fmt(d.resting_heart_rate, " bpm")} />
                 {sleepMin != null && !hasSleepBreakdown && (
                   <DataCard icon={Moon} label="Sleep" iconColor="text-indigo-400"
-                    value={`${Math.floor(sleepMin / 60)}h ${sleepMin % 60}m`} />
+                    value={`${Math.floor(sleepMin / 60)}h ${sleepMin % 60}m`}
+                    sub={sleepDateLabel ?? undefined} />
                 )}
                 {sleepMin == null && !hasSleepBreakdown && (
                   <DataCard icon={Moon} label="Sleep" iconColor="text-indigo-400"
