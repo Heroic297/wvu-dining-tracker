@@ -621,15 +621,11 @@ export default function WearablesPage() {
               <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                 <DataCard icon={Footprints} label="Steps" iconColor="text-green-400"
                   value={d.total_steps != null ? Number(d.total_steps).toLocaleString() : "\u2014"} />
-                <DataCard icon={Activity} label="Active Minutes" iconColor="text-yellow-400"
-                  value={fmt(d.active_minutes, " min")} />
                 <DataCard icon={Activity} label="Total Calories" iconColor="text-orange-400"
                   value={fmt(d.calories_burned, " kcal")}
                   sub="Active + Resting" />
                 <DataCard icon={Heart} label="Resting HR" iconColor="text-red-400"
                   value={fmt(d.resting_heart_rate, " bpm")} />
-                <DataCard icon={Brain} label="HRV" iconColor="text-emerald-400"
-                  value={d.avg_overnight_hrv != null ? `${Math.round(Number(d.avg_overnight_hrv))} ms` : "\u2014"} />
                 {sleepMin != null && !hasSleepBreakdown && (
                   <DataCard icon={Moon} label="Sleep" iconColor="text-indigo-400"
                     value={`${Math.floor(sleepMin / 60)}h ${sleepMin % 60}m`} />
