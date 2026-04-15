@@ -44,55 +44,79 @@ const pushBodySchema = z.object({
 
 // ─── Normalize incoming payload ──────────────────────────────────────────────
 
+/**
+ * Health Auto Export fires one POST per metric, each shaped as:
+ *   { data: { metrics: [{ name: "step_count", units: "count", data: [{ date: "YYYY-MM-DD HH:mm:ss", qty: 1234 }] }] } }
+ *
+ * Known metric names (snake_case, from the app's export):
+ *   step_count, active_energy_burned, apple_exercise_time,
+ *   sleep_analysis (qty in hours), resting_heart_rate, heart_rate_variability_sdnn,
+ *   heart_rate, body_mass (kg), body_fat_percentage, vo2_max, respiratory_rate,
+ *   apple_sleeping_wrist_temperature, deep_sleep (hrs), rem_sleep (hrs)
+ *
+ * Also handles the flat iOS Shortcut format: { date, steps, calories_burned, ... }
+ */
 function normalizeHealthPayload(body: any): any {
-  // Already flat format
+  // ── Flat iOS Shortcut format — pass through as-is ─────────────────────────
   if (body?.date && typeof body.date === "string") return body;
-  // Health Auto Export format: { data: { metrics: [...], workouts: [...] } }
+
+  // ── Health Auto Export format ─────────────────────────────────────────────
   const metrics: any[] = body?.data?.metrics ?? [];
   const workouts: any[] = body?.data?.workouts ?? [];
-  // Use today's date or extract from the first metric's data
+
+  // Extract date from first data point ("YYYY-MM-DD HH:mm:ss" → "YYYY-MM-DD")
   const firstDate =
     metrics[0]?.data?.[0]?.date?.split(" ")?.[0] ??
     new Date().toISOString().split("T")[0];
-  const get = (name: string) => {
-    const m = metrics.find((m: any) =>
-      m.name?.toLowerCase().includes(name.toLowerCase())
-    );
-    return m?.data?.[0]?.qty ?? m?.data?.[0]?.value ?? null;
+
+  // Look up a metric by exact name or any of several aliases, return first data point value
+  const get = (...names: string[]): number | null => {
+    for (const name of names) {
+      const m = metrics.find((m: any) => m.name === name);
+      const val = m?.data?.[0]?.qty ?? m?.data?.[0]?.value;
+      if (val != null) return Number(val);
+    }
+    return null;
   };
+
+  const steps        = get("step_count", "steps");
+  const activeKcal   = get("active_energy_burned", "activeEnergyBurned");
+  const exerciseMin  = get("apple_exercise_time", "appleExerciseTime", "exercise_time");
+  const sleepHrs     = get("sleep_analysis", "sleepAnalysis", "sleep");
+  const deepHrs      = get("deep_sleep", "deep_sleep_duration");
+  const remHrs       = get("rem_sleep", "rem_sleep_duration");
+  const rhr          = get("resting_heart_rate", "restingHeartRate");
+  const hrv          = get("heart_rate_variability_sdnn", "heartRateVariabilitySDNN", "hrv");
+  const weight       = get("body_mass", "bodyMass", "weight");
+  const bodyFat      = get("body_fat_percentage", "bodyFatPercentage");
+  const vo2          = get("vo2_max", "vo2Max");
+  const respRate     = get("respiratory_rate", "respiratoryRate");
+
   return {
     date: firstDate,
-    steps: get("step") != null ? Math.round(get("step")) : undefined,
-    calories_burned:
-      get("active energy") != null
-        ? Math.round(get("active energy"))
-        : undefined,
-    active_minutes:
-      get("exercise time") != null
-        ? Math.round(get("exercise time"))
-        : undefined,
-    sleep_duration_min:
-      get("sleep") != null ? Math.round(get("sleep") * 60) : undefined,
-    resting_heart_rate:
-      get("resting heart") != null
-        ? Math.round(get("resting heart"))
-        : undefined,
-    hrv_ms: get("heart rate variability") ?? undefined,
-    weight_kg: get("body mass") ?? undefined,
-    body_fat_pct: get("body fat") ?? undefined,
-    vo2_max: get("vo2") ?? undefined,
-    respiratory_rate: get("respiratory rate") ?? undefined,
-    workouts:
-      workouts.length > 0
-        ? workouts.map((w: any) => ({
-            activity_type: w.workoutActivityType ?? w.name ?? "Unknown",
-            duration_min: w.duration ?? 0,
-            calories: w.totalEnergyBurned ?? 0,
-            distance_km: w.totalDistance ?? undefined,
-            avg_heart_rate: w.averageHeartRate ?? undefined,
-            date: w.startDate?.split(" ")?.[0] ?? firstDate,
-          }))
-        : undefined,
+    ...(steps        != null ? { steps: Math.round(steps) }                         : {}),
+    ...(activeKcal   != null ? { calories_burned: Math.round(activeKcal) }          : {}),
+    ...(exerciseMin  != null ? { active_minutes: Math.round(exerciseMin) }          : {}),
+    // sleep_analysis qty is in hours → convert to minutes
+    ...(sleepHrs     != null ? { sleep_duration_min: Math.round(sleepHrs * 60) }    : {}),
+    ...(deepHrs      != null ? { deep_sleep_min: Math.round(deepHrs * 60) }         : {}),
+    ...(remHrs       != null ? { rem_sleep_min: Math.round(remHrs * 60) }           : {}),
+    ...(rhr          != null ? { resting_heart_rate: Math.round(rhr) }              : {}),
+    ...(hrv          != null ? { hrv_ms: hrv }                                      : {}),
+    ...(weight       != null ? { weight_kg: weight }                                : {}),
+    ...(bodyFat      != null ? { body_fat_pct: bodyFat }                            : {}),
+    ...(vo2          != null ? { vo2_max: vo2 }                                     : {}),
+    ...(respRate     != null ? { respiratory_rate: respRate }                       : {}),
+    ...(workouts.length > 0 ? {
+      workouts: workouts.map((w: any) => ({
+        activity_type: w.workoutActivityType ?? w.name ?? "Unknown",
+        duration_min:  w.duration ?? 0,
+        calories:      w.totalEnergyBurned ?? 0,
+        distance_km:   w.totalDistance ?? undefined,
+        avg_heart_rate: w.averageHeartRate ?? undefined,
+        date:          w.startDate?.split(" ")?.[0] ?? firstDate,
+      }))
+    } : {}),
   };
 }
 
@@ -182,11 +206,11 @@ export function registerAppleHealthRoutes(app: Express): void {
 
         // Parse and validate the request body
         const normalized = normalizeHealthPayload(req.body);
-        // Debug: log metric names and normalized result so we can verify field mapping
+        // Log metric names for observability (compact, not verbose)
         if (req.body?.data?.metrics) {
-          console.log("[apple-health] raw metric names:", req.body.data.metrics.map((m: any) => m.name));
+          const names = req.body.data.metrics.map((m: any) => m.name);
+          console.log("[apple-health] metrics received:", names.join(", "), "| normalized keys:", Object.keys(normalized).join(", "));
         }
-        console.log("[apple-health] normalized payload:", JSON.stringify(normalized, null, 2));
         const parsed = pushBodySchema.safeParse(normalized);
         if (!parsed.success) {
           return res
