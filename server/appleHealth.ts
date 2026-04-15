@@ -80,7 +80,7 @@ function normalizeHealthPayload(body: any): any {
   };
 
   const steps        = get("step_count", "steps");
-  const activeKcal   = get("active_energy_burned", "activeEnergyBurned");
+  const activeKcal   = get("active_energy", "active_energy_burned", "activeEnergyBurned");
   const exerciseMin  = get("apple_exercise_time", "appleExerciseTime", "exercise_time");
   const sleepHrs     = get("sleep_analysis", "sleepAnalysis", "sleep");
   const deepHrs      = get("deep_sleep", "deep_sleep_duration");
