@@ -87,7 +87,7 @@ function normalizeHealthPayload(body: any): any {
   const remHrs       = get("rem_sleep", "rem_sleep_duration");
   const rhr          = get("resting_heart_rate", "restingHeartRate");
   const hrv          = get("heart_rate_variability_sdnn", "heartRateVariabilitySDNN", "hrv");
-  const weight       = get("body_mass", "bodyMass", "weight");
+  const weight       = get("weight_body_mass", "body_mass", "bodyMass", "weight");
   const bodyFat      = get("body_fat_percentage", "bodyFatPercentage");
   const vo2          = get("vo2_max", "vo2Max");
   const respRate     = get("respiratory_rate", "respiratoryRate");
