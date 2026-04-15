@@ -203,6 +203,9 @@ export default function WearablesPage() {
   const status = garminData?.status ?? "disconnected";
   const tokenType = garminData?.tokenType ?? "none";
 
+  // Hide Garmin section entirely when Apple Health is connected
+  const appleConnected = appleHealthStatus?.connected ?? false;
+
   const StatusIcon = () => {
     switch (status) {
       case "connected": return <CheckCircle className="w-5 h-5 text-green-400" />;
@@ -250,8 +253,8 @@ export default function WearablesPage() {
         )}
       </div>
 
-      {/* Garmin connection card */}
-      <section className="bg-card border border-border rounded-xl p-4 space-y-4">
+      {/* Garmin connection card — hidden when Apple Health is active */}
+      {!appleConnected && <section className="bg-card border border-border rounded-xl p-4 space-y-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 bg-blue-500/10 rounded-lg flex items-center justify-center">
@@ -412,7 +415,7 @@ export default function WearablesPage() {
             )}
           </div>
         )}
-      </section>
+      </section>}
 
       {/* Data summary cards — only shown when connected and data exists */}
       {connected && summary && (
@@ -556,7 +559,7 @@ export default function WearablesPage() {
       )}
 
       {/* Empty state when connected but no data yet */}
-      {connected && !summary && !isLoading && (
+      {!appleConnected && connected && !summary && !isLoading && (
         <div className="bg-card border border-border rounded-xl p-8 text-center">
           <Watch className="w-8 h-8 text-muted-foreground mx-auto mb-3" />
           <p className="text-sm text-muted-foreground">
@@ -591,34 +594,97 @@ export default function WearablesPage() {
         </div>
 
         {/* Connected state — show Apple Health data cards */}
-        {appleHealthStatus?.connected && appleHealthStatus.latestData && (
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-            {appleHealthStatus.latestData.total_steps != null && (
-              <DataCard icon={Footprints} label="Steps" iconColor="text-green-400"
-                value={Number(appleHealthStatus.latestData.total_steps).toLocaleString()} />
-            )}
-            {appleHealthStatus.latestData.calories_burned != null && (
-              <DataCard icon={Activity} label="Active Calories" iconColor="text-orange-400"
-                value={`${appleHealthStatus.latestData.calories_burned} kcal`} />
-            )}
-            {appleHealthStatus.latestData.sleep_duration_min != null && (
-              <DataCard icon={Moon} label="Sleep" iconColor="text-indigo-400"
-                value={`${Math.floor(appleHealthStatus.latestData.sleep_duration_min / 60)}h ${appleHealthStatus.latestData.sleep_duration_min % 60}m`} />
-            )}
-            {appleHealthStatus.latestData.resting_heart_rate != null && (
-              <DataCard icon={Heart} label="Resting HR" iconColor="text-red-400"
-                value={`${appleHealthStatus.latestData.resting_heart_rate} bpm`} />
-            )}
-            {appleHealthStatus.latestData.avg_overnight_hrv != null && (
-              <DataCard icon={Heart} label="HRV" iconColor="text-emerald-400"
-                value={`${Math.round(appleHealthStatus.latestData.avg_overnight_hrv)} ms`} />
-            )}
-            {appleHealthStatus.latestData.weight_kg != null && (
-              <DataCard icon={Scale} label="Weight" iconColor="text-blue-400"
-                value={`${kgToLbs(appleHealthStatus.latestData.weight_kg)} lbs`} />
-            )}
-          </div>
-        )}
+        {appleHealthStatus?.connected && appleHealthStatus.latestData && (() => {
+          const d = appleHealthStatus.latestData;
+          const sleepMin: number | null = d.sleep_duration_min ?? null;
+          const deepMin: number | null = d.deep_sleep_min ?? null;
+          const remMin: number | null = d.rem_sleep_min ?? null;
+          const hasSleepBreakdown = sleepMin != null && (deepMin != null || remMin != null);
+          const workouts: any[] | null = (() => {
+            try { return d.workouts ? (typeof d.workouts === "string" ? JSON.parse(d.workouts) : d.workouts) : null; } catch { return null; }
+          })();
+          return (
+            <div className="space-y-3">
+              {/* Metric grid */}
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                {d.total_steps != null && (
+                  <DataCard icon={Footprints} label="Steps" iconColor="text-green-400"
+                    value={Number(d.total_steps).toLocaleString()} />
+                )}
+                {d.active_minutes != null && (
+                  <DataCard icon={Activity} label="Active Minutes" iconColor="text-yellow-400"
+                    value={`${d.active_minutes} min`} />
+                )}
+                {d.calories_burned != null && (
+                  <DataCard icon={Activity} label="Active Calories" iconColor="text-orange-400"
+                    value={`${d.calories_burned} kcal`} />
+                )}
+                {d.resting_heart_rate != null && (
+                  <DataCard icon={Heart} label="Resting HR" iconColor="text-red-400"
+                    value={`${d.resting_heart_rate} bpm`} />
+                )}
+                {d.avg_overnight_hrv != null && (
+                  <DataCard icon={Brain} label="HRV" iconColor="text-emerald-400"
+                    value={`${Math.round(Number(d.avg_overnight_hrv))} ms`} />
+                )}
+                {sleepMin != null && !hasSleepBreakdown && (
+                  <DataCard icon={Moon} label="Sleep" iconColor="text-indigo-400"
+                    value={`${Math.floor(sleepMin / 60)}h ${sleepMin % 60}m`} />
+                )}
+                {d.vo2_max != null && (
+                  <DataCard icon={Activity} label="VO₂ Max" iconColor="text-cyan-400"
+                    value={`${Number(d.vo2_max).toFixed(1)} mL/kg/min`} />
+                )}
+                {d.respiratory_rate != null && (
+                  <DataCard icon={Activity} label="Resp. Rate" iconColor="text-sky-400"
+                    value={`${Number(d.respiratory_rate).toFixed(1)} /min`} />
+                )}
+                {d.weight_kg != null && (
+                  <DataCard icon={Scale} label="Weight" iconColor="text-blue-400"
+                    value={`${kgToLbs(d.weight_kg)} lbs`}
+                    sub={d.body_fat_pct ? `${Number(d.body_fat_pct).toFixed(1)}% body fat` : `${Number(d.weight_kg).toFixed(1)} kg`} />
+                )}
+              </div>
+
+              {/* Sleep breakdown */}
+              {hasSleepBreakdown && (
+                <section className="bg-card border border-border rounded-xl p-4 space-y-3">
+                  <h3 className="text-sm font-semibold flex items-center gap-2">
+                    <Moon className="w-4 h-4 text-indigo-400" />
+                    Sleep
+                  </h3>
+                  <AppleHealthSleepBar
+                    totalMin={sleepMin!}
+                    deepMin={deepMin ?? 0}
+                    remMin={remMin ?? 0}
+                  />
+                </section>
+              )}
+
+              {/* Workouts */}
+              {workouts && workouts.length > 0 && (
+                <section className="bg-card border border-border rounded-xl p-4 space-y-3">
+                  <h3 className="text-sm font-semibold flex items-center gap-2">
+                    <Activity className="w-4 h-4 text-orange-400" />
+                    Workouts
+                  </h3>
+                  <div className="space-y-2">
+                    {workouts.slice(0, 5).map((w: any, i: number) => (
+                      <div key={i} className="flex items-center justify-between py-1 border-b border-border last:border-0">
+                        <span className="text-sm">{w.activity_type ?? "Workout"}</span>
+                        <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                          {w.duration_min != null && <span>{Math.round(w.duration_min)}m</span>}
+                          {w.calories != null && <span>{Math.round(w.calories)} kcal</span>}
+                          {w.avg_heart_rate != null && <span>{Math.round(w.avg_heart_rate)} bpm avg</span>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )}
+            </div>
+          );
+        })()}
 
         {/* Setup complete but waiting for first sync — auto-show setup guide */}
         {!appleHealthStatus?.connected && appleHealthStatus?.setupComplete && !ahSetupData && (
@@ -725,14 +791,16 @@ export default function WearablesPage() {
       </section>
 
       {/* Info footer */}
-      <div className="text-xs text-muted-foreground space-y-1">
-        <p>
-          Garmin data syncs when you open this page or tap "Sync now". Your session token is encrypted at rest.
-        </p>
-        <p>
-          Weight from Garmin is treated as your current weight unless you log a newer manual weight in Settings.
-        </p>
-      </div>
+      {!appleConnected && (
+        <div className="text-xs text-muted-foreground space-y-1">
+          <p>
+            Garmin data syncs when you open this page or tap "Sync now". Your session token is encrypted at rest.
+          </p>
+          <p>
+            Weight from Garmin is treated as your current weight unless you log a newer manual weight in Settings.
+          </p>
+        </div>
+      )}
     </div>
   );
 }
@@ -758,6 +826,51 @@ function DataCard({
       </div>
       <p className="text-lg font-semibold">{value}</p>
       {sub && <p className="text-[11px] text-muted-foreground">{sub}</p>}
+    </div>
+  );
+}
+
+// --- Apple Health Sleep Bar ---
+
+function AppleHealthSleepBar({
+  totalMin,
+  deepMin,
+  remMin,
+}: {
+  totalMin: number;
+  deepMin: number;
+  remMin: number;
+}) {
+  const lightMin = Math.max(0, totalMin - deepMin - remMin);
+  const stages = [
+    { label: "Deep", min: deepMin, color: "#6D28D9" },
+    { label: "REM", min: remMin, color: "#2DD4BF" },
+    { label: "Light", min: lightMin, color: "#818CF8" },
+  ].filter((s) => s.min > 0);
+
+  return (
+    <div className="space-y-3">
+      <p className="text-2xl font-bold">
+        {Math.floor(totalMin / 60)}h {totalMin % 60}m
+      </p>
+      <div className="flex h-3 rounded-full overflow-hidden">
+        {stages.map((s) => (
+          <div
+            key={s.label}
+            style={{ width: `${(s.min / totalMin) * 100}%`, backgroundColor: s.color }}
+          />
+        ))}
+      </div>
+      <div className="flex gap-4 flex-wrap">
+        {stages.map((s) => (
+          <div key={s.label} className="flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full" style={{ backgroundColor: s.color }} />
+            <span className="text-xs text-muted-foreground">
+              {s.label}: {Math.floor(s.min / 60) > 0 ? `${Math.floor(s.min / 60)}h ` : ""}{s.min % 60}m
+            </span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
