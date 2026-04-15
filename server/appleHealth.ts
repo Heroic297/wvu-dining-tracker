@@ -56,135 +56,148 @@ const pushBodySchema = z.object({
  *
  * Also handles the flat iOS Shortcut format: { date, steps, calories_burned, ... }
  */
-function normalizeHealthPayload(body: any): any {
-  // ── Flat iOS Shortcut format — pass through as-is ─────────────────────────
-  if (body?.date && typeof body.date === "string") return body;
+// Parse a HAE date string ("YYYY-MM-DD HH:mm:ss ±HHMM", ISO 8601, or bare date) to "YYYY-MM-DD".
+function parseHaeDate(raw: string | undefined): string | null {
+  if (!raw) return null;
+  // "2026-04-15 00:00:00 -0400" → split on space, take first token
+  // "2026-04-15T00:00:00Z"     → split on T, take first token
+  const d = raw.includes("T") ? raw.split("T")[0] : raw.split(" ")[0];
+  return /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : null;
+}
+
+/**
+ * Normalize a HAE (or flat iOS Shortcut) payload into one normalized object per
+ * calendar date found in the payload.
+ *
+ * HAE can send multi-day payloads (e.g. exportPeriod="Default" = yesterday + today).
+ * Each metric's data[] array has one entry per day; the sort order is NOT guaranteed
+ * (observed ascending in practice). We group by date first, then extract each metric's
+ * value for that specific date, so every calendar day gets its own correct row.
+ *
+ * Returns an array of normalized objects. The caller upserts each one independently.
+ */
+function normalizeHealthPayload(body: any): any[] {
+  // ── Flat iOS Shortcut format — wrap in array and return as-is ───────────────
+  if (body?.date && typeof body.date === "string") return [body];
 
   // ── Health Auto Export format ─────────────────────────────────────────────
   const metrics: any[] = body?.data?.metrics ?? [];
   const workouts: any[] = body?.data?.workouts ?? [];
 
-  // Extract date from the most recent data point across all metrics.
-  // HAE sends data sorted descending (newest first), so data[0] is the most recent entry.
-  // Also handle ISO 8601 "YYYY-MM-DDTHH:mm:ssZ" and bare "YYYY-MM-DD".
-  const parseHaeDate = (raw: string | undefined): string | null => {
-    if (!raw) return null;
-    const d = raw.split(" ")[0] ?? raw.split("T")[0];
-    return /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : null;
-  };
-  let firstDate: string = new Date().toISOString().split("T")[0];
+  // Collect all unique calendar dates across all metrics.
+  const dateSet = new Set<string>();
   for (const m of metrics) {
-    const d = parseHaeDate(m?.data?.[0]?.date);
-    if (d) { firstDate = d; break; }
+    for (const entry of (m.data ?? [])) {
+      const d = parseHaeDate(entry?.date);
+      if (d) dateSet.add(d);
+    }
   }
+  // Fall back to today if no dates were found (shouldn't happen).
+  if (dateSet.size === 0) dateSet.add(new Date().toISOString().split("T")[0]);
 
-  // Look up a metric by exact name or any of several aliases.
-  // With "Default" / "Last N Days" date ranges, HAE sends multiple data entries per metric
-  // (one per calendar day, sorted descending). We walk all entries and return the first
-  // non-null value so overnight metrics (sleep, RHR, HRV) are captured even if today's
-  // entry is empty/absent but yesterday's is populated.
-  const get = (...names: string[]): number | null => {
+  // For a given metric (by name aliases) and a specific calendar date, return the value.
+  const getForDate = (date: string, ...names: string[]): number | null => {
     for (const name of names) {
       const m = metrics.find((m: any) => m.name === name);
       if (!m) continue;
-      for (const entry of (m.data ?? [])) {
-        const val = entry?.qty ?? entry?.value;
-        if (val != null) return Number(val);
-      }
+      const entry = (m.data ?? []).find((e: any) => parseHaeDate(e?.date) === date);
+      const val = entry?.qty ?? entry?.value;
+      if (val != null) return Number(val);
     }
     return null;
   };
 
-  // Look up a metric and also return its units string (from the first non-null entry).
-  const getWithUnits = (...names: string[]): { val: number; units: string } | null => {
+  const getForDateWithUnits = (date: string, ...names: string[]): { val: number; units: string } | null => {
     for (const name of names) {
       const m = metrics.find((m: any) => m.name === name);
       if (!m) continue;
-      for (const entry of (m.data ?? [])) {
-        const val = entry?.qty ?? entry?.value;
-        if (val != null) return { val: Number(val), units: (m.units ?? "").toLowerCase() };
-      }
+      const entry = (m.data ?? []).find((e: any) => parseHaeDate(e?.date) === date);
+      const val = entry?.qty ?? entry?.value;
+      if (val != null) return { val: Number(val), units: (m.units ?? "").toLowerCase() };
     }
     return null;
   };
 
-  const steps        = get("step_count", "steps", "stepCount");
-  const activeKcal   = get("active_energy", "activeEnergy", "active_energy_burned", "basal_energy_burned", "basalEnergy", "basalEnergyBurned");
-  const exerciseMin  = get("apple_exercise_time", "appleExerciseTime", "active_minutes", "exercise_time", "exercise_time_minutes");
-  const rhr          = get("resting_heart_rate", "restingHeartRate");
-  const hrv          = get("heart_rate_variability_sdnn", "heartRateVariabilitySDNN", "hrv_sdnn", "hrv", "heartRateVariability");
-  const weightRaw    = getWithUnits("weight_body_mass", "body_mass", "bodyMass", "weight");
-  // HAE exports weight in the user's Apple Health unit (lbs for US locale) — always store as kg
-  const weight       = weightRaw
-    ? (weightRaw.units === "lb" || weightRaw.units === "lbs" ? weightRaw.val * 0.453592 : weightRaw.val)
-    : null;
-  const bodyFat      = get("body_fat_percentage", "bodyFatPercentage");
-  const vo2          = get("vo2_max", "vo2Max", "VO2Max");
-  const respRate     = get("respiratory_rate", "respiratoryRate");
+  const results: any[] = [];
 
-  // ── Sleep extraction ─────────────────────────────────────────────────────
-  // Aggregated sleep_analysis uses { totalSleep, deep, rem } (NOT qty).
-  // totalSleep may be in minutes (>=24) or hours (<24) depending on HAE config.
-  // Walk all sleep data entries to find the first one with usable sleep data.
-  // With multi-day date ranges, today's entry may be empty while yesterday's has the data.
-  const sleepMetric  = metrics.find((m: any) =>
-    ["sleep_analysis", "sleepAnalysis", "sleep"].includes(m.name)
-  );
-  const sleepEntry   = sleepMetric?.data?.find((e: any) =>
-    e?.totalSleep != null || e?.asleep != null || e?.qty != null
-  ) ?? sleepMetric?.data?.[0];
-  let sleepMin: number | null = null;
-  let deepMin: number | null = null;
-  let remMin:  number | null = null;
-  if (sleepEntry) {
-    // Prefer aggregated fields; fall back to qty (unaggregated / iOS Shortcut)
-    const rawSleep = sleepEntry.totalSleep ?? sleepEntry.asleep ?? sleepEntry.qty;
-    if (rawSleep != null) {
-      // If value < 24, HAE sent hours; otherwise it's already minutes
-      sleepMin = rawSleep < 24 ? Math.round(rawSleep * 60) : Math.round(rawSleep);
+  for (const date of dateSet) {
+    const steps       = getForDate(date, "step_count", "steps", "stepCount");
+    const activeKcal  = getForDate(date, "active_energy", "activeEnergy", "active_energy_burned", "basal_energy_burned", "basalEnergy", "basalEnergyBurned");
+    const exerciseMin = getForDate(date, "apple_exercise_time", "appleExerciseTime", "active_minutes", "exercise_time", "exercise_time_minutes");
+    const rhr         = getForDate(date, "resting_heart_rate", "restingHeartRate");
+    const hrv         = getForDate(date, "heart_rate_variability_sdnn", "heartRateVariabilitySDNN", "hrv_sdnn", "hrv", "heartRateVariability");
+    const weightRaw   = getForDateWithUnits(date, "weight_body_mass", "body_mass", "bodyMass", "weight");
+    // HAE exports weight in the user's Apple Health unit (lbs for US locale) — always store as kg
+    const weight      = weightRaw
+      ? (weightRaw.units === "lb" || weightRaw.units === "lbs" ? weightRaw.val * 0.453592 : weightRaw.val)
+      : null;
+    const bodyFat     = getForDate(date, "body_fat_percentage", "bodyFatPercentage");
+    const vo2         = getForDate(date, "vo2_max", "vo2Max", "VO2Max");
+    const respRate    = getForDate(date, "respiratory_rate", "respiratoryRate");
+
+    // ── Sleep extraction ─────────────────────────────────────────────────────
+    // Aggregated sleep_analysis uses { totalSleep, deep, rem } (NOT qty).
+    // totalSleep may be in minutes (>=24) or hours (<24) depending on HAE config.
+    const sleepMetric = metrics.find((m: any) =>
+      ["sleep_analysis", "sleepAnalysis", "sleep"].includes(m.name)
+    );
+    const sleepEntry  = (sleepMetric?.data ?? []).find((e: any) => parseHaeDate(e?.date) === date);
+    let sleepMin: number | null = null;
+    let deepMin: number | null = null;
+    let remMin:  number | null = null;
+    if (sleepEntry) {
+      const rawSleep = sleepEntry.totalSleep ?? sleepEntry.asleep ?? sleepEntry.qty;
+      if (rawSleep != null) {
+        sleepMin = rawSleep < 24 ? Math.round(rawSleep * 60) : Math.round(rawSleep);
+      }
+      if (sleepEntry.deep != null) {
+        deepMin = sleepEntry.deep < 24 ? Math.round(sleepEntry.deep * 60) : Math.round(sleepEntry.deep);
+      }
+      if (sleepEntry.rem != null) {
+        remMin = sleepEntry.rem < 24 ? Math.round(sleepEntry.rem * 60) : Math.round(sleepEntry.rem);
+      }
     }
-    if (sleepEntry.deep != null) {
-      deepMin = sleepEntry.deep < 24 ? Math.round(sleepEntry.deep * 60) : Math.round(sleepEntry.deep);
+    // Also try standalone deep_sleep / rem_sleep metrics (hours)
+    if (deepMin == null) {
+      const v = getForDate(date, "deep_sleep", "deep_sleep_duration");
+      if (v != null) deepMin = Math.round(v * 60);
     }
-    if (sleepEntry.rem != null) {
-      remMin = sleepEntry.rem < 24 ? Math.round(sleepEntry.rem * 60) : Math.round(sleepEntry.rem);
+    if (remMin == null) {
+      const v = getForDate(date, "rem_sleep", "rem_sleep_duration");
+      if (v != null) remMin = Math.round(v * 60);
     }
-  }
-  // Also try standalone deep_sleep / rem_sleep metrics (hours)
-  if (deepMin == null) {
-    const v = get("deep_sleep", "deep_sleep_duration");
-    if (v != null) deepMin = Math.round(v * 60);
-  }
-  if (remMin == null) {
-    const v = get("rem_sleep", "rem_sleep_duration");
-    if (v != null) remMin = Math.round(v * 60);
+
+    // Workouts attributed to this date
+    const dayWorkouts = workouts.filter((w: any) =>
+      parseHaeDate(w.startDate) === date
+    ).map((w: any) => ({
+      activity_type:  w.workoutActivityType ?? w.name ?? "Unknown",
+      duration_min:   w.duration ?? 0,
+      calories:       w.totalEnergyBurned ?? 0,
+      distance_km:    w.totalDistance ?? undefined,
+      avg_heart_rate: w.averageHeartRate ?? undefined,
+      date,
+    }));
+
+    const row: any = { date };
+    if (steps       != null) row.steps             = Math.round(steps);
+    if (activeKcal  != null) row.calories_burned   = Math.round(activeKcal);
+    if (exerciseMin != null) row.active_minutes    = Math.round(exerciseMin);
+    if (sleepMin    != null) row.sleep_duration_min = sleepMin;
+    if (deepMin     != null) row.deep_sleep_min    = deepMin;
+    if (remMin      != null) row.rem_sleep_min     = remMin;
+    if (rhr         != null) row.resting_heart_rate = Math.round(rhr);
+    if (hrv         != null) row.hrv_ms            = hrv;
+    if (weight      != null) row.weight_kg         = weight;
+    if (bodyFat     != null) row.body_fat_pct      = bodyFat;
+    if (vo2         != null) row.vo2_max           = vo2;
+    if (respRate    != null) row.respiratory_rate  = respRate;
+    if (dayWorkouts.length > 0) row.workouts       = dayWorkouts;
+
+    results.push(row);
   }
 
-  return {
-    date: firstDate,
-    ...(steps        != null ? { steps: Math.round(steps) }                         : {}),
-    ...(activeKcal   != null ? { calories_burned: Math.round(activeKcal) }          : {}),
-    ...(exerciseMin  != null ? { active_minutes: Math.round(exerciseMin) }          : {}),
-    ...(sleepMin     != null ? { sleep_duration_min: sleepMin }                     : {}),
-    ...(deepMin      != null ? { deep_sleep_min: deepMin }                          : {}),
-    ...(remMin       != null ? { rem_sleep_min: remMin }                            : {}),
-    ...(rhr          != null ? { resting_heart_rate: Math.round(rhr) }              : {}),
-    ...(hrv          != null ? { hrv_ms: hrv }                                      : {}),
-    ...(weight       != null ? { weight_kg: weight }                                : {}),
-    ...(bodyFat      != null ? { body_fat_pct: bodyFat }                            : {}),
-    ...(vo2          != null ? { vo2_max: vo2 }                                     : {}),
-    ...(respRate     != null ? { respiratory_rate: respRate }                       : {}),
-    ...(workouts.length > 0 ? {
-      workouts: workouts.map((w: any) => ({
-        activity_type: w.workoutActivityType ?? w.name ?? "Unknown",
-        duration_min:  w.duration ?? 0,
-        calories:      w.totalEnergyBurned ?? 0,
-        distance_km:   w.totalDistance ?? undefined,
-        avg_heart_rate: w.averageHeartRate ?? undefined,
-        date:          w.startDate?.split(" ")?.[0] ?? firstDate,
-      }))
-    } : {}),
-  };
+  return results;
 }
 
 // ─── Route registration ────────────────────────────────────────────────────
@@ -273,13 +286,15 @@ export function registerAppleHealthRoutes(app: Express): void {
         }
         const userId: string = userRows[0].id;
 
-        // Parse and validate the request body
-        const normalized = normalizeHealthPayload(req.body);
+        // Normalize payload into one object per calendar date.
+        // Single-day (Today/Yesterday) payloads return a 1-element array;
+        // multi-day (Default) payloads return one element per day.
+        const normalizedRows = normalizeHealthPayload(req.body);
+
         // Log metric names for observability
         if (req.body?.data?.metrics) {
           const names = req.body.data.metrics.map((m: any) => m.name);
-          console.log("[apple-health] metrics received:", names.join(", "), "| normalized keys:", Object.keys(normalized).join(", "));
-          // Log any metric names not recognized
+          console.log("[apple-health] metrics received:", names.join(", "), `| dates: ${normalizedRows.map((r: any) => r.date).join(", ")}`);
           const KNOWN_METRICS = ["step_count", "steps", "stepCount", "active_energy", "activeEnergy", "active_energy_burned", "basal_energy_burned", "basalEnergy", "basalEnergyBurned", "apple_exercise_time", "appleExerciseTime", "exercise_time", "exercise_time_minutes", "sleep_analysis", "sleepAnalysis", "sleep", "resting_heart_rate", "restingHeartRate", "heart_rate_variability_sdnn", "heartRateVariabilitySDNN", "hrv_sdnn", "hrv", "heartRateVariability", "body_mass", "bodyMass", "weight", "weight_body_mass", "body_fat_percentage", "bodyFatPercentage", "vo2_max", "vo2Max", "VO2Max", "respiratory_rate", "respiratoryRate"];
           const unknown = names.filter((n: string) => !KNOWN_METRICS.includes(n));
           if (unknown.length > 0) {
@@ -287,82 +302,88 @@ export function registerAppleHealthRoutes(app: Express): void {
           }
         }
 
-        // Skip upsert if no metric data was extracted (only date field present)
-        // This prevents writing a null row when HAE sends an unrecognized metric name
-        const metricKeys = Object.keys(normalized).filter(k => k !== "date");
-        if (metricKeys.length === 0) {
-          console.log(`[apple-health] skipping upsert — no recognized metrics in payload (raw metric names: ${req.body?.data?.metrics?.map((m: any) => m.name).join(", ") ?? "unknown"})`);
+        let upsertedDates: string[] = [];
+
+        for (const normalized of normalizedRows) {
+          // Skip rows with no metric data (only date field present)
+          const metricKeys = Object.keys(normalized).filter(k => k !== "date");
+          if (metricKeys.length === 0) {
+            console.log(`[apple-health] skipping upsert for ${normalized.date} — no recognized metrics`);
+            continue;
+          }
+
+          const parsed = pushBodySchema.safeParse(normalized);
+          if (!parsed.success) {
+            console.log(`[HAE] Zod parse failed for ${normalized.date}:`, JSON.stringify(parsed.error.issues));
+            continue;
+          }
+          const data = parsed.data;
+
+          // Upsert into apple_health_daily
+          await pool.query(
+            `INSERT INTO apple_health_daily
+               (user_id, date, total_steps, calories_burned, active_minutes,
+                sleep_duration_min, deep_sleep_min, rem_sleep_min,
+                resting_heart_rate, avg_overnight_hrv, weight_kg, body_fat_pct,
+                workouts, vo2_max, respiratory_rate, synced_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, now())
+             ON CONFLICT (user_id, date) DO UPDATE SET
+               total_steps        = COALESCE(EXCLUDED.total_steps,        apple_health_daily.total_steps),
+               calories_burned    = COALESCE(EXCLUDED.calories_burned,    apple_health_daily.calories_burned),
+               active_minutes     = COALESCE(EXCLUDED.active_minutes,     apple_health_daily.active_minutes),
+               sleep_duration_min = COALESCE(EXCLUDED.sleep_duration_min, apple_health_daily.sleep_duration_min),
+               deep_sleep_min     = COALESCE(EXCLUDED.deep_sleep_min,     apple_health_daily.deep_sleep_min),
+               rem_sleep_min      = COALESCE(EXCLUDED.rem_sleep_min,      apple_health_daily.rem_sleep_min),
+               resting_heart_rate = COALESCE(EXCLUDED.resting_heart_rate, apple_health_daily.resting_heart_rate),
+               avg_overnight_hrv  = COALESCE(EXCLUDED.avg_overnight_hrv,  apple_health_daily.avg_overnight_hrv),
+               weight_kg          = COALESCE(EXCLUDED.weight_kg,          apple_health_daily.weight_kg),
+               body_fat_pct       = COALESCE(EXCLUDED.body_fat_pct,       apple_health_daily.body_fat_pct),
+               workouts           = COALESCE(EXCLUDED.workouts,           apple_health_daily.workouts),
+               vo2_max            = COALESCE(EXCLUDED.vo2_max,            apple_health_daily.vo2_max),
+               respiratory_rate   = COALESCE(EXCLUDED.respiratory_rate,   apple_health_daily.respiratory_rate),
+               synced_at          = now()`,
+            [
+              userId,
+              data.date,
+              data.steps ?? null,
+              data.calories_burned ?? null,
+              data.active_minutes ?? null,
+              data.sleep_duration_min ?? null,
+              data.deep_sleep_min ?? null,
+              data.rem_sleep_min ?? null,
+              data.resting_heart_rate ?? null,
+              data.hrv_ms ?? null,
+              data.weight_kg ?? null,
+              data.body_fat_pct ?? null,
+              data.workouts ? JSON.stringify(data.workouts) : null,
+              data.vo2_max ?? null,
+              data.respiratory_rate ?? null,
+            ]
+          );
+
+          // If weight was provided, also upsert into weight_log
+          if (data.weight_kg) {
+            await pool.query(
+              `INSERT INTO weight_log (user_id, date, weight_kg, source, logged_at)
+               VALUES ($1, $2, $3, 'apple_health', now())
+               ON CONFLICT (user_id, date) DO UPDATE SET
+                 weight_kg = EXCLUDED.weight_kg,
+                 source    = 'apple_health',
+                 logged_at = now()`,
+              [userId, data.date, data.weight_kg]
+            );
+          }
+
+          upsertedDates.push(data.date);
+        }
+
+        if (upsertedDates.length === 0) {
+          console.log(`[apple-health] skipping upsert — no recognized metrics in any row`);
           return res.json({ ok: true, skipped: "no recognized metrics" });
         }
 
-        const parsed = pushBodySchema.safeParse(normalized);
-        if (!parsed.success) {
-          console.log('[HAE] Zod parse failed:', JSON.stringify(parsed.error.issues));
-          return res
-            .status(400)
-            .json({ error: "Invalid payload", details: parsed.error.issues });
-        }
-        const data = parsed.data;
-
-        // Upsert into apple_health_daily
-        await pool.query(
-          `INSERT INTO apple_health_daily
-             (user_id, date, total_steps, calories_burned, active_minutes,
-              sleep_duration_min, deep_sleep_min, rem_sleep_min,
-              resting_heart_rate, avg_overnight_hrv, weight_kg, body_fat_pct,
-              workouts, vo2_max, respiratory_rate, synced_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, now())
-           ON CONFLICT (user_id, date) DO UPDATE SET
-             total_steps        = COALESCE(EXCLUDED.total_steps,        apple_health_daily.total_steps),
-             calories_burned    = COALESCE(EXCLUDED.calories_burned,    apple_health_daily.calories_burned),
-             active_minutes     = COALESCE(EXCLUDED.active_minutes,     apple_health_daily.active_minutes),
-             sleep_duration_min = COALESCE(EXCLUDED.sleep_duration_min, apple_health_daily.sleep_duration_min),
-             deep_sleep_min     = COALESCE(EXCLUDED.deep_sleep_min,     apple_health_daily.deep_sleep_min),
-             rem_sleep_min      = COALESCE(EXCLUDED.rem_sleep_min,      apple_health_daily.rem_sleep_min),
-             resting_heart_rate = COALESCE(EXCLUDED.resting_heart_rate, apple_health_daily.resting_heart_rate),
-             avg_overnight_hrv  = COALESCE(EXCLUDED.avg_overnight_hrv,  apple_health_daily.avg_overnight_hrv),
-             weight_kg          = COALESCE(EXCLUDED.weight_kg,          apple_health_daily.weight_kg),
-             body_fat_pct       = COALESCE(EXCLUDED.body_fat_pct,       apple_health_daily.body_fat_pct),
-             workouts           = COALESCE(EXCLUDED.workouts,           apple_health_daily.workouts),
-             vo2_max            = COALESCE(EXCLUDED.vo2_max,            apple_health_daily.vo2_max),
-             respiratory_rate   = COALESCE(EXCLUDED.respiratory_rate,   apple_health_daily.respiratory_rate),
-             synced_at          = now()`,
-          [
-            userId,
-            data.date,
-            data.steps ?? null,
-            data.calories_burned ?? null,
-            data.active_minutes ?? null,
-            data.sleep_duration_min ?? null,
-            data.deep_sleep_min ?? null,
-            data.rem_sleep_min ?? null,
-            data.resting_heart_rate ?? null,
-            data.hrv_ms ?? null,
-            data.weight_kg ?? null,
-            data.body_fat_pct ?? null,
-            data.workouts ? JSON.stringify(data.workouts) : null,
-            data.vo2_max ?? null,
-            data.respiratory_rate ?? null,
-          ]
-        );
-
-        // If weight was provided, also upsert into weight_log
-        if (data.weight_kg) {
-          await pool.query(
-            `INSERT INTO weight_log (user_id, date, weight_kg, source, logged_at)
-             VALUES ($1, $2, $3, 'apple_health', now())
-             ON CONFLICT (user_id, date) DO UPDATE SET
-               weight_kg = EXCLUDED.weight_kg,
-               source    = 'apple_health',
-               logged_at = now()`,
-            [userId, data.date, data.weight_kg]
-          );
-        }
-
-        console.log(
-          `[apple-health] push received for user ${userId} date=${data.date}`
-        );
-        res.json({ ok: true });
+        console.log(`[apple-health] push received for user ${userId} dates=${upsertedDates.join(", ")}`);
+        res.json({ ok: true, dates: upsertedDates });
       } catch (err: any) {
         console.error("[apple-health] push error:", err.message);
         res.status(500).json({ error: "Failed to store health data" });
