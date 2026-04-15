@@ -24,14 +24,14 @@ declare module "express-session" {
 
 app.use(
   express.json({
-    limit: "10mb",
+    limit: "50mb",
     verify: (req, _res, buf) => {
       req.rawBody = buf;
     },
   }),
 );
 
-app.use(express.urlencoded({ extended: false, limit: "10mb" }));
+app.use(express.urlencoded({ extended: false, limit: "50mb" }));
 
 // Session (used as fallback token store)
 app.use(
