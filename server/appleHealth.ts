@@ -165,21 +165,21 @@ export function registerAppleHealthRoutes(app: Express): void {
         const baseUrl =
           process.env.APP_URL ?? "https://wvu-dining-tracker.onrender.com";
         const webhookUrl = `${baseUrl}/api/apple-health/push/${token}`;
+        const configDownloadUrl = `${baseUrl}/hae-config.json`;
 
         res.json({
           webhookUrl,
+          configDownloadUrl,
           recommendedApp: {
             name: "Health Auto Export",
             appStoreUrl: "https://apps.apple.com/app/health-auto-export-json-csv/id1115567069",
             description: "Free app that auto-syncs Apple Health data to your webhook. No coding needed.",
           },
           setupGuide: [
-            "Install 'Health Auto Export' from the App Store (it's free).",
-            "Open the app and go to Automations → REST API.",
-            "Paste your Webhook URL (copied below) as the endpoint.",
-            "Set export format to JSON, period to 'Today', and aggregation to 'Day'.",
-            "Select all health metrics: Steps, Sleep Analysis, Heart Rate, HRV, Resting Heart Rate, Active Calories, Weight, Workouts, Body Fat %.",
-            "Enable automatic sync — the app will push your data daily.",
+            "Download the pre-built config file using the button below.",
+            "In Health Auto Export, go to Automations → tap the ⊕ icon → Import → select the downloaded file.",
+            "When prompted, paste your Webhook URL (copied in Step 2) into the URL field.",
+            "Save — HAE will automatically push your health data on the configured schedule.",
           ],
           manualShortcutGuide: [
             "Alternatively, use the iOS Shortcuts app:",

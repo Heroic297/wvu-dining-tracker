@@ -10,7 +10,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import {
   Watch, RefreshCw, Loader2, CheckCircle, XCircle, AlertCircle,
   Footprints, Moon, Heart, Brain, Battery, Activity, Scale,
-  Eye, EyeOff, Unplug, Smartphone, Copy, ExternalLink, ChevronDown,
+  Eye, EyeOff, Unplug, Smartphone, Copy, ExternalLink, ChevronDown, Download,
 } from "lucide-react";
 
 interface SleepLevel {
@@ -187,6 +187,7 @@ export default function WearablesPage() {
   const [ahSetupLoading, setAhSetupLoading] = useState(false);
   const [ahSetupData, setAhSetupData] = useState<{
     webhookUrl: string;
+    configDownloadUrl: string;
     recommendedApp: { name: string; appStoreUrl: string; description: string };
     setupGuide: string[];
     manualShortcutGuide: string[];
@@ -769,12 +770,20 @@ export default function WearablesPage() {
               </div>
             </div>
 
-            {/* Step 3: Setup guide steps */}
-            <div className="bg-slate-900 border border-slate-800/60 rounded-xl p-4 space-y-2">
+            {/* Step 3: Import config + instructions */}
+            <div className="bg-slate-900 border border-slate-800/60 rounded-xl p-4 space-y-3">
               <div className="flex items-center gap-2">
                 <span className="flex items-center justify-center w-6 h-6 rounded-full bg-pink-500/20 text-pink-400 text-xs font-bold">3</span>
-                <span className="text-sm font-semibold">Configure the app</span>
+                <span className="text-sm font-semibold">Import the pre-built config</span>
               </div>
+              <a
+                href={ahSetupData.configDownloadUrl}
+                download="wvu-dining-hae-config.json"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-pink-500/20 hover:bg-pink-500/30 text-pink-400 hover:text-pink-300 text-xs font-medium transition-colors"
+              >
+                <Download className="w-3.5 h-3.5" />
+                Download HAE Config
+              </a>
               <ol className="text-xs text-muted-foreground space-y-1 list-decimal list-inside ml-1">
                 {ahSetupData.setupGuide.map((step, i) => <li key={i}>{step}</li>)}
               </ol>
