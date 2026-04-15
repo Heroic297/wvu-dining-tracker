@@ -4,7 +4,7 @@
   "urlString": "",
   "exportFormat": "JSON",
   "exportDataType": "healthMetrics",
-  "exportPeriod": "Today",
+  "exportPeriod": "Default",
   "exportAggregation": "Days",
   "aggregateData": true,
   "aggregateSleep": true,
