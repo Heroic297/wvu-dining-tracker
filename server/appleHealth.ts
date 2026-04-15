@@ -79,6 +79,16 @@ function normalizeHealthPayload(body: any): any {
     return null;
   };
 
+  // Look up a metric and also return its units string
+  const getWithUnits = (...names: string[]): { val: number; units: string } | null => {
+    for (const name of names) {
+      const m = metrics.find((m: any) => m.name === name);
+      const val = m?.data?.[0]?.qty ?? m?.data?.[0]?.value;
+      if (val != null) return { val: Number(val), units: (m.units ?? "").toLowerCase() };
+    }
+    return null;
+  };
+
   const steps        = get("step_count", "steps");
   const activeKcal   = get("active_energy", "active_energy_burned", "activeEnergyBurned");
   const exerciseMin  = get("apple_exercise_time", "appleExerciseTime", "exercise_time");
@@ -87,7 +97,11 @@ function normalizeHealthPayload(body: any): any {
   const remHrs       = get("rem_sleep", "rem_sleep_duration");
   const rhr          = get("resting_heart_rate", "restingHeartRate");
   const hrv          = get("heart_rate_variability_sdnn", "heartRateVariabilitySDNN", "hrv");
-  const weight       = get("weight_body_mass", "body_mass", "bodyMass", "weight");
+  const weightRaw    = getWithUnits("weight_body_mass", "body_mass", "bodyMass", "weight");
+  // HAE exports weight in the user's Apple Health unit (lbs for US locale) — always store as kg
+  const weight       = weightRaw
+    ? (weightRaw.units === "lb" || weightRaw.units === "lbs" ? weightRaw.val * 0.453592 : weightRaw.val)
+    : null;
   const bodyFat      = get("body_fat_percentage", "bodyFatPercentage");
   const vo2          = get("vo2_max", "vo2Max");
   const respRate     = get("respiratory_rate", "respiratoryRate");
@@ -303,7 +317,7 @@ export function registerAppleHealthRoutes(app: Express): void {
 
         // Get last sync info + latest data
         const { rows: dataRows } = await pool.query(
-          `SELECT * FROM apple_health_daily WHERE user_id = $1 ORDER BY date DESC LIMIT 1`,
+          `SELECT * FROM apple_health_daily WHERE user_id = $1 ORDER BY synced_at DESC LIMIT 1`,
           [userId]
         );
 
