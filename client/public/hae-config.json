@@ -10,7 +10,7 @@
   "aggregateSleep": true,
   "exportVersion": "ExportVersion.v2",
   "exportFileLength": "day",
-  "batchRequests": false,
+  "batchRequests": true,
   "requestTimeout": 60,
   "notifyWhenRun": true,
   "notifyOnUpdate": true,
