@@ -42,6 +42,60 @@ const pushBodySchema = z.object({
   respiratory_rate: z.number().positive().optional(),
 });
 
+// ─── Normalize incoming payload ──────────────────────────────────────────────
+
+function normalizeHealthPayload(body: any): any {
+  // Already flat format
+  if (body?.date && typeof body.date === "string") return body;
+  // Health Auto Export format: { data: { metrics: [...], workouts: [...] } }
+  const metrics: any[] = body?.data?.metrics ?? [];
+  const workouts: any[] = body?.data?.workouts ?? [];
+  // Use today's date or extract from the first metric's data
+  const firstDate =
+    metrics[0]?.data?.[0]?.date?.split(" ")?.[0] ??
+    new Date().toISOString().split("T")[0];
+  const get = (name: string) => {
+    const m = metrics.find((m: any) =>
+      m.name?.toLowerCase().includes(name.toLowerCase())
+    );
+    return m?.data?.[0]?.qty ?? m?.data?.[0]?.value ?? null;
+  };
+  return {
+    date: firstDate,
+    steps: get("step") != null ? Math.round(get("step")) : undefined,
+    calories_burned:
+      get("active energy") != null
+        ? Math.round(get("active energy"))
+        : undefined,
+    active_minutes:
+      get("exercise time") != null
+        ? Math.round(get("exercise time"))
+        : undefined,
+    sleep_duration_min:
+      get("sleep") != null ? Math.round(get("sleep") * 60) : undefined,
+    resting_heart_rate:
+      get("resting heart") != null
+        ? Math.round(get("resting heart"))
+        : undefined,
+    hrv_ms: get("heart rate variability") ?? undefined,
+    weight_kg: get("body mass") ?? undefined,
+    body_fat_pct: get("body fat") ?? undefined,
+    vo2_max: get("vo2") ?? undefined,
+    respiratory_rate: get("respiratory rate") ?? undefined,
+    workouts:
+      workouts.length > 0
+        ? workouts.map((w: any) => ({
+            activity_type: w.workoutActivityType ?? w.name ?? "Unknown",
+            duration_min: w.duration ?? 0,
+            calories: w.totalEnergyBurned ?? 0,
+            distance_km: w.totalDistance ?? undefined,
+            avg_heart_rate: w.averageHeartRate ?? undefined,
+            date: w.startDate?.split(" ")?.[0] ?? firstDate,
+          }))
+        : undefined,
+  };
+}
+
 // ─── Route registration ────────────────────────────────────────────────────
 
 export function registerAppleHealthRoutes(app: Express): void {
@@ -127,7 +181,8 @@ export function registerAppleHealthRoutes(app: Express): void {
         const userId: string = userRows[0].id;
 
         // Parse and validate the request body
-        const parsed = pushBodySchema.safeParse(req.body);
+        const normalized = normalizeHealthPayload(req.body);
+        const parsed = pushBodySchema.safeParse(normalized);
         if (!parsed.success) {
           return res
             .status(400)
