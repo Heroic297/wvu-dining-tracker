@@ -623,8 +623,9 @@ export default function WearablesPage() {
                   value={d.total_steps != null ? Number(d.total_steps).toLocaleString() : "\u2014"} />
                 <DataCard icon={Activity} label="Active Minutes" iconColor="text-yellow-400"
                   value={fmt(d.active_minutes, " min")} />
-                <DataCard icon={Activity} label="Active Calories" iconColor="text-orange-400"
-                  value={fmt(d.calories_burned, " kcal")} />
+                <DataCard icon={Activity} label="Total Calories" iconColor="text-orange-400"
+                  value={fmt(d.calories_burned, " kcal")}
+                  sub="Active + Resting" />
                 <DataCard icon={Heart} label="Resting HR" iconColor="text-red-400"
                   value={fmt(d.resting_heart_rate, " bpm")} />
                 <DataCard icon={Brain} label="HRV" iconColor="text-emerald-400"
