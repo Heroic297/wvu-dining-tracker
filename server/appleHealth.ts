@@ -65,9 +65,15 @@ function normalizeHealthPayload(body: any): any {
   const workouts: any[] = body?.data?.workouts ?? [];
 
   // Extract date from first data point ("YYYY-MM-DD HH:mm:ss" → "YYYY-MM-DD")
-  const firstDate =
-    metrics[0]?.data?.[0]?.date?.split(" ")?.[0] ??
+  // Also handle ISO 8601 "YYYY-MM-DDTHH:mm:ssZ" and bare "YYYY-MM-DD"
+  const rawDate = metrics[0]?.data?.[0]?.date;
+  let firstDate =
+    rawDate?.split(" ")?.[0] ??
+    rawDate?.split("T")?.[0] ??
     new Date().toISOString().split("T")[0];
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(firstDate)) {
+    firstDate = new Date().toISOString().split("T")[0];
+  }
 
   // Look up a metric by exact name or any of several aliases, return first data point value
   const get = (...names: string[]): number | null => {
@@ -89,32 +95,62 @@ function normalizeHealthPayload(body: any): any {
     return null;
   };
 
-  const steps        = get("step_count", "steps");
-  const activeKcal   = get("active_energy", "active_energy_burned", "activeEnergyBurned");
-  const exerciseMin  = get("apple_exercise_time", "appleExerciseTime", "exercise_time");
-  const sleepHrs     = get("sleep_analysis", "sleepAnalysis", "sleep");
-  const deepHrs      = get("deep_sleep", "deep_sleep_duration");
-  const remHrs       = get("rem_sleep", "rem_sleep_duration");
+  const steps        = get("step_count", "steps", "stepCount");
+  const activeKcal   = get("active_energy", "activeEnergy", "active_energy_burned", "basalEnergy");
+  const exerciseMin  = get("apple_exercise_time", "appleExerciseTime", "active_minutes", "exercise_time");
   const rhr          = get("resting_heart_rate", "restingHeartRate");
-  const hrv          = get("heart_rate_variability_sdnn", "heartRateVariabilitySDNN", "hrv");
+  const hrv          = get("heart_rate_variability_sdnn", "heartRateVariabilitySDNN", "hrv_sdnn", "hrv");
   const weightRaw    = getWithUnits("weight_body_mass", "body_mass", "bodyMass", "weight");
   // HAE exports weight in the user's Apple Health unit (lbs for US locale) — always store as kg
   const weight       = weightRaw
     ? (weightRaw.units === "lb" || weightRaw.units === "lbs" ? weightRaw.val * 0.453592 : weightRaw.val)
     : null;
   const bodyFat      = get("body_fat_percentage", "bodyFatPercentage");
-  const vo2          = get("vo2_max", "vo2Max");
+  const vo2          = get("vo2_max", "vo2Max", "VO2Max");
   const respRate     = get("respiratory_rate", "respiratoryRate");
+
+  // ── Sleep extraction ─────────────────────────────────────────────────────
+  // Aggregated sleep_analysis uses { totalSleep, deep, rem } (NOT qty).
+  // totalSleep may be in minutes (>=24) or hours (<24) depending on HAE config.
+  const sleepMetric  = metrics.find((m: any) =>
+    ["sleep_analysis", "sleepAnalysis", "sleep"].includes(m.name)
+  );
+  const sleepEntry   = sleepMetric?.data?.[0];
+  let sleepMin: number | null = null;
+  let deepMin: number | null = null;
+  let remMin:  number | null = null;
+  if (sleepEntry) {
+    // Prefer aggregated fields; fall back to qty (unaggregated / iOS Shortcut)
+    const rawSleep = sleepEntry.totalSleep ?? sleepEntry.asleep ?? sleepEntry.qty;
+    if (rawSleep != null) {
+      // If value < 24, HAE sent hours; otherwise it's already minutes
+      sleepMin = rawSleep < 24 ? Math.round(rawSleep * 60) : Math.round(rawSleep);
+    }
+    if (sleepEntry.deep != null) {
+      deepMin = sleepEntry.deep < 24 ? Math.round(sleepEntry.deep * 60) : Math.round(sleepEntry.deep);
+    }
+    if (sleepEntry.rem != null) {
+      remMin = sleepEntry.rem < 24 ? Math.round(sleepEntry.rem * 60) : Math.round(sleepEntry.rem);
+    }
+  }
+  // Also try standalone deep_sleep / rem_sleep metrics (hours)
+  if (deepMin == null) {
+    const v = get("deep_sleep", "deep_sleep_duration");
+    if (v != null) deepMin = Math.round(v * 60);
+  }
+  if (remMin == null) {
+    const v = get("rem_sleep", "rem_sleep_duration");
+    if (v != null) remMin = Math.round(v * 60);
+  }
 
   return {
     date: firstDate,
     ...(steps        != null ? { steps: Math.round(steps) }                         : {}),
     ...(activeKcal   != null ? { calories_burned: Math.round(activeKcal) }          : {}),
     ...(exerciseMin  != null ? { active_minutes: Math.round(exerciseMin) }          : {}),
-    // sleep_analysis qty is in hours → convert to minutes
-    ...(sleepHrs     != null ? { sleep_duration_min: Math.round(sleepHrs * 60) }    : {}),
-    ...(deepHrs      != null ? { deep_sleep_min: Math.round(deepHrs * 60) }         : {}),
-    ...(remHrs       != null ? { rem_sleep_min: Math.round(remHrs * 60) }           : {}),
+    ...(sleepMin     != null ? { sleep_duration_min: sleepMin }                     : {}),
+    ...(deepMin      != null ? { deep_sleep_min: deepMin }                          : {}),
+    ...(remMin       != null ? { rem_sleep_min: remMin }                            : {}),
     ...(rhr          != null ? { resting_heart_rate: Math.round(rhr) }              : {}),
     ...(hrv          != null ? { hrv_ms: hrv }                                      : {}),
     ...(weight       != null ? { weight_kg: weight }                                : {}),
@@ -201,6 +237,8 @@ export function registerAppleHealthRoutes(app: Express): void {
     "/api/apple-health/push/:token",
     async (req: Request, res: Response) => {
       try {
+        console.log('[HAE] Raw payload:', JSON.stringify(req.body).slice(0, 2000));
+
         const { token } = req.params;
 
         // Basic token validation
@@ -227,6 +265,7 @@ export function registerAppleHealthRoutes(app: Express): void {
         }
         const parsed = pushBodySchema.safeParse(normalized);
         if (!parsed.success) {
+          console.log('[HAE] Zod parse failed:', JSON.stringify(parsed.error.issues));
           return res
             .status(400)
             .json({ error: "Invalid payload", details: parsed.error.issues });

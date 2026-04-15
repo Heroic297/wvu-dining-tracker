@@ -604,6 +604,10 @@ export default function WearablesPage() {
         {/* Connected state — show Apple Health data cards */}
         {appleHealthStatus?.connected && appleHealthStatus.latestData && (() => {
           const d = appleHealthStatus.latestData;
+          const fmt = (v: number | null | undefined, suffix?: string) =>
+            v != null ? `${v}${suffix ?? ""}` : "\u2014";
+          const fmtR = (v: number | null | undefined, decimals: number, suffix?: string) =>
+            v != null ? `${Number(v).toFixed(decimals)}${suffix ?? ""}` : "\u2014";
           const sleepMin: number | null = d.sleep_duration_min ?? null;
           const deepMin: number | null = d.deep_sleep_min ?? null;
           const remMin: number | null = d.rem_sleep_min ?? null;
@@ -615,37 +619,31 @@ export default function WearablesPage() {
             <div className="space-y-3">
               {/* Metric grid */}
               <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                {d.total_steps != null && (
-                  <DataCard icon={Footprints} label="Steps" iconColor="text-green-400"
-                    value={Number(d.total_steps).toLocaleString()} />
-                )}
-                {d.active_minutes != null && (
-                  <DataCard icon={Activity} label="Active Minutes" iconColor="text-yellow-400"
-                    value={`${d.active_minutes} min`} />
-                )}
-                {d.calories_burned != null && (
-                  <DataCard icon={Activity} label="Active Calories" iconColor="text-orange-400"
-                    value={`${d.calories_burned} kcal`} />
-                )}
-                {d.resting_heart_rate != null && (
-                  <DataCard icon={Heart} label="Resting HR" iconColor="text-red-400"
-                    value={`${d.resting_heart_rate} bpm`} />
-                )}
-                {d.avg_overnight_hrv != null && (
-                  <DataCard icon={Brain} label="HRV" iconColor="text-emerald-400"
-                    value={`${Math.round(Number(d.avg_overnight_hrv))} ms`} />
-                )}
+                <DataCard icon={Footprints} label="Steps" iconColor="text-green-400"
+                  value={d.total_steps != null ? Number(d.total_steps).toLocaleString() : "\u2014"} />
+                <DataCard icon={Activity} label="Active Minutes" iconColor="text-yellow-400"
+                  value={fmt(d.active_minutes, " min")} />
+                <DataCard icon={Activity} label="Active Calories" iconColor="text-orange-400"
+                  value={fmt(d.calories_burned, " kcal")} />
+                <DataCard icon={Heart} label="Resting HR" iconColor="text-red-400"
+                  value={fmt(d.resting_heart_rate, " bpm")} />
+                <DataCard icon={Brain} label="HRV" iconColor="text-emerald-400"
+                  value={d.avg_overnight_hrv != null ? `${Math.round(Number(d.avg_overnight_hrv))} ms` : "\u2014"} />
                 {sleepMin != null && !hasSleepBreakdown && (
                   <DataCard icon={Moon} label="Sleep" iconColor="text-indigo-400"
                     value={`${Math.floor(sleepMin / 60)}h ${sleepMin % 60}m`} />
                 )}
+                {sleepMin == null && !hasSleepBreakdown && (
+                  <DataCard icon={Moon} label="Sleep" iconColor="text-indigo-400"
+                    value={"\u2014"} />
+                )}
                 {d.vo2_max != null && (
-                  <DataCard icon={Activity} label="VO₂ Max" iconColor="text-cyan-400"
-                    value={`${Number(d.vo2_max).toFixed(1)} mL/kg/min`} />
+                  <DataCard icon={Activity} label="VO\u2082 Max" iconColor="text-cyan-400"
+                    value={fmtR(d.vo2_max, 1, " mL/kg/min")} />
                 )}
                 {d.respiratory_rate != null && (
                   <DataCard icon={Activity} label="Resp. Rate" iconColor="text-sky-400"
-                    value={`${Number(d.respiratory_rate).toFixed(1)} /min`} />
+                    value={fmtR(d.respiratory_rate, 1, " /min")} />
                 )}
                 {d.weight_kg != null && (
                   <DataCard icon={Scale} label="Weight" iconColor="text-blue-400"
