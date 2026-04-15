@@ -96,10 +96,10 @@ function normalizeHealthPayload(body: any): any {
   };
 
   const steps        = get("step_count", "steps", "stepCount");
-  const activeKcal   = get("active_energy", "activeEnergy", "active_energy_burned", "basalEnergy");
-  const exerciseMin  = get("apple_exercise_time", "appleExerciseTime", "active_minutes", "exercise_time");
+  const activeKcal   = get("active_energy", "activeEnergy", "active_energy_burned", "basal_energy_burned", "basalEnergy", "basalEnergyBurned");
+  const exerciseMin  = get("apple_exercise_time", "appleExerciseTime", "active_minutes", "exercise_time", "exercise_time_minutes");
   const rhr          = get("resting_heart_rate", "restingHeartRate");
-  const hrv          = get("heart_rate_variability_sdnn", "heartRateVariabilitySDNN", "hrv_sdnn", "hrv");
+  const hrv          = get("heart_rate_variability_sdnn", "heartRateVariabilitySDNN", "hrv_sdnn", "hrv", "heartRateVariability");
   const weightRaw    = getWithUnits("weight_body_mass", "body_mass", "bodyMass", "weight");
   // HAE exports weight in the user's Apple Health unit (lbs for US locale) — always store as kg
   const weight       = weightRaw
@@ -258,11 +258,26 @@ export function registerAppleHealthRoutes(app: Express): void {
 
         // Parse and validate the request body
         const normalized = normalizeHealthPayload(req.body);
-        // Log metric names for observability (compact, not verbose)
+        // Log metric names for observability
         if (req.body?.data?.metrics) {
           const names = req.body.data.metrics.map((m: any) => m.name);
           console.log("[apple-health] metrics received:", names.join(", "), "| normalized keys:", Object.keys(normalized).join(", "));
+          // Log any metric names not recognized
+          const KNOWN_METRICS = ["step_count", "steps", "stepCount", "active_energy", "activeEnergy", "active_energy_burned", "basal_energy_burned", "basalEnergy", "basalEnergyBurned", "apple_exercise_time", "appleExerciseTime", "exercise_time", "exercise_time_minutes", "sleep_analysis", "sleepAnalysis", "sleep", "resting_heart_rate", "restingHeartRate", "heart_rate_variability_sdnn", "heartRateVariabilitySDNN", "hrv_sdnn", "hrv", "heartRateVariability", "body_mass", "bodyMass", "weight", "weight_body_mass", "body_fat_percentage", "bodyFatPercentage", "vo2_max", "vo2Max", "VO2Max", "respiratory_rate", "respiratoryRate"];
+          const unknown = names.filter((n: string) => !KNOWN_METRICS.includes(n));
+          if (unknown.length > 0) {
+            console.log(`[apple-health] UNRECOGNIZED metric names (add aliases): ${unknown.join(", ")}`);
+          }
         }
+
+        // Skip upsert if no metric data was extracted (only date field present)
+        // This prevents writing a null row when HAE sends an unrecognized metric name
+        const metricKeys = Object.keys(normalized).filter(k => k !== "date");
+        if (metricKeys.length === 0) {
+          console.log(`[apple-health] skipping upsert — no recognized metrics in payload (raw metric names: ${req.body?.data?.metrics?.map((m: any) => m.name).join(", ") ?? "unknown"})`);
+          return res.json({ ok: true, skipped: "no recognized metrics" });
+        }
+
         const parsed = pushBodySchema.safeParse(normalized);
         if (!parsed.success) {
           console.log('[HAE] Zod parse failed:', JSON.stringify(parsed.error.issues));
