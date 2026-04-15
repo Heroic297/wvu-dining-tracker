@@ -64,33 +64,46 @@ function normalizeHealthPayload(body: any): any {
   const metrics: any[] = body?.data?.metrics ?? [];
   const workouts: any[] = body?.data?.workouts ?? [];
 
-  // Extract date from first data point ("YYYY-MM-DD HH:mm:ss" → "YYYY-MM-DD")
-  // Also handle ISO 8601 "YYYY-MM-DDTHH:mm:ssZ" and bare "YYYY-MM-DD"
-  const rawDate = metrics[0]?.data?.[0]?.date;
-  let firstDate =
-    rawDate?.split(" ")?.[0] ??
-    rawDate?.split("T")?.[0] ??
-    new Date().toISOString().split("T")[0];
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(firstDate)) {
-    firstDate = new Date().toISOString().split("T")[0];
+  // Extract date from the most recent data point across all metrics.
+  // HAE sends data sorted descending (newest first), so data[0] is the most recent entry.
+  // Also handle ISO 8601 "YYYY-MM-DDTHH:mm:ssZ" and bare "YYYY-MM-DD".
+  const parseHaeDate = (raw: string | undefined): string | null => {
+    if (!raw) return null;
+    const d = raw.split(" ")[0] ?? raw.split("T")[0];
+    return /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : null;
+  };
+  let firstDate: string = new Date().toISOString().split("T")[0];
+  for (const m of metrics) {
+    const d = parseHaeDate(m?.data?.[0]?.date);
+    if (d) { firstDate = d; break; }
   }
 
-  // Look up a metric by exact name or any of several aliases, return first data point value
+  // Look up a metric by exact name or any of several aliases.
+  // With "Default" / "Last N Days" date ranges, HAE sends multiple data entries per metric
+  // (one per calendar day, sorted descending). We walk all entries and return the first
+  // non-null value so overnight metrics (sleep, RHR, HRV) are captured even if today's
+  // entry is empty/absent but yesterday's is populated.
   const get = (...names: string[]): number | null => {
     for (const name of names) {
       const m = metrics.find((m: any) => m.name === name);
-      const val = m?.data?.[0]?.qty ?? m?.data?.[0]?.value;
-      if (val != null) return Number(val);
+      if (!m) continue;
+      for (const entry of (m.data ?? [])) {
+        const val = entry?.qty ?? entry?.value;
+        if (val != null) return Number(val);
+      }
     }
     return null;
   };
 
-  // Look up a metric and also return its units string
+  // Look up a metric and also return its units string (from the first non-null entry).
   const getWithUnits = (...names: string[]): { val: number; units: string } | null => {
     for (const name of names) {
       const m = metrics.find((m: any) => m.name === name);
-      const val = m?.data?.[0]?.qty ?? m?.data?.[0]?.value;
-      if (val != null) return { val: Number(val), units: (m.units ?? "").toLowerCase() };
+      if (!m) continue;
+      for (const entry of (m.data ?? [])) {
+        const val = entry?.qty ?? entry?.value;
+        if (val != null) return { val: Number(val), units: (m.units ?? "").toLowerCase() };
+      }
     }
     return null;
   };
@@ -112,10 +125,14 @@ function normalizeHealthPayload(body: any): any {
   // ── Sleep extraction ─────────────────────────────────────────────────────
   // Aggregated sleep_analysis uses { totalSleep, deep, rem } (NOT qty).
   // totalSleep may be in minutes (>=24) or hours (<24) depending on HAE config.
+  // Walk all sleep data entries to find the first one with usable sleep data.
+  // With multi-day date ranges, today's entry may be empty while yesterday's has the data.
   const sleepMetric  = metrics.find((m: any) =>
     ["sleep_analysis", "sleepAnalysis", "sleep"].includes(m.name)
   );
-  const sleepEntry   = sleepMetric?.data?.[0];
+  const sleepEntry   = sleepMetric?.data?.find((e: any) =>
+    e?.totalSleep != null || e?.asleep != null || e?.qty != null
+  ) ?? sleepMetric?.data?.[0];
   let sleepMin: number | null = null;
   let deepMin: number | null = null;
   let remMin:  number | null = null;
