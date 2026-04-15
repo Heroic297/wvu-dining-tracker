@@ -315,18 +315,48 @@ export function registerAppleHealthRoutes(app: Express): void {
         );
         const setupComplete = !!userRows[0]?.apple_health_token;
 
-        // Get last sync info + latest data
+        // Fetch today's row + the most-recently-synced row in one query
+        const today = new Date().toISOString().split("T")[0];
         const { rows: dataRows } = await pool.query(
-          `SELECT * FROM apple_health_daily WHERE user_id = $1 ORDER BY synced_at DESC LIMIT 1`,
+          `SELECT * FROM apple_health_daily
+           WHERE user_id = $1
+           ORDER BY synced_at DESC
+           LIMIT 5`,
           [userId]
         );
 
-        // "connected" = data has been received at least once
-        const connected = !!dataRows[0]?.synced_at;
-        const lastSyncDate: string | null = dataRows[0]?.date ?? null;
-        const lastSyncAt: string | null = dataRows[0]?.synced_at ?? null;
+        // Today's row (may be partial — has sleep/RHR from overnight push)
+        const todayRow = dataRows.find((r: any) => r.date?.toISOString?.()?.startsWith(today) || String(r.date).startsWith(today)) ?? null;
+        // Most recently synced row (has steps/weight from yesterday push)
+        const recentRow = dataRows[0] ?? null;
 
-        res.json({ connected, setupComplete, lastSyncDate, lastSyncAt, latestData: dataRows[0] ?? null });
+        // Merge: prefer today's row for each field, fall back to recentRow for nulls
+        const merged = (todayRow && recentRow && todayRow !== recentRow)
+          ? {
+              ...recentRow,
+              // Override with today's non-null values
+              ...(todayRow.resting_heart_rate != null ? { resting_heart_rate: todayRow.resting_heart_rate } : {}),
+              ...(todayRow.sleep_duration_min  != null ? { sleep_duration_min:  todayRow.sleep_duration_min  } : {}),
+              ...(todayRow.deep_sleep_min      != null ? { deep_sleep_min:      todayRow.deep_sleep_min      } : {}),
+              ...(todayRow.rem_sleep_min       != null ? { rem_sleep_min:       todayRow.rem_sleep_min       } : {}),
+              ...(todayRow.avg_overnight_hrv   != null ? { avg_overnight_hrv:   todayRow.avg_overnight_hrv   } : {}),
+              ...(todayRow.total_steps         != null ? { total_steps:         todayRow.total_steps         } : {}),
+              ...(todayRow.calories_burned     != null ? { calories_burned:     todayRow.calories_burned     } : {}),
+              ...(todayRow.active_minutes      != null ? { active_minutes:      todayRow.active_minutes      } : {}),
+              ...(todayRow.weight_kg           != null ? { weight_kg:           todayRow.weight_kg           } : {}),
+              ...(todayRow.body_fat_pct        != null ? { body_fat_pct:        todayRow.body_fat_pct        } : {}),
+              ...(todayRow.vo2_max             != null ? { vo2_max:             todayRow.vo2_max             } : {}),
+              ...(todayRow.respiratory_rate    != null ? { respiratory_rate:    todayRow.respiratory_rate    } : {}),
+              synced_at: recentRow.synced_at, // most recent sync timestamp
+            }
+          : (todayRow ?? recentRow);
+
+        // "connected" = data has been received at least once
+        const connected = !!recentRow?.synced_at;
+        const lastSyncDate: string | null = recentRow?.date ?? null;
+        const lastSyncAt: string | null = recentRow?.synced_at ?? null;
+
+        res.json({ connected, setupComplete, lastSyncDate, lastSyncAt, latestData: merged });
       } catch (err: any) {
         console.error("[apple-health] status error:", err.message);
         res.status(500).json({ error: "Failed to fetch status" });

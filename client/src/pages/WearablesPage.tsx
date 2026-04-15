@@ -74,7 +74,14 @@ export default function WearablesPage() {
       const res = await apiRequest("GET", "/api/garmin/status");
       return res.json();
     },
-    refetchInterval: 60000, // Refresh every minute
+    staleTime: 5 * 60 * 1000,   // treat as fresh for 5 minutes
+    refetchOnWindowFocus: false, // don't re-fetch just because the user switched tabs
+    // Only poll when Garmin is actively connected and healthy — not on error/disconnected
+    refetchInterval: (query) => {
+      const d = query.state.data as GarminStatus | undefined;
+      if (!d?.connected || d?.status === "error" || d?.status === "disconnected") return false;
+      return 5 * 60 * 1000; // poll every 5 min only when connected
+    },
   });
 
   const connectMutation = useMutation({
