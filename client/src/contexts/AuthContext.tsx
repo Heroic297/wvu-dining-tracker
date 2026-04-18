@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from "react";
 import { setToken } from "@/lib/api";
-import { queryClient } from "@/lib/queryClient";
+import { queryClient, setLogoutCallback } from "@/lib/queryClient";
 
 interface AuthUser {
   id: string;
@@ -28,6 +28,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setTokenState] = useState<string | null>(null);
   const [user, setUser] = useState<AuthUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    setLogoutCallback(() => {
+      setTokenState(null);
+      setUser(null);
+      setToken(null);
+      try {
+        sessionStorage.removeItem(TOKEN_KEY);
+        sessionStorage.removeItem(USER_KEY);
+      } catch { /* ignore */ }
+      queryClient.clear();
+    });
+  }, []);
 
   useEffect(() => {
     // Note: sessionStorage is blocked in some iframe contexts.

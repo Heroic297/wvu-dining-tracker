@@ -278,7 +278,7 @@ export default function LogMealPage() {
       } else {
         setSearchResult({ error: "Not found — please enter values manually" });
       }
-      console.error("[handleSearch] lookup error:", err);
+      if (import.meta.env.DEV) console.error("[handleSearch] lookup error:", err);
     } finally {
       setSearching(false);
     }
@@ -348,6 +348,16 @@ export default function LogMealPage() {
     // Reset file input so same file can be re-selected
     e.target.value = "";
 
+    // Validate file before uploading
+    if (!file.type.startsWith("image/")) {
+      toast({ title: "Invalid file", description: "Please select an image file.", variant: "destructive" });
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      toast({ title: "File too large", description: "Please select an image under 10 MB.", variant: "destructive" });
+      return;
+    }
+
     setPhotoAnalyzing(true);
     setPhotoError(null);
     setPhotoItems([]);
@@ -382,7 +392,7 @@ export default function LogMealPage() {
         multiplier: 1,
       })));
     } catch (err: any) {
-      console.error("[photoLog] analysis error:", err);
+      if (import.meta.env.DEV) console.error("[photoLog] analysis error:", err);
       setPhotoError("Couldn't identify food items clearly. Try the search bar instead.");
     } finally {
       setPhotoAnalyzing(false);
