@@ -4,6 +4,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
 import { Toaster } from "@/components/ui/toaster";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
+import ErrorBoundary from "@/components/ErrorBoundary";
 import Layout from "@/components/Layout";
 import LoginPage from "@/pages/LoginPage";
 import OnboardingPage from "@/pages/OnboardingPage";
@@ -17,6 +18,7 @@ import CoachPage from "@/pages/CoachPage";
 import WearablesPage from "@/pages/WearablesPage";
 import PhysiquePage from "@/pages/PhysiquePage";
 import TrainingPage from "@/pages/TrainingPage";
+import NotFoundPage from "@/pages/not-found";
 import { Loader2 } from "lucide-react";
 
 function AppRoutes() {
@@ -51,7 +53,7 @@ function AppRoutes() {
         <Route path="/coach" component={CoachPage} />
         <Route path="/physique" component={PhysiquePage} />
         <Route path="/train" component={TrainingPage} />
-        <Route component={DashboardPage} />
+        <Route component={NotFoundPage} />
       </Switch>
     </Layout>
   );
@@ -61,9 +63,10 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
-        {/* Single Router at the top — Layout's useHashLocation and all Links share this context */}
         <Router hook={useHashLocation}>
-          <AppRoutes />
+          <ErrorBoundary>
+            <AppRoutes />
+          </ErrorBoundary>
           <Toaster />
         </Router>
       </AuthProvider>

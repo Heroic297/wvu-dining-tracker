@@ -1,12 +1,20 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 import { getToken } from "./api";
 
-const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
+const API_BASE = import.meta.env.VITE_API_BASE ?? "";
+
+// Allows AuthContext to register a logout handler so 401 responses auto-sign-out the user
+let _logoutFn: (() => void) | null = null;
+export function setLogoutCallback(fn: () => void) {
+  _logoutFn = fn;
+}
 
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
+    if (res.status === 401 && _logoutFn) {
+      _logoutFn();
+    }
     const text = (await res.text()) || res.statusText;
-    // Try to extract a readable error message from JSON responses
     let message = text;
     try {
       const json = JSON.parse(text);
@@ -29,6 +37,7 @@ export async function apiRequest(
   const res = await fetch(`${API_BASE}${url}`, {
     method,
     headers,
+    credentials: "include",
     body: data ? JSON.stringify(data) : undefined,
   });
 
@@ -46,9 +55,13 @@ export const getQueryFn: <T>(options: {
     const headers: Record<string, string> = {};
     if (token) headers["Authorization"] = `Bearer ${token}`;
 
-    const res = await fetch(`${API_BASE}${queryKey[0] as string}`, { headers });
+    const res = await fetch(`${API_BASE}${queryKey[0] as string}`, {
+      headers,
+      credentials: "include",
+    });
 
     if (unauthorizedBehavior === "returnNull" && res.status === 401) {
+      if (_logoutFn) _logoutFn();
       return null;
     }
 
@@ -62,7 +75,7 @@ export const queryClient = new QueryClient({
       queryFn: getQueryFn({ on401: "returnNull" }),
       refetchInterval: false,
       refetchOnWindowFocus: false,
-      staleTime: 5 * 60 * 1000, // 5 minutes
+      staleTime: 5 * 60 * 1000,
       retry: false,
     },
     mutations: {

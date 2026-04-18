@@ -32,8 +32,8 @@ import { registerCoachRoutes } from "./coach.js";
 import { registerAppleHealthRoutes } from "./appleHealth.js";
 import { registerProgramRoutes } from "./programs.js";
 
-const CRON_SECRET = process.env.CRON_SECRET ?? "cron-secret";
-const ADMIN_SECRET = process.env.ADMIN_SECRET ?? "";
+const CRON_SECRET = process.env.CRON_SECRET;
+const ADMIN_SECRET = process.env.ADMIN_SECRET;
 
 export async function registerRoutes(
   httpServer: Server,
@@ -88,18 +88,26 @@ export async function registerRoutes(
 
   // ── Admin: Invite Code Management ──────────────────────────────────────────
   // Gated to the owner account by email — uses normal JWT auth.
-  const OWNER_EMAIL = process.env.OWNER_EMAIL ?? "owengidusko@gmail.com";
+  const OWNER_EMAIL = process.env.OWNER_EMAIL;
+  if (!OWNER_EMAIL) {
+    console.warn("[routes] OWNER_EMAIL env var not set — admin endpoints will deny all requests");
+  }
 
   const requireOwner = (req: AuthRequest, res: any, next: any) => {
-    if (!req.user || req.user.email !== OWNER_EMAIL) {
+    if (!OWNER_EMAIL || !req.user || req.user.email !== OWNER_EMAIL) {
       return res.status(403).json({ error: "Forbidden" });
     }
     next();
   };
 
   app.get("/api/admin/invites", requireAuth as any, requireOwner as any, async (_req, res) => {
-    const codes = await storage.listInviteCodes();
-    res.json(codes);
+    try {
+      const codes = await storage.listInviteCodes();
+      res.json(codes);
+    } catch (err: any) {
+      console.error("[admin/invites GET]", err);
+      res.status(500).json({ error: "Failed to fetch invites" });
+    }
   });
 
   app.post("/api/admin/invites", requireAuth as any, requireOwner as any, async (req: AuthRequest, res) => {
@@ -129,13 +137,23 @@ export async function registerRoutes(
   });
 
   app.patch("/api/admin/invites/:id/revoke", requireAuth as any, requireOwner as any, async (req, res) => {
-    await storage.revokeInviteCode(req.params.id);
-    res.json({ ok: true });
+    try {
+      await storage.revokeInviteCode(req.params.id);
+      res.json({ ok: true });
+    } catch (err: any) {
+      console.error("[admin/invites PATCH]", err);
+      res.status(500).json({ error: "Failed to revoke invite" });
+    }
   });
 
   app.delete("/api/admin/invites/:id", requireAuth as any, requireOwner as any, async (req, res) => {
-    await storage.deleteInviteCode(req.params.id);
-    res.json({ ok: true });
+    try {
+      await storage.deleteInviteCode(req.params.id);
+      res.json({ ok: true });
+    } catch (err: any) {
+      console.error("[admin/invites DELETE]", err);
+      res.status(500).json({ error: "Failed to delete invite" });
+    }
   });
 
   app.post("/api/auth/login", async (req, res) => {

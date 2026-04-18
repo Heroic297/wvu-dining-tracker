@@ -20,7 +20,7 @@ const HEX = {
 export default function DashboardPage() {
   const today = todayStr();
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ["/api/dashboard"],
     queryFn: async () => {
       const res = await apiRequest("GET", "/api/dashboard");
@@ -64,7 +64,19 @@ export default function DashboardPage() {
       const res = await api.logWater(today, newVal);
       return res.json();
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] }),
+    onMutate: async (delta: number) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/dashboard"] });
+      const prev = queryClient.getQueryData(["/api/dashboard"]);
+      queryClient.setQueryData(["/api/dashboard"], (old: any) => ({
+        ...old,
+        waterMl: Math.max(0, (old?.waterMl ?? 0) + delta),
+      }));
+      return { prev };
+    },
+    onError: (_err: any, _delta: any, context: any) => {
+      if (context?.prev) queryClient.setQueryData(["/api/dashboard"], context.prev);
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] }),
   });
 
   if (isLoading) {
@@ -79,6 +91,17 @@ export default function DashboardPage() {
             {[...Array(3)].map((_, i) => <Skeleton key={i} className="flex-1 h-28 rounded-xl bg-slate-800" />)}
           </div>
           <Skeleton className="h-36 rounded-xl bg-slate-800" />
+        </div>
+      </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center p-6">
+        <div className="text-center space-y-3 max-w-xs">
+          <p className="text-muted-foreground text-sm">Couldn't load your dashboard. Check your connection and try again.</p>
+          <Button variant="outline" onClick={() => refetch()} size="sm">Retry</Button>
         </div>
       </div>
     );
