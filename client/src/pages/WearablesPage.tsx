@@ -241,11 +241,17 @@ export default function WearablesPage() {
   };
 
   return (
-    <div className="p-4 md:p-6 max-w-2xl space-y-6">
+    <div className="p-4 md:p-6 max-w-2xl space-y-6 fade-up">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold flex items-center gap-2">
-          <Watch className="w-5 h-5 text-primary" />
-          Wearables
+        <h1
+          className="text-3xl font-extrabold flex items-center gap-3"
+          style={{ fontFamily: "var(--font-display)" }}
+        >
+          <Watch
+            className="w-6 h-6 text-primary"
+            style={{ filter: "drop-shadow(0 0 8px hsl(var(--primary) / 0.5))" }}
+          />
+          <span className="gradient-text">Wearables</span>
         </h1>
         {connected && (
           <Button

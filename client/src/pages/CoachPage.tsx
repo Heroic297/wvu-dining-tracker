@@ -939,13 +939,20 @@ export default function CoachPage() {
   return (
     <div className="flex h-full overflow-hidden">
       {/* ── Main chat area ── */}
-      <div className="flex flex-col flex-1 min-w-0 h-full bg-slate-950 text-slate-100">
+      <div className="flex flex-col flex-1 min-w-0 h-full text-slate-100">
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800 flex-shrink-0">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-white/5 bg-slate-950/40 backdrop-blur-lg flex-shrink-0">
           <div className="flex items-center gap-2">
-            <Brain className="w-5 h-5 text-emerald-400" />
-            <h1 className="text-base font-semibold text-slate-100">
-              Coach{profile?.preferredName ? ` · ${profile.preferredName}` : ""}
+            <Brain
+              className="w-5 h-5 text-emerald-400"
+              style={{ filter: "drop-shadow(0 0 6px hsl(158 64% 42% / 0.5))" }}
+            />
+            <h1
+              className="text-lg font-bold"
+              style={{ fontFamily: "var(--font-display)" }}
+            >
+              <span className="gradient-text">Coach</span>
+              {profile?.preferredName ? <span className="text-slate-300"> · {profile.preferredName}</span> : null}
             </h1>
           </div>
           <div className="flex items-center gap-2">

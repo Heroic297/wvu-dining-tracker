@@ -156,10 +156,16 @@ export default function PhysiquePage() {
   });
 
   return (
-    <div className="p-4 md:p-6 max-w-2xl space-y-6">
-      <h1 className="text-xl font-bold flex items-center gap-2">
-        <Camera className="w-5 h-5 text-primary" />
-        Physique Tracker
+    <div className="p-4 md:p-6 max-w-2xl space-y-6 fade-up">
+      <h1
+        className="text-3xl font-extrabold flex items-center gap-3"
+        style={{ fontFamily: "var(--font-display)" }}
+      >
+        <Camera
+          className="w-6 h-6 text-primary"
+          style={{ filter: "drop-shadow(0 0 8px hsl(var(--primary) / 0.5))" }}
+        />
+        <span className="gradient-text">Physique Tracker</span>
       </h1>
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>

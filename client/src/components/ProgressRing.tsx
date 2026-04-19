@@ -43,10 +43,10 @@ export default function ProgressRing({
           cy={size / 2}
           r={radius}
           fill="none"
-          stroke="hsl(var(--muted))"
+          stroke="hsl(222 15% 18%)"
           strokeWidth={strokeWidth}
           strokeLinecap="round"
-          opacity={0.4}
+          opacity={0.9}
         />
         {/* Progress arc */}
         {progress > 0 && (

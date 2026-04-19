@@ -187,8 +187,13 @@ export default function SettingsPage() {
   };
 
   return (
-    <div className="p-4 md:p-6 max-w-xl space-y-6">
-      <h1 className="text-xl font-bold">Settings</h1>
+    <div className="p-4 md:p-6 max-w-xl space-y-6 fade-up">
+      <h1
+        className="text-3xl font-extrabold gradient-text"
+        style={{ fontFamily: "var(--font-display)" }}
+      >
+        Settings
+      </h1>
 
       {/* Timezone */}
       <section className="bg-card border border-border rounded-xl p-4 space-y-3">

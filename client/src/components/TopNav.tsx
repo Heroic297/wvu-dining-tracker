@@ -41,7 +41,7 @@ export default function TopNav() {
   const initials = (user?.displayName ?? user?.email ?? "?")[0].toUpperCase();
 
   return (
-    <header className="hidden md:flex items-center h-14 border-b border-border bg-slate-950/80 backdrop-blur-md px-4 gap-6 flex-shrink-0">
+    <header className="hidden md:flex items-center h-14 border-b border-white/5 bg-slate-950/60 backdrop-blur-xl px-4 gap-6 flex-shrink-0">
       {/* Brand */}
       <Link
         href="/"
@@ -50,7 +50,7 @@ export default function TopNav() {
       >
         <LogoMark />
         <span
-          className="text-[15px] font-bold tracking-tight text-foreground"
+          className="text-[15px] font-bold tracking-tight gradient-text"
           style={{ fontFamily: "var(--font-display)" }}
         >
           Macro

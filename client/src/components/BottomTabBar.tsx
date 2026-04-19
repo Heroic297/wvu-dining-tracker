@@ -12,7 +12,7 @@ export default function BottomTabBar() {
   const tabs = PRIMARY_TABS.filter(t => !t.requiresPhysique || showPhysique);
 
   return (
-    <nav className="fixed bottom-0 inset-x-0 z-40 md:hidden border-t border-border bg-slate-950/95 backdrop-blur-md safe-area-bottom">
+    <nav className="fixed bottom-0 inset-x-0 z-40 md:hidden border-t border-white/5 bg-slate-950/80 backdrop-blur-xl safe-area-bottom">
       <div className="flex items-center justify-around h-16 px-2">
         {tabs.map(({ href, label, icon: Icon }) => {
           const active = href === "/" ? loc === "/" : loc.startsWith(href);

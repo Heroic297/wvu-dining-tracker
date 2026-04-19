@@ -881,11 +881,16 @@ export default function TrainingPage() {
   const [tab, setTab] = useState("programs");
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 pb-24">
-      <div className="max-w-lg mx-auto px-4 pt-6 space-y-4">
-        <div className="flex items-center gap-2">
-          <Dumbbell className="h-6 w-6 text-emerald-400" />
-          <h1 className="text-xl font-bold">Training</h1>
+    <div className="min-h-screen text-slate-100 pb-24">
+      <div className="max-w-lg mx-auto px-4 pt-6 space-y-4 fade-up">
+        <div className="flex items-center gap-3">
+          <Dumbbell className="h-7 w-7 text-emerald-400" style={{ filter: "drop-shadow(0 0 8px hsl(158 64% 42% / 0.5))" }} />
+          <h1
+            className="text-3xl font-extrabold gradient-text"
+            style={{ fontFamily: "var(--font-display)" }}
+          >
+            Training
+          </h1>
         </div>
 
         <Tabs value={tab} onValueChange={setTab}>

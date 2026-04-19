@@ -556,8 +556,13 @@ export default function LogMealPage() {
         />
       )}
 
-      <div className="p-4 md:p-6 max-w-2xl space-y-5">
-        <h1 className="text-xl font-bold">Log meal</h1>
+      <div className="p-4 md:p-6 max-w-2xl space-y-5 fade-up">
+        <h1
+          className="text-3xl font-extrabold gradient-text"
+          style={{ fontFamily: "var(--font-display)" }}
+        >
+          Log meal
+        </h1>
 
         {/* Controls */}
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
