@@ -176,6 +176,7 @@ export default function WearablesPage() {
     setupComplete: boolean;
     lastSyncDate: string | null;
     lastSyncAt: string | null;
+    sleepDate: string | null;
     latestData: any | null;
   }>({
     queryKey: ["apple-health-status"],
@@ -672,9 +673,12 @@ export default function WearablesPage() {
               {/* Sleep breakdown */}
               {hasSleepBreakdown && (
                 <section className="bg-card border border-border rounded-xl p-4 space-y-3">
-                  <h3 className="text-sm font-semibold flex items-center gap-2">
-                    <Moon className="w-4 h-4 text-indigo-400" />
-                    Sleep
+                  <h3 className="text-sm font-semibold flex items-center justify-between gap-2">
+                    <span className="flex items-center gap-2">
+                      <Moon className="w-4 h-4 text-indigo-400" />
+                      Sleep
+                    </span>
+                    {sleepDateLabel && <span className="text-xs font-normal text-muted-foreground">{sleepDateLabel}</span>}
                   </h3>
                   <AppleHealthSleepBar
                     totalMin={sleepMin!}

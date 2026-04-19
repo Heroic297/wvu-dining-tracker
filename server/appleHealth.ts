@@ -127,8 +127,9 @@ function normalizeHealthPayload(body: any): any[] {
     // Keep them separate so calories_burned = active + basal = total TDEE, matching
     // the "Total Calories" figure shown in Apple Health's Summary tab.
     // DO NOT alias basal into the active slot — they are semantically distinct.
-    const activeKcal  = getForDate(date, "active_energy", "activeEnergy");
-    const basalKcal   = getForDate(date, "basal_energy_burned", "basalEnergy", "basalEnergyBurned");
+    // HAE sends "active_energy_burned" (not "active_energy") in its JSON export.
+    const activeKcal  = getForDate(date, "active_energy_burned", "activeEnergyBurned", "active_energy", "activeEnergy");
+    const basalKcal   = getForDate(date, "basal_energy_burned", "basalEnergy", "basalEnergyBurned", "resting_energy_burned", "restingEnergyBurned");
     // Total calories = active + basal (both may be null independently)
     const totalKcal   = (activeKcal ?? 0) + (basalKcal ?? 0);
     // Only store if at least one component is non-null
@@ -146,25 +147,73 @@ function normalizeHealthPayload(body: any): any[] {
     const respRate    = getForDate(date, "respiratory_rate", "respiratoryRate");
 
     // ── Sleep extraction ─────────────────────────────────────────────────────
-    // Aggregated sleep_analysis uses { totalSleep, deep, rem } (NOT qty).
-    // totalSleep may be in minutes (>=24) or hours (<24) depending on HAE config.
+    // HAE sends sleep_analysis in two possible formats:
+    //   Aggregated: one entry per night with { qty, totalSleep, asleep, deep, rem, ... } in hours
+    //   Category:   one entry per sleep-stage interval with { date, endDate, value: "AsleepCore"|... }
     const sleepMetric = metrics.find((m: any) =>
       ["sleep_analysis", "sleepAnalysis", "sleep"].includes(m.name)
     );
-    const sleepEntry  = (sleepMetric?.data ?? []).find((e: any) => parseHaeDate(e?.date) === date);
     let sleepMin: number | null = null;
     let deepMin: number | null = null;
     let remMin:  number | null = null;
-    if (sleepEntry) {
-      const rawSleep = sleepEntry.totalSleep ?? sleepEntry.asleep ?? sleepEntry.qty;
-      if (rawSleep != null) {
-        sleepMin = rawSleep < 24 ? Math.round(rawSleep * 60) : Math.round(rawSleep);
-      }
-      if (sleepEntry.deep != null) {
-        deepMin = sleepEntry.deep < 24 ? Math.round(sleepEntry.deep * 60) : Math.round(sleepEntry.deep);
-      }
-      if (sleepEntry.rem != null) {
-        remMin = sleepEntry.rem < 24 ? Math.round(sleepEntry.rem * 60) : Math.round(sleepEntry.rem);
+
+    if (sleepMetric) {
+      const allEntries: any[] = sleepMetric.data ?? [];
+      // Detect format: category entries have a string "value" field (sleep stage name)
+      const isCategoryFormat = allEntries.some((e: any) => typeof e?.value === "string");
+
+      if (isCategoryFormat) {
+        // Sum up sleep-stage intervals whose start date matches this calendar date.
+        // A normal sleep session starts before midnight (date=yesterday) and ends after midnight.
+        // Include intervals starting on THIS date OR on the day before (covers full overnight session).
+        const prevDate = new Date(date + "T12:00:00Z");
+        prevDate.setUTCDate(prevDate.getUTCDate() - 1);
+        const prevDateStr = prevDate.toISOString().slice(0, 10);
+
+        const SLEEP_STAGES = new Set([
+          "AsleepUnspecified", "AsleepCore", "AsleepDeep", "AsleepREM",
+          "HKCategoryValueSleepAnalysisAsleep",
+          "HKCategoryValueSleepAnalysisAsleepUnspecified",
+          "HKCategoryValueSleepAnalysisAsleepCore",
+          "HKCategoryValueSleepAnalysisAsleepDeep",
+          "HKCategoryValueSleepAnalysisAsleepREM",
+        ]);
+        const DEEP_STAGES = new Set(["AsleepDeep", "HKCategoryValueSleepAnalysisAsleepDeep"]);
+        const REM_STAGES  = new Set(["AsleepREM",  "HKCategoryValueSleepAnalysisAsleepREM"]);
+
+        let totalMs = 0, deepMs = 0, remMs = 0;
+        for (const e of allEntries) {
+          const startStr: string = e?.date ?? e?.startDate;
+          const endStr:   string = e?.endDate;
+          if (!startStr || !endStr) continue;
+          const startDate = parseHaeDate(startStr);
+          // Only count intervals that start on this date or the night before (overnight sessions)
+          if (startDate !== date && startDate !== prevDateStr) continue;
+          const stage: string = e?.value ?? "";
+          if (!SLEEP_STAGES.has(stage)) continue;
+          const startMs = new Date(startStr.includes("T") ? startStr : startStr.replace(" ", "T")).getTime();
+          const endMs   = new Date(endStr.includes("T")   ? endStr   : endStr.replace(" ", "T")).getTime();
+          if (isNaN(startMs) || isNaN(endMs) || endMs <= startMs) continue;
+          const dur = endMs - startMs;
+          totalMs += dur;
+          if (DEEP_STAGES.has(stage)) deepMs += dur;
+          if (REM_STAGES.has(stage))  remMs  += dur;
+        }
+        if (totalMs > 0) {
+          sleepMin = Math.round(totalMs / 60000);
+          if (deepMs > 0) deepMin = Math.round(deepMs / 60000);
+          if (remMs  > 0) remMin  = Math.round(remMs  / 60000);
+        }
+      } else {
+        // Aggregated format: find the single summary entry for this date
+        const sleepEntry = allEntries.find((e: any) => parseHaeDate(e?.date) === date);
+        if (sleepEntry) {
+          const toMin = (v: number) => v < 24 ? Math.round(v * 60) : Math.round(v);
+          const rawSleep = sleepEntry.totalSleep ?? sleepEntry.asleep ?? sleepEntry.qty;
+          if (rawSleep != null && !isNaN(Number(rawSleep))) sleepMin = toMin(Number(rawSleep));
+          if (sleepEntry.deep != null && !isNaN(Number(sleepEntry.deep))) deepMin = toMin(Number(sleepEntry.deep));
+          if (sleepEntry.rem  != null && !isNaN(Number(sleepEntry.rem)))  remMin  = toMin(Number(sleepEntry.rem));
+        }
       }
     }
     // Also try standalone deep_sleep / rem_sleep metrics (hours)
@@ -417,13 +466,15 @@ export function registerAppleHealthRoutes(app: Express): void {
         );
         const setupComplete = !!userRows[0]?.apple_health_token;
 
-        // Fetch today's row + the most-recently-synced row in one query
+        // Fetch recent rows ordered by calendar date (most recent first).
+        // Using date DESC ensures yesterday's sleep row is always included regardless
+        // of synced_at ordering (which could put historical backfill rows ahead of yesterday).
         const today = new Date().toISOString().split("T")[0];
         const { rows: dataRows } = await pool.query(
           `SELECT * FROM apple_health_daily
            WHERE user_id = $1
-           ORDER BY synced_at DESC
-           LIMIT 5`,
+           ORDER BY date DESC, synced_at DESC
+           LIMIT 14`,
           [userId]
         );
 
@@ -476,7 +527,14 @@ export function registerAppleHealthRoutes(app: Express): void {
 
         // Expose the date the sleep data comes from so the frontend can label it
         // correctly ("Last night" vs "2 nights ago").
-        const sleepDate: string | null = sleepRow ? String(sleepRow.date) : null;
+        // Postgres date columns come back as JS Date objects — convert to YYYY-MM-DD string.
+        const toDateStr = (d: any): string | null => {
+          if (!d) return null;
+          if (d instanceof Date) return d.toISOString().slice(0, 10);
+          const s = String(d);
+          return /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0, 10) : null;
+        };
+        const sleepDate: string | null = sleepRow ? toDateStr(sleepRow.date) : null;
 
         res.json({ connected, setupComplete, lastSyncDate, lastSyncAt, sleepDate, latestData: merged });
       } catch (err: any) {
