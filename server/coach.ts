@@ -10,6 +10,7 @@
 import type { Express } from "express";
 import { pool } from "./db.js";
 import { requireAuth, type AuthRequest } from "./auth.js";
+import { coachLimiter } from "./rateLimit.js";
 import { encryptString, decryptString, maskApiKey } from "./crypto.js";
 import { scrapeLocationDate } from "./scraper.js";
 import { lookupNutrition } from "./nutrition.js";
@@ -1226,7 +1227,7 @@ export function registerCoachRoutes(app: Express): void {
   });
 
   // POST /api/coach/chat  — main chat endpoint
-  app.post("/api/coach/chat", requireAuth, async (req: AuthRequest, res) => {
+  app.post("/api/coach/chat", coachLimiter, requireAuth, async (req: AuthRequest, res) => {
     try {
       const userId = req.user!.id;
       const { message } = z.object({ message: z.string().min(1).max(2000) }).parse(req.body);

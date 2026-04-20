@@ -31,6 +31,7 @@ import crypto from "crypto";
 import { registerCoachRoutes } from "./coach.js";
 import { registerAppleHealthRoutes } from "./appleHealth.js";
 import { registerProgramRoutes } from "./programs.js";
+import { authLimiter, nutritionLimiter } from "./rateLimit.js";
 
 const CRON_SECRET = process.env.CRON_SECRET;
 const ADMIN_SECRET = process.env.ADMIN_SECRET;
@@ -39,6 +40,17 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+  // ── Health check ──────────────────────────────────────────────────────
+  app.get("/health", async (_req, res) => {
+    try {
+      await pool.query("SELECT 1");
+      res.json({ status: "ok", db: "connected", timestamp: new Date().toISOString() });
+    } catch (err: any) {
+      console.error("[health] DB check failed:", err.message);
+      res.status(503).json({ status: "error", db: "disconnected", timestamp: new Date().toISOString() });
+    }
+  });
+
   // ── AI Coach ──────────────────────────────────────────────────────────
   registerCoachRoutes(app);
   registerAppleHealthRoutes(app);
@@ -46,7 +58,7 @@ export async function registerRoutes(
 
   // ── Auth ───────────────────────────────────────────────────────────────────
 
-  app.post("/api/auth/register", async (req, res) => {
+  app.post("/api/auth/register", authLimiter, async (req, res) => {
     try {
       const schema = z.object({
         email: z.string().email(),
@@ -156,7 +168,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/auth/login", async (req, res) => {
+  app.post("/api/auth/login", authLimiter, async (req, res) => {
     try {
       const schema = z.object({
         email: z.string().email(),
@@ -415,6 +427,7 @@ export async function registerRoutes(
 
   app.get(
     "/api/nutrition/lookup",
+    nutritionLimiter,
     requireAuth as any,
     async (req: AuthRequest, res) => {
       try {
