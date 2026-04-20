@@ -530,6 +530,22 @@ export class PgStorage implements IStorage {
         },
       })
       .returning();
+
+    // Keep users.weightKg in sync with the most-recent weight-log entry so
+    // TDEE calculations always use the latest known weight.
+    const [latest] = await db
+      .select({ weightKg: weightLog.weightKg })
+      .from(weightLog)
+      .where(eq(weightLog.userId, entry.userId))
+      .orderBy(desc(weightLog.date))
+      .limit(1);
+    if (latest) {
+      await db
+        .update(users)
+        .set({ weightKg: latest.weightKg })
+        .where(eq(users.id, entry.userId));
+    }
+
     return row;
   }
 

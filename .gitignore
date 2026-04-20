@@ -5,3 +5,6 @@ dist/
 .DS_Store
 *.log
 migrations/
+# Added by code-review-graph
+.code-review-graph/
+audit*.txt

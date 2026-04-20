@@ -103,8 +103,8 @@ export const users = pgTable("users", {
   // AI Coach — per-provider encrypted API keys (AES-256-GCM, hex-encoded iv:tag:ciphertext)
   groqApiKeyEncrypted: text("groq_api_key_encrypted"),
   openrouterApiKeyEncrypted: text("openrouter_api_key_encrypted"),
-  // AI provider preference
-  aiProvider: text("ai_provider").default("groq"), // "groq" | "openrouter"
+  // AI provider preference — "groq" | "openrouter"
+  aiProvider: text("ai_provider").default("groq").$type<"groq" | "openrouter">(),
   // Model preference (provider-specific string)
   aiModel: text("ai_model"),
   // AI Coach daily usage counter (resets each day, only used when no own key)
@@ -244,7 +244,11 @@ export const diningItems = pgTable(
     nutritionSource: nutritionSourceEnum("nutrition_source").default("wvu"),
     rawMetadata: jsonb("raw_metadata"),
   },
-  (t) => [index("dining_items_menu_id").on(t.menuId)]
+  (t) => [
+    index("dining_items_menu_id").on(t.menuId),
+    // Required by createDiningItemsBulk's onConflictDoUpdate target
+    uniqueIndex("dining_items_menu_name").on(t.menuId, t.name),
+  ]
 );
 
 export const insertDiningItemSchema = createInsertSchema(diningItems).omit({
@@ -270,7 +274,7 @@ export const nutritionCache = pgTable(
     fatG: real("fat_g"),
     servingSize: text("serving_size"),
     source: nutritionSourceEnum("source").default("ai_estimated"),
-    confidence: text("confidence"), // "high" | "medium" | "low"
+    confidence: text("confidence").$type<"high" | "medium" | "low">(),
     cachedAt: timestamp("cached_at").default(sql`now()`),
   }
 );
@@ -306,12 +310,15 @@ export const userMeals = pgTable(
   },
   (t) => [
     index("user_meals_user_date").on(t.userId, t.date),
-    uniqueIndex("user_meals_user_date_type_loc").on(
-      t.userId,
-      t.date,
-      t.mealType,
-      t.locationId
-    ),
+    // Two partial indexes to correctly deduplicate both cases:
+    // NULL locationId (non-dining-hall) — a regular unique index would treat every NULL as distinct
+    uniqueIndex("user_meals_unique_null_loc")
+      .on(t.userId, t.date, t.mealType)
+      .where(sql`location_id IS NULL`),
+    // Non-NULL locationId (dining-hall meal)
+    uniqueIndex("user_meals_unique_with_loc")
+      .on(t.userId, t.date, t.mealType, t.locationId)
+      .where(sql`location_id IS NOT NULL`),
   ]
 );
 
@@ -379,8 +386,8 @@ export const weightLog = pgTable(
     date: date("date").notNull(),
     weightKg: real("weight_kg").notNull(),
     notes: text("notes"),
-    /** "manual" (user-entered) or "garmin" (synced from Garmin) */
-    source: text("source").default("manual"),
+    /** "manual" | "garmin" | "apple_health" */
+    source: text("source").default("manual").$type<"manual" | "garmin" | "apple_health">(),
     loggedAt: timestamp("logged_at").default(sql`now()`),
   },
   (t) => [uniqueIndex("weight_log_user_date").on(t.userId, t.date)]
@@ -455,17 +462,19 @@ export const aiProfiles = pgTable("ai_profiles", {
   onboardingComplete: boolean("onboarding_complete").default(false),
   // Answers from Q+A
   preferredName: text("preferred_name"),
-  mainGoal: text("main_goal"),             // "lose_weight" | "build_muscle" | "powerlifting" | "general_fitness" | "other"
+  mainGoal: text("main_goal").$type<"lose_weight" | "build_muscle" | "powerlifting" | "general_fitness" | "other">(),
   isWvuStudent: boolean("is_wvu_student").default(false),
-  experienceLevel: text("experience_level"), // "beginner" | "intermediate" | "advanced"
-  notes: text("notes"),                    // free-text: injuries, dietary restrictions, preferences
+  experienceLevel: text("experience_level").$type<"beginner" | "intermediate" | "advanced">(),
+  notes: text("notes"), // free-text: injuries, dietary restrictions, preferences
   // Rolling memory — rewritten by compaction, never appended
   rollingSummary: text("rolling_summary"),
   // Tone preference set during onboarding or by user request
-  coachTone: text("coach_tone").default("balanced"), // "coach" | "data" | "balanced"
+  coachTone: text("coach_tone").default("balanced").$type<"coach" | "data" | "balanced">(),
   updatedAt: timestamp("updated_at").default(sql`now()`),
 });
 
+export const insertAiProfileSchema = createInsertSchema(aiProfiles).omit({ updatedAt: true });
+export type InsertAiProfile = z.infer<typeof insertAiProfileSchema>;
 export type AiProfile = typeof aiProfiles.$inferSelect;
 
 // ─── AI Chat Messages ─────────────────────────────────────────────────────────
@@ -480,7 +489,7 @@ export const chatMessages = pgTable(
     userId: varchar("user_id", { length: 36 })
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
-    role: text("role").notNull(),   // "user" | "assistant" | "tool"
+    role: text("role").notNull().$type<"user" | "assistant" | "tool">(),
     content: text("content").notNull(),
     // Tool call metadata (assistant tool-use turns)
     toolName: text("tool_name"),
@@ -491,6 +500,8 @@ export const chatMessages = pgTable(
   (t) => [index("chat_messages_user_created").on(t.userId, t.createdAt)]
 );
 
+export const insertChatMessageSchema = createInsertSchema(chatMessages).omit({ id: true, createdAt: true });
+export type InsertChatMessage = z.infer<typeof insertChatMessageSchema>;
 export type ChatMessage = typeof chatMessages.$inferSelect;
 
 // ─── Garmin Session Tokens (unofficial garmin-connect library) ───────────────
@@ -507,16 +518,18 @@ export const garminSessions = pgTable("garmin_sessions", {
     .unique(),
   /** AES-256-GCM encrypted JSON blob of { oauth1, oauth2 } or { di_token, di_refresh_token, di_client_id } */
   encryptedTokens: text("encrypted_tokens").notNull(),
-  /** Status: connected | error | expired */
-  status: text("status").notNull().default("connected"),
-  /** Token type: garmin-connect (username/password) or di-token (direct API) */
-  tokenType: text("token_type").notNull().default("garmin-connect"),
+  /** "connected" | "error" | "expired" */
+  status: text("status").notNull().default("connected").$type<"connected" | "error" | "expired">(),
+  /** "garmin-connect" (username/password) | "di-token" (direct API) */
+  tokenType: text("token_type").notNull().default("garmin-connect").$type<"garmin-connect" | "di-token">(),
   lastSyncAt: timestamp("last_sync_at"),
   lastError: text("last_error"),
   createdAt: timestamp("created_at").default(sql`now()`),
   updatedAt: timestamp("updated_at").default(sql`now()`),
 });
 
+export const insertGarminSessionSchema = createInsertSchema(garminSessions).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertGarminSession = z.infer<typeof insertGarminSessionSchema>;
 export type GarminSession = typeof garminSessions.$inferSelect;
 
 // ─── Garmin Daily Summary (normalized wearable data) ─────────────────────────
@@ -595,6 +608,17 @@ export const appleHealthDaily = pgTable(
     avgOvernightHrv: real("avg_overnight_hrv"),
     weightKg: real("weight_kg"),
     bodyFatPct: real("body_fat_pct"),
+    // Extra columns written by appleHealth.ts — must exist or the push route errors
+    workouts: jsonb("workouts").$type<Array<{
+      activity_type: string;
+      duration_min: number;
+      calories: number;
+      distance_km?: number;
+      avg_heart_rate?: number;
+      date?: string;
+    }>>(),
+    vo2Max: real("vo2_max"),
+    respiratoryRate: real("respiratory_rate"),
     syncedAt: timestamp("synced_at").default(sql`now()`),
   },
   (t) => [uniqueIndex("apple_health_daily_user_date").on(t.userId, t.date)]
@@ -771,4 +795,6 @@ export const sessions = pgTable("session", {
   sid: varchar("sid").primaryKey(),
   sess: jsonb("sess").notNull(),
   expire: timestamp("expire").notNull(),
-});
+}, (t) => [
+  index("session_expire_idx").on(t.expire),
+]);
