@@ -119,7 +119,7 @@ export default function DashboardPage() {
     .reverse()
     .map((w: any) => ({
       date: w.date.slice(5),
-      lbs:  +kgToLbs(w.weightKg).toFixed(1),
+      lbs:  Math.round(kgToLbs(w.weightKg) * 10) / 10,
     }));
 
   const caloriesConsumed = Math.round(totals.calories);

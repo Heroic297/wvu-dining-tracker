@@ -1,6 +1,6 @@
 import { useState, useCallback } from "react";
 import { useAuth } from "@/contexts/AuthContext";
-import { api, kgToLbs } from "@/lib/api";
+import { api, kgToLbs, fmtLbs } from "@/lib/api";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -507,7 +507,7 @@ export default function WearablesPage() {
             {summary.weightKg != null && (
               <DataCard
                 icon={Scale} label="Garmin Weight" iconColor="text-blue-400"
-                value={`${kgToLbs(summary.weightKg)} lbs`}
+                value={`${fmtLbs(kgToLbs(summary.weightKg))} lbs`}
                 sub={summary.bodyFatPct ? `${summary.bodyFatPct}% body fat` : `${summary.weightKg.toFixed(1)} kg`}
               />
             )}

@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { Link } from "wouter";
 import { useAuth } from "@/contexts/AuthContext";
-import { api, lbsToKg, kgToLbs } from "@/lib/api";
+import { api, lbsToKg, kgToLbs, fmtLbs } from "@/lib/api";
 import { queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,7 +10,19 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { CheckCircle, Loader2, Activity, Scale, Droplets, Plus, Trash2, Brain, Eye, EyeOff, Globe, Sun, Moon, LogOut, Target, Users, Download, HardDrive, AlertTriangle, X } from "lucide-react";
+import { CheckCircle, Loader2, Activity, Scale, Droplets, Plus, Trash2, Brain, Eye, EyeOff, Globe, Sun, Moon, LogOut, Target, Users, Download, HardDrive, AlertTriangle, X, ShieldAlert } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useQuery } from "@tanstack/react-query";
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -46,7 +58,7 @@ export default function SettingsPage() {
   });
   const [activityLevel, setActivityLevel] = useState(user?.activityLevel ?? "moderately_active");
   const [goalType, setGoalType] = useState(user?.goalType ?? "maintenance");
-  const [targetWeightLbs, setTargetWeightLbs] = useState(user?.targetWeightKg ? String(kgToLbs(user.targetWeightKg)) : "");
+  const [targetWeightLbs, setTargetWeightLbs] = useState(user?.targetWeightKg ? fmtLbs(kgToLbs(user.targetWeightKg)) : "");
   const [targetDate, setTargetDate] = useState(user?.targetDate ?? "");
   const [burnMode, setBurnMode] = useState(user?.burnMode ?? "tdee");
   const [trainingDays, setTrainingDays] = useState<number[]>(user?.trainingDays as number[] ?? [1, 3, 5]);
@@ -561,6 +573,9 @@ export default function SettingsPage() {
         </div>
       </section>
 
+      {/* Data & History — Danger Zone */}
+      <DangerZone />
+
       <Button onClick={saveProfile} disabled={saving} className="w-full" data-testid="button-save-settings">
         {saving ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Saving...</> : "Save settings"}
       </Button>
@@ -582,5 +597,258 @@ export default function SettingsPage() {
         </a>
       </p>
     </div>
+  );
+}
+
+// ─── Danger Zone: wipe polluted test/debug data ─────────────────────────────
+//
+// Rendered as its own component so all the preview / confirmation state stays
+// colocated and doesn't clutter the main SettingsPage. The server requires an
+// explicit `confirm: "DELETE"` body field, so we gate the action behind the
+// user typing DELETE into a confirmation input.
+
+type HistoryCounts = {
+  meals: number;
+  weightLogs: number;
+  waterLogs: number;
+  supplementLogs: number;
+  workoutLogs: number;
+  physiquePhotos: number;
+};
+
+type HistoryScopeKey = keyof HistoryCounts | "coachMemory";
+
+const SCOPE_LABELS: Record<HistoryScopeKey, { label: string; desc: string }> = {
+  meals:          { label: "Meals",            desc: "Logged meals and every item inside them" },
+  weightLogs:     { label: "Weight log",       desc: "All weigh-ins (manual + wearable)" },
+  waterLogs:      { label: "Water log",        desc: "Daily ml totals" },
+  supplementLogs: { label: "Supplement log",   desc: "Daily supplement servings (keeps supplements themselves)" },
+  workoutLogs:    { label: "Workout log",      desc: "Training-log entries (keeps the program itself)" },
+  physiquePhotos: { label: "Physique photos",  desc: "Progress photos + AI analysis notes" },
+  coachMemory:    { label: "Coach memory",     desc: "Chat history + the rolling summary (profile preferences kept)" },
+};
+
+function DangerZone() {
+  const { toast } = useToast();
+  const [open, setOpen] = useState(false);
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [scopes, setScopes] = useState<Record<HistoryScopeKey, boolean>>({
+    meals: true,
+    weightLogs: false,
+    waterLogs: false,
+    supplementLogs: false,
+    workoutLogs: false,
+    physiquePhotos: false,
+    coachMemory: false,
+  });
+  const [counts, setCounts] = useState<HistoryCounts | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [confirmText, setConfirmText] = useState("");
+  const [deleting, setDeleting] = useState(false);
+
+  const toggleScope = (k: HistoryScopeKey) =>
+    setScopes(prev => ({ ...prev, [k]: !prev[k] }));
+
+  const anyScopeSelected = Object.values(scopes).some(Boolean);
+  const anyTableScope = (Object.keys(scopes) as HistoryScopeKey[])
+    .filter(k => k !== "coachMemory")
+    .some(k => scopes[k]);
+
+  const refreshPreview = async () => {
+    setPreviewLoading(true);
+    try {
+      const res = await api.previewHistoryClear(
+        startDate || undefined,
+        endDate || undefined,
+      );
+      const data = await res.json();
+      setCounts(data.counts);
+    } catch (err: any) {
+      toast({ title: "Preview failed", description: err.message, variant: "destructive" });
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  // Refresh preview whenever the dialog is opened or dates change
+  useEffect(() => {
+    if (!open) return;
+    void refreshPreview();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, startDate, endDate]);
+
+  const selectedRowTotal = counts
+    ? (Object.keys(SCOPE_LABELS) as HistoryScopeKey[])
+        .filter(k => k !== "coachMemory" && scopes[k])
+        .reduce((sum, k) => sum + (counts[k as keyof HistoryCounts] ?? 0), 0)
+    : 0;
+
+  const submit = async () => {
+    if (!anyScopeSelected) return;
+    if (confirmText.trim() !== "DELETE") {
+      toast({ title: "Type DELETE to confirm", variant: "destructive" });
+      return;
+    }
+    setDeleting(true);
+    try {
+      const res = await api.clearHistory({
+        confirm: "DELETE",
+        startDate: startDate || undefined,
+        endDate:   endDate   || undefined,
+        meals:          scopes.meals,
+        weightLogs:     scopes.weightLogs,
+        waterLogs:      scopes.waterLogs,
+        supplementLogs: scopes.supplementLogs,
+        workoutLogs:    scopes.workoutLogs,
+        physiquePhotos: scopes.physiquePhotos,
+        coachMemory:    scopes.coachMemory,
+      });
+      const { deleted } = await res.json();
+      const total =
+        deleted.meals + deleted.weightLogs + deleted.waterLogs +
+        deleted.supplementLogs + deleted.workoutLogs + deleted.physiquePhotos;
+      toast({
+        title: "History cleared",
+        description: `Removed ${total} row${total === 1 ? "" : "s"}${deleted.coachMemoryCleared ? " + coach memory" : ""}.`,
+      });
+      // Invalidate anything that could be showing stale data
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] }),
+        queryClient.invalidateQueries({ queryKey: ["/api/meals"] }),
+        queryClient.invalidateQueries({ queryKey: ["/api/meals/range"] }),
+        queryClient.invalidateQueries({ queryKey: ["/api/weight"] }),
+        queryClient.invalidateQueries({ queryKey: ["/api/targets"] }),
+      ]);
+      setConfirmText("");
+      setOpen(false);
+    } catch (err: any) {
+      toast({ title: "Clear failed", description: err.message, variant: "destructive" });
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  return (
+    <section className="bg-card border border-destructive/30 rounded-xl p-4 space-y-3">
+      <div className="flex items-center gap-2">
+        <ShieldAlert className="w-4 h-4 text-destructive" />
+        <h2 className="font-semibold text-sm">Data &amp; History</h2>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Clean up stale test or debug data that&rsquo;s polluting your account. You
+        choose exactly which tables and which date range to clear. Profile info
+        and settings are never touched.
+      </p>
+
+      <AlertDialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) setConfirmText(""); }}>
+        <AlertDialogTrigger asChild>
+          <Button
+            variant="outline"
+            className="w-full text-destructive border-destructive/40 hover:bg-destructive/10 hover:text-destructive"
+            data-testid="button-open-clear-history"
+          >
+            <Trash2 className="w-4 h-4 mr-2" />
+            Clear history…
+          </Button>
+        </AlertDialogTrigger>
+        <AlertDialogContent className="max-w-md">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <ShieldAlert className="w-4 h-4 text-destructive" />
+              Clear account history
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Permanent and per-table. Leave both date fields empty to clear the
+              entire history for the tables you select.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+
+          <div className="space-y-3">
+            {/* Date range */}
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <Label className="text-xs text-muted-foreground">Start date</Label>
+                <DateInput value={startDate} onChange={setStartDate} testId="input-clear-start" />
+              </div>
+              <div>
+                <Label className="text-xs text-muted-foreground">End date</Label>
+                <DateInput value={endDate} onChange={setEndDate} testId="input-clear-end" />
+              </div>
+            </div>
+
+            {/* Scope checkboxes */}
+            <div className="space-y-2 border border-border rounded-lg p-3">
+              {(Object.keys(SCOPE_LABELS) as HistoryScopeKey[]).map((k) => {
+                const info = SCOPE_LABELS[k];
+                const count = k === "coachMemory" ? null : counts?.[k as keyof HistoryCounts];
+                return (
+                  <label
+                    key={k}
+                    className="flex items-start gap-3 cursor-pointer"
+                    data-testid={`scope-${k}`}
+                  >
+                    <Checkbox
+                      checked={scopes[k]}
+                      onCheckedChange={() => toggleScope(k)}
+                      className="mt-0.5"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-sm font-medium">{info.label}</span>
+                        {count != null && (
+                          <span className="text-xs text-muted-foreground tabular-nums">
+                            {previewLoading ? "…" : `${count} row${count === 1 ? "" : "s"}`}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-muted-foreground leading-snug">{info.desc}</p>
+                    </div>
+                  </label>
+                );
+              })}
+            </div>
+
+            {/* Summary */}
+            {anyTableScope && counts && (
+              <div className="text-xs text-muted-foreground">
+                About to delete <span className="font-semibold text-foreground">{selectedRowTotal}</span> row{selectedRowTotal === 1 ? "" : "s"} across the selected tables
+                {startDate || endDate ? ` (${startDate || "beginning"} → ${endDate || "today"})` : " (entire history)"}
+                {scopes.coachMemory ? ", plus coach chat history and rolling summary" : ""}.
+              </div>
+            )}
+
+            {/* Typed confirmation */}
+            <div>
+              <Label className="text-xs text-muted-foreground">
+                Type <span className="font-mono font-semibold">DELETE</span> to confirm
+              </Label>
+              <Input
+                value={confirmText}
+                onChange={(e) => setConfirmText(e.target.value)}
+                placeholder="DELETE"
+                disabled={!anyScopeSelected}
+                data-testid="input-confirm-delete"
+                className="font-mono"
+              />
+            </div>
+          </div>
+
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-cancel-clear">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => { e.preventDefault(); void submit(); }}
+              disabled={!anyScopeSelected || confirmText.trim() !== "DELETE" || deleting}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              data-testid="button-confirm-clear"
+            >
+              {deleting
+                ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Clearing…</>
+                : <><Trash2 className="w-4 h-4 mr-2" />Clear now</>}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </section>
   );
 }

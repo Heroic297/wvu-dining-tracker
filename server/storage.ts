@@ -2,8 +2,8 @@
  * Database storage layer — all CRUD operations go through here.
  * Routes should stay thin; business logic belongs here or in service modules.
  */
-import { db } from "./db.js";
-import { eq, and, desc, sql } from "drizzle-orm";
+import { db, pool } from "./db.js";
+import { eq, and, desc, sql, gte, lte } from "drizzle-orm";
 import {
   users,
   wearableTokens,
@@ -101,10 +101,24 @@ export interface IStorage {
   getWeightLog(userId: string, date: string): Promise<WeightLog | undefined>;
   getWeightLogs(userId: string, limit?: number): Promise<WeightLog[]>;
   upsertWeightLog(entry: InsertWeightLog): Promise<WeightLog>;
+  deleteWeightLog(userId: string, id: string): Promise<boolean>;
+  deleteWeightLogsForUser(userId: string, startDate?: string, endDate?: string): Promise<number>;
 
   // Water Logs
   getWaterLog(userId: string, date: string): Promise<WaterLog | undefined>;
   upsertWaterLog(userId: string, date: string, mlLogged: number): Promise<WaterLog>;
+  deleteWaterLogsForUser(userId: string, startDate?: string, endDate?: string): Promise<number>;
+
+  // Bulk history cleanup (user-scoped)
+  deleteUserMealsForUser(userId: string, startDate?: string, endDate?: string): Promise<number>;
+  countUserHistory(userId: string, startDate?: string, endDate?: string): Promise<{
+    meals: number;
+    weightLogs: number;
+    waterLogs: number;
+    supplementLogs: number;
+    workoutLogs: number;
+    physiquePhotos: number;
+  }>;
 
   // Invite Codes
   getInviteCode(code: string): Promise<InviteCode | undefined>;
@@ -455,6 +469,19 @@ export class PgStorage implements IStorage {
       .where(eq(userMeals.id, mealId));
   }
 
+  /**
+   * Bulk-delete meals (and, via FK cascade, their items) for one user.
+   * If startDate/endDate are provided, only meals in [startDate, endDate]
+   * (inclusive, YYYY-MM-DD) are removed. Returns the number of meals deleted.
+   */
+  async deleteUserMealsForUser(userId: string, startDate?: string, endDate?: string) {
+    const conds = [eq(userMeals.userId, userId)];
+    if (startDate) conds.push(gte(userMeals.date, startDate));
+    if (endDate)   conds.push(lte(userMeals.date, endDate));
+    const result = await db.delete(userMeals).where(and(...conds));
+    return (result as unknown as { rowCount?: number }).rowCount ?? 0;
+  }
+
   // ── User Meal Items ────────────────────────────────────────────────────────
 
   async getUserMealItems(mealId: string) {
@@ -549,6 +576,54 @@ export class PgStorage implements IStorage {
     return row;
   }
 
+
+  /**
+   * Delete a single weight-log row, scoped to the owning user.
+   * Returns true if a row was removed, false if not found / not owned.
+   */
+  async deleteWeightLog(userId: string, id: string) {
+    const result = await db
+      .delete(weightLog)
+      .where(and(eq(weightLog.id, id), eq(weightLog.userId, userId)));
+    const n = (result as unknown as { rowCount?: number }).rowCount ?? 0;
+    if (n > 0) {
+      await this.syncUserLatestWeight(userId);
+    }
+    return n > 0;
+  }
+
+  /**
+   * Bulk-delete weight logs for a user, optionally bounded by date range.
+   * Returns the number of rows removed.
+   */
+  async deleteWeightLogsForUser(userId: string, startDate?: string, endDate?: string) {
+    const conds = [eq(weightLog.userId, userId)];
+    if (startDate) conds.push(gte(weightLog.date, startDate));
+    if (endDate)   conds.push(lte(weightLog.date, endDate));
+    const result = await db.delete(weightLog).where(and(...conds));
+    const n = (result as unknown as { rowCount?: number }).rowCount ?? 0;
+    if (n > 0) await this.syncUserLatestWeight(userId);
+    return n;
+  }
+
+  /**
+   * Re-sync users.weight_kg with the most recent weight_log entry, or NULL if
+   * none remain. Called after any destructive weight-log operation so downstream
+   * TDEE / coach calculations don't keep using a stale cached weight.
+   */
+  private async syncUserLatestWeight(userId: string) {
+    const [latest] = await db
+      .select({ weightKg: weightLog.weightKg })
+      .from(weightLog)
+      .where(eq(weightLog.userId, userId))
+      .orderBy(desc(weightLog.date))
+      .limit(1);
+    await db
+      .update(users)
+      .set({ weightKg: latest?.weightKg ?? null })
+      .where(eq(users.id, userId));
+  }
+
   // ── Water Logs ───────────────────────────────────────────────────────────
 
   async getWaterLog(userId: string, date: string) {
@@ -569,6 +644,50 @@ export class PgStorage implements IStorage {
       })
       .returning();
     return row;
+  }
+
+
+  /**
+   * Bulk-delete water logs for a user, optionally bounded by date range.
+   * Returns the number of rows removed.
+   */
+  async deleteWaterLogsForUser(userId: string, startDate?: string, endDate?: string) {
+    const conds = [eq(waterLogs.userId, userId)];
+    if (startDate) conds.push(gte(waterLogs.date, startDate));
+    if (endDate)   conds.push(lte(waterLogs.date, endDate));
+    const result = await db.delete(waterLogs).where(and(...conds));
+    return (result as unknown as { rowCount?: number }).rowCount ?? 0;
+  }
+
+  /**
+   * Return row counts for everything the “clear history” UI can wipe.
+   * Used to preview an impending bulk delete before the user confirms.
+   * Uses raw SQL via the shared pool so tables that aren't imported into
+   * Drizzle here (supplement_logs, workout_logs, physique_photos) still work.
+   */
+  async countUserHistory(userId: string, startDate?: string, endDate?: string) {
+    const params = [userId, startDate ?? "-infinity", endDate ?? "infinity"];
+    const range = (col: string) => `AND ${col} BETWEEN $2::date AND $3::date`;
+
+    const queries = [
+      `SELECT COUNT(*)::int AS n FROM user_meals       WHERE user_id=$1 ${range("date")}`,
+      `SELECT COUNT(*)::int AS n FROM weight_log       WHERE user_id=$1 ${range("date")}`,
+      `SELECT COUNT(*)::int AS n FROM water_logs       WHERE user_id=$1 ${range("date")}`,
+      `SELECT COUNT(*)::int AS n FROM supplement_logs  WHERE user_id=$1 ${range("date")}`,
+      `SELECT COUNT(*)::int AS n FROM workout_logs     WHERE user_id=$1 ${range("date")}`,
+      `SELECT COUNT(*)::int AS n FROM physique_photos  WHERE user_id=$1 ${range("photo_date")}`,
+    ];
+    const results = await Promise.all(
+      queries.map(q => pool.query(q, params).then(r => r.rows[0]?.n ?? 0))
+    );
+    return {
+      meals:          results[0],
+      weightLogs:     results[1],
+      waterLogs:      results[2],
+      supplementLogs: results[3],
+      workoutLogs:    results[4],
+      physiquePhotos: results[5],
+    };
   }
 
   // ── Invite Codes ───────────────────────────────────────────────────────────
