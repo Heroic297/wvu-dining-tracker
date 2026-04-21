@@ -279,9 +279,19 @@ export const nutritionCache = pgTable(
   }
 );
 
-export const insertNutritionCacheSchema = createInsertSchema(
-  nutritionCache
-).omit({ id: true, cachedAt: true });
+export const insertNutritionCacheSchema = createInsertSchema(nutritionCache, {
+  // createInsertSchema widens $type<...>() enum columns to plain string. Re-narrow
+  // so drizzle's insert() accepts our typed InsertNutritionCache without errors.
+  source: z.enum([
+    "wvu",
+    "usda",
+    "usda_branded",
+    "open_food_facts",
+    "ai_estimated",
+    "manual_exact",
+  ]).nullish(),
+  confidence: z.enum(["high", "medium", "low"]).nullish(),
+}).omit({ id: true, cachedAt: true });
 export type InsertNutritionCache = z.infer<typeof insertNutritionCacheSchema>;
 export type NutritionCache = typeof nutritionCache.$inferSelect;
 
@@ -386,14 +396,18 @@ export const weightLog = pgTable(
     date: date("date").notNull(),
     weightKg: real("weight_kg").notNull(),
     notes: text("notes"),
-    /** "manual" | "garmin" | "apple_health" */
-    source: text("source").default("manual").$type<"manual" | "garmin" | "apple_health">(),
+    /** "manual" | "garmin" | "fitbit" | "apple_health" */
+    source: text("source").default("manual").$type<"manual" | "garmin" | "fitbit" | "apple_health">(),
     loggedAt: timestamp("logged_at").default(sql`now()`),
   },
   (t) => [uniqueIndex("weight_log_user_date").on(t.userId, t.date)]
 );
 
-export const insertWeightLogSchema = createInsertSchema(weightLog).omit({
+export const insertWeightLogSchema = createInsertSchema(weightLog, {
+  // Narrow source from string (widened by createInsertSchema) back to the enum
+  // literal types the column is typed with.
+  source: z.enum(["manual", "garmin", "fitbit", "apple_health"]).nullish(),
+}).omit({
   id: true,
   loggedAt: true,
 });

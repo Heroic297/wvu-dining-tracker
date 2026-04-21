@@ -28,7 +28,7 @@ export function rateLimiter(opts: RateLimitOptions) {
   // Prune stale entries every 10 minutes to prevent unbounded memory growth
   const pruneInterval = setInterval(() => {
     const now = Date.now();
-    for (const [key, counter] of store.entries()) {
+    for (const [key, counter] of Array.from(store.entries())) {
       if (counter.resetAt <= now) store.delete(key);
     }
   }, 10 * 60 * 1000);
