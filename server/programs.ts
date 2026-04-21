@@ -228,7 +228,7 @@ Format as a clear weekly program with Day 1, Day 2, etc.`;
 }
 
 // Column aliases so the API returns camelCase keys the client expects
-const PROGRAM_COLS = `id, user_id, name, source, is_active AS "isActive", parsed_blocks AS "parsedBlocks", raw_content AS "rawContent", created_at AS "createdAt", updated_at AS "updatedAt"`;
+const PROGRAM_COLS = `id, user_id, name, source, is_active AS "isActive", parsed_blocks AS "parsedBlocks", raw_content AS "rawContent", created_at AS "createdAt", updated_at AS "updatedAt", start_date AS "startDate"`;
 
 // ─── Route registration ──────────────────────────────────────────────────────
 
@@ -245,6 +245,7 @@ export function registerProgramRoutes(app: Express): void {
           url: z.string().optional(),
           file: z.string().optional(),
           fileName: z.string().optional(),
+          startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
           generateParams: z
             .object({
               goal: z.string(),
@@ -305,8 +306,8 @@ export function registerProgramRoutes(app: Express): void {
         const parsed = precomputedBlocks ?? await parseWithGroq(rawText!);
 
         const result = await pool.query(
-          `INSERT INTO training_programs (user_id, name, source, raw_content, parsed_blocks)
-           VALUES ($1, $2, $3, $4, $5)
+          `INSERT INTO training_programs (user_id, name, source, raw_content, parsed_blocks, start_date)
+           VALUES ($1, $2, $3, $4, $5, $6)
            RETURNING ${PROGRAM_COLS}`,
           [
             userId,
@@ -314,6 +315,7 @@ export function registerProgramRoutes(app: Express): void {
             source,
             rawText!,
             JSON.stringify(parsed),
+            body.startDate ?? null,
           ]
         );
 

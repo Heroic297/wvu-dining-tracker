@@ -1374,6 +1374,77 @@ export async function registerRoutes(
           }
         }
 
+        // Training today card
+        let trainingToday: {
+          programName: string;
+          weekNumber: number;
+          dayLabel: string;
+          exerciseCount: number;
+          alreadyLogged: boolean;
+        } | null = null;
+        try {
+          const progRes = await pool.query(
+            `SELECT id, name, parsed_blocks, created_at, start_date FROM training_programs
+             WHERE user_id = $1 AND is_active = true LIMIT 1`,
+            [user.id]
+          );
+          const prog = progRes.rows[0];
+          if (prog) {
+            const blocks = typeof prog.parsed_blocks === "string"
+              ? JSON.parse(prog.parsed_blocks)
+              : prog.parsed_blocks;
+            const weeks: any[] = blocks?.weeks ?? [];
+
+            const lastLogRes = await pool.query(
+              `SELECT week_number, day_label FROM workout_logs WHERE user_id = $1 ORDER BY date DESC LIMIT 1`,
+              [user.id]
+            );
+            const lastLog = lastLogRes.rows[0];
+
+            let scheduledDay: any = null;
+            let scheduledWeekNum = 1;
+
+            if (!lastLog) {
+              if (weeks.length > 0 && weeks[0].days?.length > 0) {
+                scheduledDay = weeks[0].days[0];
+                scheduledWeekNum = weeks[0].weekNumber;
+              }
+            } else {
+              outer: for (let wi = 0; wi < weeks.length; wi++) {
+                if (weeks[wi].weekNumber !== lastLog.week_number) continue;
+                for (let di = 0; di < weeks[wi].days.length; di++) {
+                  if (weeks[wi].days[di].label !== lastLog.day_label) continue;
+                  if (di + 1 < weeks[wi].days.length) {
+                    scheduledDay = weeks[wi].days[di + 1];
+                    scheduledWeekNum = weeks[wi].weekNumber;
+                  } else if (wi + 1 < weeks.length && weeks[wi + 1].days?.length > 0) {
+                    scheduledDay = weeks[wi + 1].days[0];
+                    scheduledWeekNum = weeks[wi + 1].weekNumber;
+                  } else {
+                    scheduledDay = weeks[wi].days[di];
+                    scheduledWeekNum = weeks[wi].weekNumber;
+                  }
+                  break outer;
+                }
+              }
+            }
+
+            if (scheduledDay) {
+              const todayLogRes = await pool.query(
+                `SELECT id FROM workout_logs WHERE user_id = $1 AND date = $2 LIMIT 1`,
+                [user.id, date]
+              );
+              trainingToday = {
+                programName: prog.name,
+                weekNumber: scheduledWeekNum,
+                dayLabel: scheduledDay.label,
+                exerciseCount: scheduledDay.exercises?.length ?? 0,
+                alreadyLogged: todayLogRes.rows.length > 0,
+              };
+            }
+          }
+        } catch { /* non-fatal */ }
+
         res.json({
           date,
           meals: mealsWithItems,
@@ -1388,6 +1459,7 @@ export async function registerRoutes(
           enableWaterTracking: user.enableWaterTracking ?? false,
           waterBottles: user.waterBottles ?? [],
           waterUnit: user.waterUnit ?? "oz",
+          trainingToday,
         });
       } catch (err) {
         console.error("[dashboard]", err);

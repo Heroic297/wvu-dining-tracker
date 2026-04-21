@@ -5,7 +5,7 @@ import { fmt1, todayStr, formatDate, kgToLbs, api } from "@/lib/api";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
-import { PlusCircle, Flame, TrendingUp, UtensilsCrossed, Trophy, Droplets, Plus, Minus, ChevronDown, Pill } from "lucide-react";
+import { PlusCircle, Flame, TrendingUp, UtensilsCrossed, Trophy, Droplets, Plus, Minus, ChevronDown, Pill, Dumbbell, Check } from "lucide-react";
 import ProgressRing from "@/components/ProgressRing";
 
 // Hex fallbacks for macro colours
@@ -49,6 +49,13 @@ export default function DashboardPage() {
   const enableWaterTracking = data?.enableWaterTracking ?? false;
   const waterBottles    = (data?.waterBottles ?? []) as Array<{id: string; name: string; mlSize: number}>;
   const waterUnit       = (data?.waterUnit ?? "oz") as "ml" | "oz" | "L" | "gal";
+  const trainingToday   = data?.trainingToday as {
+    programName: string;
+    weekNumber: number;
+    dayLabel: string;
+    exerciseCount: number;
+    alreadyLogged: boolean;
+  } | null | undefined;
 
   // Unit conversion helpers
   const ML_TO: Record<string, number> = { ml: 1, oz: 1/29.5735, L: 1/1000, gal: 1/3785.41 };
@@ -353,6 +360,34 @@ export default function DashboardPage() {
 
         {/* Daily Micronutrients */}
         <DailyMicros date={today} />
+
+        {/* Training Today Card */}
+        {trainingToday && (
+          <Link href="/training">
+            <div className="surface-card p-4 flex items-center justify-between gap-3 cursor-pointer hover:bg-slate-800/60 transition-colors">
+              <div className="flex items-center gap-3 min-w-0">
+                <Dumbbell className="w-5 h-5 text-emerald-400 flex-shrink-0" />
+                <div className="min-w-0">
+                  <p className="text-xs text-slate-400 truncate">
+                    Week {trainingToday.weekNumber} · {trainingToday.dayLabel}
+                  </p>
+                  <p className="text-sm font-semibold text-slate-100 truncate">
+                    {trainingToday.exerciseCount} exercise{trainingToday.exerciseCount !== 1 ? "s" : ""}
+                    <span className="text-xs font-normal text-slate-500 ml-1.5">{trainingToday.programName}</span>
+                  </p>
+                </div>
+              </div>
+              {trainingToday.alreadyLogged ? (
+                <span className="flex items-center gap-1 text-xs text-emerald-400 flex-shrink-0">
+                  <Check className="w-3.5 h-3.5" />
+                  Logged
+                </span>
+              ) : (
+                <span className="text-xs text-slate-400 flex-shrink-0">Log Workout →</span>
+              )}
+            </div>
+          </Link>
+        )}
 
         {/* Recent Meals */}
         <div className="space-y-3">

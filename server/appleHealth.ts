@@ -433,6 +433,9 @@ export function registerAppleHealthRoutes(app: Express): void {
             );
           }
 
+          const receivedFields = (Object.keys(data) as (keyof typeof data)[])
+            .filter((k) => k !== "date" && data[k] != null);
+          console.log(`[apple-health] upserted ${data.date} for user ${userId}: ${receivedFields.join(", ")}`);
           upsertedDates.push(data.date);
         }
 

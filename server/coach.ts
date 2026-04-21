@@ -429,53 +429,88 @@ async function buildLiveContext(userId: string, rawUser: any): Promise<string> {
   let trainingContext = "";
   try {
     const progRes = await pool.query(
-      `SELECT id, name, source, parsed_blocks, created_at FROM training_programs
+      `SELECT id, name, source, parsed_blocks, created_at, start_date FROM training_programs
        WHERE user_id = $1 AND is_active = true LIMIT 1`,
       [userId]
     );
     const activeProgram = progRes.rows[0];
 
     if (activeProgram) {
-      const createdAt = new Date(activeProgram.created_at);
-      const weekNumber = Math.floor((Date.now() - createdAt.getTime()) / (7 * 24 * 60 * 60 * 1000));
-      const dayOfWeek = new Date().getDay();
+      const baseDate = new Date(activeProgram.start_date ?? activeProgram.created_at);
+      const weekNumber = Math.floor((Date.now() - baseDate.getTime()) / (7 * 24 * 60 * 60 * 1000));
 
-      let todayWorkout = "";
+      // Find next scheduled day sequentially from last log (not by day-of-week)
+      let scheduledToday = "";
       try {
         const blocks = typeof activeProgram.parsed_blocks === 'string'
           ? JSON.parse(activeProgram.parsed_blocks)
           : activeProgram.parsed_blocks;
-        const week = blocks?.weeks?.find((w: any) => w.weekNumber === weekNumber);
-        const day = week?.days?.[dayOfWeek];
-        if (day) {
-          const exercises = day.exercises?.map((e: any) =>
+        const weeks: any[] = blocks?.weeks ?? [];
+
+        const lastLogRes = await pool.query(
+          `SELECT week_number, day_label FROM workout_logs WHERE user_id = $1 ORDER BY date DESC LIMIT 1`,
+          [userId]
+        );
+        const lastLog = lastLogRes.rows[0];
+
+        let scheduledDay: any = null;
+        let scheduledWeekNum = weekNumber + 1;
+        if (!lastLog) {
+          if (weeks.length > 0 && weeks[0].days?.length > 0) {
+            scheduledDay = weeks[0].days[0];
+            scheduledWeekNum = weeks[0].weekNumber + 1;
+          }
+        } else {
+          outer: for (let wi = 0; wi < weeks.length; wi++) {
+            if (weeks[wi].weekNumber !== lastLog.week_number) continue;
+            for (let di = 0; di < weeks[wi].days.length; di++) {
+              if (weeks[wi].days[di].label !== lastLog.day_label) continue;
+              if (di + 1 < weeks[wi].days.length) {
+                scheduledDay = weeks[wi].days[di + 1];
+                scheduledWeekNum = weeks[wi].weekNumber + 1;
+              } else if (wi + 1 < weeks.length && weeks[wi + 1].days?.length > 0) {
+                scheduledDay = weeks[wi + 1].days[0];
+                scheduledWeekNum = weeks[wi + 1].weekNumber + 1;
+              } else {
+                scheduledDay = weeks[wi].days[di];
+                scheduledWeekNum = weeks[wi].weekNumber + 1;
+              }
+              break outer;
+            }
+          }
+        }
+
+        if (scheduledDay) {
+          const exList = scheduledDay.exercises?.map((e: any) =>
             `${e.name}: ${e.sets}x${e.reps}${e.weight ? ` @${e.weight}` : ''}${e.rpe ? ` RPE ${e.rpe}` : ''}`
           ).join(", ");
-          todayWorkout = `Today's workout (${day.label || `Day ${dayOfWeek + 1}`}): ${exercises}`;
-        } else {
-          todayWorkout = "No workout scheduled for today in program";
+          scheduledToday = `[Scheduled Today] Week ${scheduledWeekNum} — ${scheduledDay.label}: ${exList}`;
         }
-      } catch { todayWorkout = "Could not parse today's workout"; }
+      } catch { scheduledToday = "Could not parse scheduled workout"; }
 
-      // Get last 3 workout logs for context
+      // Get last 3 workout logs — show ALL sets per exercise
       const logsRes = await pool.query(
         `SELECT day_label, date, exercises, notes FROM workout_logs
          WHERE user_id = $1 ORDER BY date DESC LIMIT 3`,
         [userId]
       );
+      const today = new Date().toISOString().slice(0, 10);
+      const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
       const recentLogs = logsRes.rows.map((log: any) => {
         const exList = (typeof log.exercises === 'string' ? JSON.parse(log.exercises) : log.exercises) || [];
         const summary = exList.map((e: any) => {
-          const bestSet = e.sets?.reduce((best: any, s: any) =>
-            (s.weight > (best?.weight || 0)) ? s : best, null);
-          return bestSet ? `${e.name}: ${bestSet.reps}x${bestSet.weight}lbs` : e.name;
-        }).join(", ");
-        return `${log.date} (${log.day_label}): ${summary}${log.notes ? ` — "${log.notes}"` : ''}`;
-      }).join(" | ");
+          const sets = (e.sets ?? []).filter((s: any) => s.reps || s.weight);
+          if (sets.length === 0) return e.name;
+          const setsStr = sets.map((s: any) => `${s.weight}×${s.reps}${s.rpe ? ` @${s.rpe}` : ''}`).join(", ");
+          return `${e.name}: ${setsStr}`;
+        }).join(" | ");
+        const dateLabel = log.date === today ? "Today" : log.date === yesterday ? "Yesterday" : log.date;
+        return `${dateLabel} (${log.day_label}): ${summary}${log.notes ? ` — "${log.notes}"` : ''}`;
+      }).join("\n");
 
       trainingContext = `\n[Training Program] Active: "${activeProgram.name}" (Week ${weekNumber + 1})`;
-      if (todayWorkout) trainingContext += `\n${todayWorkout}`;
-      if (recentLogs) trainingContext += `\n[Recent Workouts] ${recentLogs}`;
+      if (scheduledToday) trainingContext += `\n${scheduledToday}`;
+      if (recentLogs) trainingContext += `\n[Most Recent Completed Workout]\n${recentLogs}`;
     }
   } catch { /* non-fatal */ }
 
@@ -536,6 +571,11 @@ DATA ACCURACY:
 - Only use the lookup_food tool when the user explicitly asks for nutrition data on a specific food item. Do not call it for casual food mentions.
 - Only use the get_dining_menu tool when the user explicitly asks what is on a dining hall menu. Do not call it just because a dining hall is mentioned in conversation.
 - Use the get_user_stats tool only when the user asks about their trends or history over a time range.
+
+TRAINING DATA:
+- When the user asks about their most recent workout, use ONLY the [Most Recent Completed Workout] section. Do NOT reference [Scheduled Today].
+- Never list exercises that have no logged set data as if the user completed them.
+- [Scheduled Today] shows programmed targets only — the user has not necessarily done these exercises.
 
 GOAL UPDATES:
 - If the user says their goal has changed (e.g., "I'm now bulking", "I stopped powerlifting"), update the ai_profiles record using the update_profile tool.
