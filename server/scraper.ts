@@ -21,6 +21,9 @@ import axios from "axios";
 import * as cheerio from "cheerio";
 import { storage } from "./storage.js";
 import type { InsertDiningItem } from "../shared/schema.js";
+import { sql } from "drizzle-orm";
+import { db } from "./db.js";
+import { diningItems } from "../shared/schema.js";
 
 // ── Location config ───────────────────────────────────────────────────────────
 
@@ -131,7 +134,10 @@ function parseMenuJson(html: string): TenKitesItem[] {
   // The JSON is in data-menu-json attribute on a div.k10-data element
   let rawJson = $("[data-menu-json]").attr("data-menu-json");
 
-  if (!rawJson) return [];
+  if (!rawJson) {
+    console.log(`[scraper] No data-menu-json attribute found in HTML (page length: ${html.length} chars)`);
+    return [];
+  }
 
   // Cheerio already HTML-decodes attribute values
   try {
@@ -164,6 +170,7 @@ function parsePeriodOptions(html: string): Array<{ name: string; guid: string }>
   const $ = cheerio.load(html);
   const periods: Array<{ name: string; guid: string }> = [];
 
+  // Primary selector: TenKites meal period options
   $(".k10-menu-selector__option").each((_i, el) => {
     const guid = $(el).attr("data-menu-identifier");
     const name = $(el).text().trim();
@@ -171,6 +178,20 @@ function parsePeriodOptions(html: string): Array<{ name: string; guid: string }>
       periods.push({ name, guid });
     }
   });
+
+  // Fallback selector: any element with data-menu-identifier (in case class name changed)
+  if (periods.length === 0) {
+    $("[data-menu-identifier]").each((_i, el) => {
+      const guid = $(el).attr("data-menu-identifier");
+      const name = $(el).text().trim();
+      if (guid && guid !== "00000000-0000-0000-0000-000000000000" && name) {
+        periods.push({ name, guid });
+      }
+    });
+    if (periods.length > 0) {
+      console.log(`[scraper] Period options found via fallback selector (${periods.length} periods)`);
+    }
+  }
 
   return periods;
 }
@@ -211,8 +232,11 @@ export async function scrapeLocationDate(
   }
 
   const periods = parsePeriodOptions(defaultHtml);
+  console.log(`[scraper] ${locationSlug} ${dateStr}: found ${periods.length} meal periods${periods.length > 0 ? ` (${periods.map(p => p.name).join(", ")})` : ""}`);
   if (periods.length === 0) {
-    console.log(`[scraper] ${locationSlug} is closed / no menu on ${dateStr}`);
+    // Log a snippet of the HTML to help debug selector issues
+    const snippet = defaultHtml.substring(0, 500).replace(/\n/g, " ").trim();
+    console.log(`[scraper] ${locationSlug} is closed / no menu on ${dateStr}. HTML preview: ${snippet.substring(0, 200)}...`);
     return false;
   }
 
@@ -222,14 +246,6 @@ export async function scrapeLocationDate(
     const mealType = normalizeMealType(period.name);
     if (!mealType) {
       console.log(`[scraper] Skipping unrecognised period: ${period.name}`);
-      continue;
-    }
-
-    // Skip if already cached
-    const existing = await storage.getDiningMenu(dbLocation.id, dateStr, mealType);
-    if (existing) {
-      console.log(`[scraper] Already cached: ${locationSlug}/${mealType}/${dateStr}`);
-      savedAny = true;
       continue;
     }
 
@@ -244,10 +260,12 @@ export async function scrapeLocationDate(
     }
 
     const items = parseMenuJson(html);
+    console.log(`[scraper] ${locationSlug}/${period.name}/${dateStr}: parsed ${items.length} total items from menu JSON`);
     const recipes = items.filter((x) => x.itemType === "recipe" && x.recipeName);
 
     if (recipes.length === 0) {
-      console.log(`[scraper] No items found for ${locationSlug}/${period.name}/${dateStr}`);
+      const types = Array.from(new Set(items.map(i => i.itemType)));
+      console.log(`[scraper] No recipe items found for ${locationSlug}/${period.name}/${dateStr} (item types: ${types.join(",")})`);
       continue;
     }
 
@@ -262,18 +280,15 @@ export async function scrapeLocationDate(
       }
     }
 
-    // Upsert menu row — returns existing row if already present
+    // Create menu row only after we have confirmed recipes to insert.
+    // This avoids orphan menu rows with zero items that block future re-scrapes.
     const menu = await storage.createDiningMenu({
       locationId: dbLocation.id,
       date: dateStr,
       mealType,
     });
 
-    // Clear any previously saved items for this menu to prevent duplicates
-    // (createDiningMenu uses onConflictDoUpdate so the same menu ID is reused)
-    await storage.deleteDiningItemsByMenu(menu.id);
-
-    const diningItems: InsertDiningItem[] = recipes.map((recipe) => {
+    const diningItemsArray: InsertDiningItem[] = recipes.map((recipe) => {
       const ntrs = recipe.ntrs ?? [];
       const calories = recipe.calories != null
         ? parseInt(String(recipe.calories), 10) || null
@@ -296,11 +311,48 @@ export async function scrapeLocationDate(
       };
     });
 
-    await storage.createDiningItemsBulk(diningItems);
-    console.log(
-      `[scraper] Saved ${diningItems.length} items for ${locationSlug}/${mealType}/${dateStr}`
-    );
-    savedAny = true;
+    // Upsert items with conflict handling using onConflictDoUpdate
+    let itemsSaved = false;
+    if (diningItemsArray.length > 0) {
+      try {
+        await db
+          .insert(diningItems)
+          .values(diningItemsArray)
+          .onConflictDoUpdate({
+            target: [diningItems.menuId, diningItems.name],
+            set: {
+              calories: sql`EXCLUDED.calories`,
+              proteinG: sql`EXCLUDED.protein_g`,
+              carbsG: sql`EXCLUDED.carbs_g`,
+              fatG: sql`EXCLUDED.fat_g`,
+              rawMetadata: sql`EXCLUDED.raw_metadata`,
+            },
+          });
+        itemsSaved = true;
+      } catch (err: any) {
+        console.error(`[scraper] Failed to upsert items for ${locationSlug}/${mealType}/${dateStr}:`, err.message);
+        // Fallback: delete existing items and reinsert
+        try {
+          await db.delete(diningItems).where(sql`${diningItems.menuId} = ${menu.id}`);
+          await db.insert(diningItems).values(diningItemsArray);
+          console.log(`[scraper] Fallback insert succeeded for ${locationSlug}/${mealType}/${dateStr}`);
+          itemsSaved = true;
+        } catch (fallbackErr: any) {
+          console.error(`[scraper] Fallback insert also failed:`, fallbackErr.message);
+        }
+      }
+    }
+
+    if (itemsSaved) {
+      console.log(
+        `[scraper] Saved ${diningItemsArray.length} items for ${locationSlug}/${mealType}/${dateStr}`
+      );
+      savedAny = true;
+    } else {
+      console.warn(
+        `[scraper] No items saved for ${locationSlug}/${mealType}/${dateStr} — menu row ${menu.id} exists but may be empty`
+      );
+    }
 
     // Brief pause between period requests
     await new Promise((r) => setTimeout(r, 300));

@@ -305,8 +305,13 @@ export default function DietPlanPage() {
 
   if (!targets) {
     return (
-      <div className="p-4 md:p-6 max-w-lg">
-        <h1 className="text-xl font-bold mb-3">Diet plan</h1>
+      <div className="p-4 md:p-6 max-w-lg fade-up">
+        <h1
+          className="text-3xl font-extrabold gradient-text mb-3"
+          style={{ fontFamily: "var(--font-display)" }}
+        >
+          Diet plan
+        </h1>
         <div className="bg-card border border-border rounded-xl p-6 text-center">
           <p className="text-muted-foreground text-sm">
             Complete your profile setup to see personalized targets.
@@ -372,9 +377,14 @@ export default function DietPlanPage() {
   const todayPeakDay = peakWeekPlan?.find((d) => d.isToday) ?? null;
 
   return (
-    <div className="p-4 md:p-6 max-w-2xl space-y-5">
+    <div className="p-4 md:p-6 max-w-2xl space-y-5 fade-up">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold">Diet plan</h1>
+        <h1
+          className="text-3xl font-extrabold gradient-text"
+          style={{ fontFamily: "var(--font-display)" }}
+        >
+          Diet plan
+        </h1>
         {targets.isTrainingDay !== undefined && (
           <Badge variant={targets.isTrainingDay ? "default" : "secondary"}>
             {targets.isTrainingDay ? "Training day" : "Rest day"}

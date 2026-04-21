@@ -10,7 +10,8 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { useLocalModelContext } from "@/contexts/LocalModelContext";
+import CoachBriefCard from '../components/CoachBriefCard';
+
 import {
   Brain,
   Send,
@@ -779,24 +780,11 @@ function NoKeyBanner() {
 
 export default function CoachPage() {
   const qc = useQueryClient();
-  const localModel = useLocalModelContext();
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [showNeedKey, setShowNeedKey] = useState(false);
-  // Local vs Cloud toggle — persisted so preference survives refresh
-  const [useLocalCoach, setUseLocalCoach] = useState(() => {
-    const stored = localStorage.getItem("coachUseLocal");
-    // Default to local if a model is available, but respect explicit user choice
-    return stored !== null ? stored === "true" : true;
-  });
-  const toggleCoachMode = useCallback((local: boolean) => {
-    setUseLocalCoach(local);
-    localStorage.setItem("coachUseLocal", String(local));
-  }, []);
-  // Effective flag: use local only if toggled on AND model is actually ready
-  const useLocal = useLocalCoach && localModel.ready && !!localModel.variant;
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLInputElement>(null);
 
@@ -830,58 +818,8 @@ export default function CoachPage() {
   }, [messages]);
 
   // ── Build a lightweight system prompt from profile for local inference ──
-  const buildLocalSystemPrompt = useCallback((p: CoachProfile | undefined): string => {
-    if (!p) return "You are Macro Coach, an expert AI nutrition and health assistant.";
-    const toneDesc =
-      p.coachTone === "coach"
-        ? "You are motivational, encouraging, and speak in plain English."
-        : p.coachTone === "data"
-        ? "You are precise and numbers-forward. Use exact figures, minimal fluff."
-        : "You balance motivation with precision. Be direct but supportive.";
-    const memory = p.rollingSummary
-      ? `\n--- WHAT YOU KNOW ABOUT THIS USER ---\n${p.rollingSummary}\n--- END MEMORY ---`
-      : "";
-    const name = p.preferredName ? `The user's name is ${p.preferredName}.` : "";
-    const goal = p.mainGoal ? `Their current goal: ${p.mainGoal}.` : "";
-    return `You are Macro Coach, an expert AI health and nutrition assistant.
-
-${toneDesc}
-You specialize in nutrition, body composition, powerlifting prep, peak week protocols, weight management, and performance optimization.
-${name} ${goal}
-
-SCOPE: You ONLY discuss health, nutrition, training, body composition, and directly related topics. Politely decline anything outside this scope.
-${memory}`;
-  }, []);
-
-  // ── Local model inference ──────────────────────────────────────────────────
-  const localInference = useCallback(async (userMessage: string): Promise<{ message: string; model: string; provider: string }> => {
-    const systemPrompt = buildLocalSystemPrompt(profile);
-
-    // Build messages: system + recent history + new user message
-    const chatMessages: Array<{ role: string; content: string }> = [
-      { role: "system", content: systemPrompt },
-      // Include recent conversation context (last 10 exchanges)
-      ...messages
-        .filter((m) => !m.pending && !m.error)
-        .slice(-20)
-        .map((m) => ({ role: m.role, content: m.content })),
-      { role: "user", content: userMessage },
-    ];
-
-    const response = await localModel.generateText(chatMessages);
-    return {
-      message: response,
-      model: `Gemma 4 ${localModel.variant ?? ""} (local)`,
-      provider: "local",
-    };
-  }, [buildLocalSystemPrompt, profile, messages, localModel]);
-
   const sendMutation = useMutation({
     mutationFn: async (message: string) => {
-      // Use local model if toggled on and ready, otherwise server
-      if (useLocal) {
-        return localInference(message);
-      }
       return api.coachChat(message).then((r) => r.json());
     },
     onMutate: (message) => {
@@ -1001,94 +939,25 @@ ${memory}`;
   return (
     <div className="flex h-full overflow-hidden">
       {/* ── Main chat area ── */}
-      <div className="flex flex-col flex-1 min-w-0 h-full bg-slate-950 text-slate-100">
+      <div className="flex flex-col flex-1 min-w-0 h-full text-slate-100">
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800 flex-shrink-0">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-white/5 bg-slate-950/40 backdrop-blur-lg flex-shrink-0">
           <div className="flex items-center gap-2">
-            <Brain className="w-5 h-5 text-emerald-400" />
-            <h1 className="text-base font-semibold text-slate-100">
-              Coach{profile?.preferredName ? ` · ${profile.preferredName}` : ""}
+            <Brain
+              className="w-5 h-5 text-emerald-400"
+              style={{ filter: "drop-shadow(0 0 6px hsl(158 64% 42% / 0.5))" }}
+            />
+            <h1
+              className="text-lg font-bold"
+              style={{ fontFamily: "var(--font-display)" }}
+            >
+              <span className="gradient-text">Coach</span>
+              {profile?.preferredName ? <span className="text-slate-300"> · {profile.preferredName}</span> : null}
             </h1>
           </div>
           <div className="flex items-center gap-2">
-            {/* Local/Cloud toggle + model selector */}
-            {localModel.ready && localModel.variant ? (
-              <div className="flex items-center gap-1.5">
-                {/* Toggle pill */}
-                <div className="flex items-center h-7 rounded-md border border-slate-700 bg-slate-800 overflow-hidden text-xs">
-                  <button
-                    onClick={() => toggleCoachMode(true)}
-                    className={`px-2 h-full transition-colors ${
-                      useLocal
-                        ? "bg-emerald-900/60 text-emerald-300 border-r border-emerald-700/50"
-                        : "text-slate-400 hover:text-slate-200 border-r border-slate-700"
-                    }`}
-                  >
-                    {useLocal && <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse mr-1" />}
-                    Local
-                  </button>
-                  <button
-                    onClick={() => toggleCoachMode(false)}
-                    className={`px-2 h-full transition-colors ${
-                      !useLocal
-                        ? "bg-blue-900/60 text-blue-300"
-                        : "text-slate-400 hover:text-slate-200"
-                    }`}
-                  >
-                    Cloud
-                  </button>
-                </div>
-                {/* Show model info based on toggle */}
-                {useLocal ? (
-                  <span className="text-xs text-emerald-400/80 hidden sm:inline">
-                    Gemma 4 {localModel.variant}
-                  </span>
-                ) : profile?.hasOwnKey ? (() => {
-                  const provider = profile.provider ?? "groq";
-                  const FALLBACK: Record<string, Array<{id:string;label:string}>> = {
-                    groq: [
-                      { id: "llama-3.1-8b-instant",    label: "Llama 3.1 8B Instant (recommended)" },
-                      { id: "llama-3.3-70b-versatile",  label: "Llama 3.3 70B Versatile" },
-                    ],
-                    openrouter: [
-                      { id: "openrouter/free",                            label: "Auto (Free)" },
-                      { id: "qwen/qwen3.6-plus:free",                    label: "Qwen 3.6 Plus (recommended)" },
-                      { id: "meta-llama/llama-3.3-70b-instruct:free",     label: "Llama 3.3 70B" },
-                      { id: "nvidia/nemotron-3-super-120b-a12b:free",     label: "Nemotron 120B" },
-                      { id: "stepfun/step-3.5-flash:free",                label: "Step 3.5 Flash" },
-                    ],
-                  };
-                  const models = (profile.modelCatalog?.[provider] ?? FALLBACK[provider] ?? []) as Array<{id:string;label:string}>;
-                  const currentModel = profile.aiModel ?? "";
-                  const effectiveModel = models.some((m) => m.id === currentModel)
-                    ? currentModel
-                    : (models[0]?.id ?? "");
-                  return (
-                    <Select
-                      value={effectiveModel}
-                      onValueChange={async (model) => {
-                        try {
-                          await api.coachUpdateProvider(provider, model);
-                        } catch { /* refresh to current server state */ }
-                        qc.invalidateQueries({ queryKey: ["coachProfile"] });
-                      }}
-                    >
-                      <SelectTrigger className="h-7 text-xs w-auto max-w-[150px] border-slate-700 bg-slate-800 text-slate-300">
-                        <SelectValue placeholder="Select model" />
-                      </SelectTrigger>
-                      <SelectContent align="end" className="max-w-[220px]">
-                        {models.map((m) => (
-                          <SelectItem key={m.id} value={m.id} className="text-xs">
-                            {m.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  );
-                })() : null}
-              </div>
-            ) : profile?.hasOwnKey && (() => {
-              // No local model available — just show cloud model selector
+            {/* Cloud model selector */}
+            {profile?.hasOwnKey && (() => {
               const provider = profile.provider ?? "groq";
               const FALLBACK: Record<string, Array<{id:string;label:string}>> = {
                 groq: [
@@ -1147,6 +1016,8 @@ ${memory}`;
                   </SheetTitle>
                 </SheetHeader>
                 <div className="mt-4">{sidebarContent}</div>
+                <div className="border-t border-border my-4" />
+                <CoachBriefCard />
               </SheetContent>
             </Sheet>
           </div>
@@ -1214,6 +1085,8 @@ ${memory}`;
       {/* ── Desktop sidebar ── */}
       <div className="hidden lg:flex flex-col w-72 border-l border-border overflow-y-auto p-4 flex-shrink-0">
         {sidebarContent}
+        {sidebarContent && <div className="border-t border-border my-4" />}
+        <CoachBriefCard />
       </div>
     </div>
   );

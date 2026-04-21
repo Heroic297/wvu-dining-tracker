@@ -10,19 +10,22 @@
 import type { Express } from "express";
 import { pool } from "./db.js";
 import { requireAuth, type AuthRequest } from "./auth.js";
+import { coachLimiter } from "./rateLimit.js";
 import { encryptString, decryptString, maskApiKey } from "./crypto.js";
 import { scrapeLocationDate } from "./scraper.js";
 import { lookupNutrition } from "./nutrition.js";
 import { computeDailyTargets, analyzeWaterCut } from "./tdee.js";
 import { storage } from "./storage.js";
 import { getGarminCoachContext } from "./garmin.js";
+import { buildContextSnapshot } from "./memoryBridge.js";
 import { z } from "zod";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const FREE_DAILY_CAP = 15;
+const FREE_DAILY_CAP = 200; // Server-pooled Groq key — higher cap for all users
 const RECENT_WINDOW = 15;
-const COMPACT_THRESHOLD = 20;
+const COMPACT_THRESHOLD = 5;
+const INITIAL_SUMMARY_THRESHOLD = 5;
 
 // Default models per provider (all free)
 export const DEFAULT_MODELS: Record<string, string> = {
@@ -280,6 +283,25 @@ async function buildLiveContext(userId: string, rawUser: any): Promise<string> {
     totals = mRes.rows[0] ?? totals;
   } catch { /* non-fatal */ }
 
+  // Fetch per-meal rows for the snapshot
+  let meals: Array<{
+    meal_name?: string;
+    logged_at?: string;
+    total_calories?: number;
+    total_protein?: number;
+    total_carbs?: number;
+    total_fat?: number;
+  }> = [];
+  try {
+    const mealsRes = await pool.query(
+      `SELECT meal_name, logged_at, total_calories, total_protein, total_carbs, total_fat
+       FROM user_meals WHERE user_id=$1 AND date=$2
+       ORDER BY logged_at ASC NULLS LAST`,
+      [userId, today]
+    );
+    meals = mealsRes.rows;
+  } catch { /* non-fatal */ }
+
   try {
     const wlRes = await pool.query(
       `SELECT ml_logged FROM water_logs WHERE user_id=$1 AND date=$2`,
@@ -338,6 +360,28 @@ async function buildLiveContext(userId: string, rawUser: any): Promise<string> {
     `--- END LIVE CONTEXT ---`,
   ].filter(Boolean).join("\n");
 
+  // Build and inject the per-meal nutrition snapshot (pure-TS, no sidecar)
+  const snapshot = buildContextSnapshot({
+    today,
+    totals: {
+      kcal:    Number(totals.kcal),
+      protein: Number(totals.protein),
+      carbs:   Number(totals.carbs),
+      fat:     Number(totals.fat),
+    },
+    targets,
+    meals,
+    water_ml: waterMl,
+    weight: latestWeight
+      ? { weight_kg: latestWeight.weight_kg, date: latestWeight.date }
+      : null,
+  });
+
+  // Splice snapshot in before --- END LIVE CONTEXT ---
+  const liveLines = lines.split("\n");
+  if (snapshot) liveLines.splice(liveLines.length - 1, 0, snapshot);
+  const liveContext = liveLines.join("\n");
+
   // Append Garmin wearable data if connected and available (gated — only when detected)
   let garminContext = "";
   try {
@@ -345,7 +389,151 @@ async function buildLiveContext(userId: string, rawUser: any): Promise<string> {
     if (gc) garminContext = "\n" + gc;
   } catch { /* non-fatal — coach works fine without wearable data */ }
 
-  return lines + garminContext;
+  // Append Apple Health data if available
+  let appleHealthContext = "";
+  try {
+    const ahRes = await pool.query(
+      `SELECT total_steps, calories_burned, active_minutes, sleep_duration_min,
+              resting_heart_rate, avg_overnight_hrv, weight_kg, body_fat_pct,
+              workouts, vo2_max
+       FROM apple_health_daily WHERE user_id=$1 AND date=$2`,
+      [userId, today]
+    );
+    const ah = ahRes.rows[0];
+    if (ah) {
+      const parts: string[] = [];
+      if (ah.total_steps) parts.push(`Steps: ${ah.total_steps.toLocaleString()}`);
+      if (ah.calories_burned) parts.push(`Active cal burned: ${ah.calories_burned}`);
+      if (ah.active_minutes) parts.push(`Active minutes: ${ah.active_minutes}`);
+      if (ah.sleep_duration_min) parts.push(`Sleep: ${Math.floor(ah.sleep_duration_min / 60)}h ${ah.sleep_duration_min % 60}m`);
+      if (ah.resting_heart_rate) parts.push(`RHR: ${ah.resting_heart_rate} bpm`);
+      if (ah.avg_overnight_hrv) parts.push(`HRV: ${ah.avg_overnight_hrv.toFixed(1)} ms`);
+      if (ah.weight_kg) parts.push(`Weight: ${(ah.weight_kg * 2.20462).toFixed(1)} lbs`);
+      if (ah.workouts) {
+        const workouts = typeof ah.workouts === 'string' ? JSON.parse(ah.workouts) : ah.workouts;
+        if (Array.isArray(workouts) && workouts.length > 0) {
+          const workoutStr = workouts.map((w: any) =>
+            `${w.activity_type}: ${w.duration_min}min, ${w.calories}cal${w.avg_heart_rate ? `, avg HR ${w.avg_heart_rate}` : ''}`
+          ).join("; ");
+          parts.push(`Workouts: ${workoutStr}`);
+        }
+      }
+      if (ah.vo2_max) parts.push(`VO2 Max: ${ah.vo2_max}`);
+      if (parts.length > 0) {
+        appleHealthContext = "\n[Apple Health Today] " + parts.join(" | ");
+      }
+    }
+  } catch { /* non-fatal */ }
+
+  // Append active training program + today's workout + recent logs
+  let trainingContext = "";
+  try {
+    const progRes = await pool.query(
+      `SELECT id, name, source, parsed_blocks, created_at, start_date FROM training_programs
+       WHERE user_id = $1 AND is_active = true LIMIT 1`,
+      [userId]
+    );
+    const activeProgram = progRes.rows[0];
+
+    if (activeProgram) {
+      const baseDate = new Date(activeProgram.start_date ?? activeProgram.created_at);
+      const weekNumber = Math.floor((Date.now() - baseDate.getTime()) / (7 * 24 * 60 * 60 * 1000));
+
+      // Find next scheduled day sequentially from last log (not by day-of-week)
+      let scheduledToday = "";
+      try {
+        const blocks = typeof activeProgram.parsed_blocks === 'string'
+          ? JSON.parse(activeProgram.parsed_blocks)
+          : activeProgram.parsed_blocks;
+        const weeks: any[] = blocks?.weeks ?? [];
+
+        const lastLogRes = await pool.query(
+          `SELECT week_number, day_label FROM workout_logs WHERE user_id = $1 ORDER BY date DESC LIMIT 1`,
+          [userId]
+        );
+        const lastLog = lastLogRes.rows[0];
+
+        let scheduledDay: any = null;
+        let scheduledWeekNum = weekNumber + 1;
+        if (!lastLog) {
+          if (weeks.length > 0 && weeks[0].days?.length > 0) {
+            scheduledDay = weeks[0].days[0];
+            scheduledWeekNum = weeks[0].weekNumber + 1;
+          }
+        } else {
+          outer: for (let wi = 0; wi < weeks.length; wi++) {
+            if (weeks[wi].weekNumber !== lastLog.week_number) continue;
+            for (let di = 0; di < weeks[wi].days.length; di++) {
+              if (weeks[wi].days[di].label !== lastLog.day_label) continue;
+              if (di + 1 < weeks[wi].days.length) {
+                scheduledDay = weeks[wi].days[di + 1];
+                scheduledWeekNum = weeks[wi].weekNumber + 1;
+              } else if (wi + 1 < weeks.length && weeks[wi + 1].days?.length > 0) {
+                scheduledDay = weeks[wi + 1].days[0];
+                scheduledWeekNum = weeks[wi + 1].weekNumber + 1;
+              } else {
+                scheduledDay = weeks[wi].days[di];
+                scheduledWeekNum = weeks[wi].weekNumber + 1;
+              }
+              break outer;
+            }
+          }
+        }
+
+        if (scheduledDay) {
+          const exList = scheduledDay.exercises?.map((e: any) =>
+            `${e.name}: ${e.sets}x${e.reps}${e.weight ? ` @${e.weight}` : ''}${e.rpe ? ` RPE ${e.rpe}` : ''}`
+          ).join(", ");
+          scheduledToday = `[Scheduled Today] Week ${scheduledWeekNum} — ${scheduledDay.label}: ${exList}`;
+        }
+      } catch { scheduledToday = "Could not parse scheduled workout"; }
+
+      // Get last 3 workout logs — show ALL sets per exercise
+      const logsRes = await pool.query(
+        `SELECT day_label, date, exercises, notes FROM workout_logs
+         WHERE user_id = $1 ORDER BY date DESC LIMIT 3`,
+        [userId]
+      );
+      const today = new Date().toISOString().slice(0, 10);
+      const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+      const recentLogs = logsRes.rows.map((log: any) => {
+        const exList = (typeof log.exercises === 'string' ? JSON.parse(log.exercises) : log.exercises) || [];
+        const summary = exList.map((e: any) => {
+          const sets = (e.sets ?? []).filter((s: any) => s.reps || s.weight);
+          if (sets.length === 0) return e.name;
+          const setsStr = sets.map((s: any) => `${s.weight}×${s.reps}${s.rpe ? ` @${s.rpe}` : ''}`).join(", ");
+          return `${e.name}: ${setsStr}`;
+        }).join(" | ");
+        const dateLabel = log.date === today ? "Today" : log.date === yesterday ? "Yesterday" : log.date;
+        return `${dateLabel} (${log.day_label}): ${summary}${log.notes ? ` — "${log.notes}"` : ''}`;
+      }).join("\n");
+
+      trainingContext = `\n[Training Program] Active: "${activeProgram.name}" (Week ${weekNumber + 1})`;
+      if (scheduledToday) trainingContext += `\n${scheduledToday}`;
+      if (recentLogs) trainingContext += `\n[Most Recent Completed Workout]\n${recentLogs}`;
+    }
+  } catch { /* non-fatal */ }
+
+  // Append today's supplement logs
+  let supplementContext = "";
+  try {
+    const suppRes = await pool.query(
+      `SELECT s.name, s.brand, sl.servings, sl.logged_at
+       FROM supplement_logs sl
+       JOIN supplements s ON s.id = sl.supplement_id
+       WHERE sl.user_id = $1 AND sl.date = $2
+       ORDER BY sl.logged_at`,
+      [userId, today]
+    );
+    if (suppRes.rows.length > 0) {
+      const suppList = suppRes.rows.map((r: any) =>
+        `${r.name}${r.brand ? ` (${r.brand})` : ''} x${r.servings}`
+      ).join(", ");
+      supplementContext = `\n[Supplements Today] ${suppList}`;
+    }
+  } catch { /* non-fatal */ }
+
+  return liveContext + garminContext + appleHealthContext + trainingContext + supplementContext;
 }
 
 // ─── System Prompt ────────────────────────────────────────────────────────────
@@ -383,6 +571,11 @@ DATA ACCURACY:
 - Only use the lookup_food tool when the user explicitly asks for nutrition data on a specific food item. Do not call it for casual food mentions.
 - Only use the get_dining_menu tool when the user explicitly asks what is on a dining hall menu. Do not call it just because a dining hall is mentioned in conversation.
 - Use the get_user_stats tool only when the user asks about their trends or history over a time range.
+
+TRAINING DATA:
+- When the user asks about their most recent workout, use ONLY the [Most Recent Completed Workout] section. Do NOT reference [Scheduled Today].
+- Never list exercises that have no logged set data as if the user completed them.
+- [Scheduled Today] shows programmed targets only — the user has not necessarily done these exercises.
 
 GOAL UPDATES:
 - If the user says their goal has changed (e.g., "I'm now bulking", "I stopped powerlifting"), update the ai_profiles record using the update_profile tool.
@@ -615,7 +808,7 @@ async function callOpenAICompat(
   tools: any[],
   isOpenRouter = false
 ): Promise<any> {
-  // Strip tools for OpenRouter models that don\'t support function calling
+  // Strip tools for OpenRouter models that don't support function calling
   const effectiveTools = (isOpenRouter && OPENROUTER_NO_TOOLS.has(model)) ? [] : tools;
 
   const body: any = { model, messages, max_tokens: 1024, temperature: 0.7 };
@@ -715,34 +908,59 @@ async function maybeCompact(userId: string, config: AiConfig): Promise<void> {
     [userId]
   );
   const n = parseInt(countRes.rows[0]?.n ?? "0", 10);
-  if (n <= COMPACT_THRESHOLD) return;
-
-  // Grab the oldest messages to compact (all but last RECENT_WINDOW)
-  const toCompact = await pool.query(
-    `SELECT id, role, content FROM chat_messages WHERE user_id=$1
-     ORDER BY created_at ASC LIMIT $2`,
-    [userId, n - RECENT_WINDOW]
-  );
-  if (toCompact.rows.length === 0) return;
-
-  // Get existing summary
+  
+  // Get existing summary and profile
   const profRes = await pool.query(
-    "SELECT rolling_summary FROM ai_profiles WHERE user_id=$1",
+    "SELECT rolling_summary, preferred_name, main_goal, is_wvu_student, experience_level, notes, coach_tone FROM ai_profiles WHERE user_id=$1",
     [userId]
   );
-  const existingSummary = profRes.rows[0]?.rolling_summary ?? "";
+  const profile = profRes.rows[0];
+  const existingSummary = profile?.rolling_summary ?? "";
+  
+  // Check if we need initial summary generation (no summary yet, but enough messages)
+  const needsInitialSummary = !existingSummary && n >= INITIAL_SUMMARY_THRESHOLD;
+  
+  if (!needsInitialSummary && n <= COMPACT_THRESHOLD) {
+    return;
+  }
+
+  // Get user info from users table
+  const userRes = await pool.query(
+    "SELECT preferred_name, main_goal, is_wvu_student, experience_level, notes, coach_tone FROM users WHERE id=$1",
+    [userId]
+  );
+  const user = userRes.rows[0];
+  
+  // Get recent messages for context
+  const recentRes = await pool.query(
+    `SELECT id, role, content FROM chat_messages WHERE user_id=$1
+     ORDER BY created_at ASC`,
+    [userId]
+  );
+  const messages = recentRes.rows.slice(
+    needsInitialSummary ? 0 : Math.max(0, n - RECENT_WINDOW),
+    needsInitialSummary ? n : n - RECENT_WINDOW
+  );
 
   // Build compaction prompt
-  const transcript = toCompact.rows
+  const transcript = messages
     .map((r: any) => `${r.role.toUpperCase()}: ${r.content}`)
     .join("\n");
 
   const compactionPrompt = `You are summarizing a health coaching conversation to create a compact memory record.
 
+USER PROFILE INFO:
+- Preferred Name: ${user?.preferred_name || "Not provided"}
+- Main Goal: ${user?.main_goal || "Not provided"}
+- Is WVU Student: ${user?.is_wvu_student ? "Yes" : "No"}
+- Experience Level: ${user?.experience_level || "Not provided"}
+- User Notes: ${user?.notes || "None"}
+- Coach Tone: ${user?.coach_tone || "balanced"}
+
 EXISTING SUMMARY:
 ${existingSummary || "(none yet)"}
 
-NEW CONVERSATION TO INTEGRATE:
+RECENT CONVERSATION CONTEXT:
 ${transcript}
 
 Write a new rolling summary that:
@@ -760,16 +978,20 @@ Return ONLY the summary text, no preamble.`;
     ], []);
     const newSummary = compactRes.choices?.[0]?.message?.content?.trim() ?? existingSummary;
 
-    // Save summary and delete compacted messages
+    // Save summary (and delete compacted messages if we're doing regular compaction)
     await pool.query(
       "UPDATE ai_profiles SET rolling_summary=$1, updated_at=now() WHERE user_id=$2",
       [newSummary, userId]
     );
-    const ids = toCompact.rows.map((r: any) => r.id);
-    await pool.query(
-      `DELETE FROM chat_messages WHERE id = ANY($1::varchar[])`,
-      [ids]
-    );
+    
+    // Only delete messages if we're doing regular compaction (not initial summary)
+    if (!needsInitialSummary) {
+      const ids = messages.map((r: any) => r.id);
+      await pool.query(
+        `DELETE FROM chat_messages WHERE id = ANY($1::varchar[])`,
+        [ids]
+      );
+    }
   } catch (err: any) {
     console.error("[coach] compaction failed (non-fatal):", err.message);
   }
@@ -778,6 +1000,23 @@ Return ONLY the summary text, no preamble.`;
 // ─── Route Registration ───────────────────────────────────────────────────────
 
 export function registerCoachRoutes(app: Express): void {
+
+  // GET /api/coach/live-context
+  // Returns the exact same pre-built context string the server injects into every
+  // cloud-model system prompt, so the local (on-device) model gets identical context.
+  app.get("/api/coach/live-context", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const userId = req.user!.id;
+      const userRes = await pool.query("SELECT * FROM users WHERE id=$1", [userId]);
+      const rawUser = userRes.rows[0];
+      if (!rawUser) return res.status(404).json({ error: "User not found" });
+      const liveContext = await buildLiveContext(userId, rawUser);
+      res.json({ context: liveContext });
+    } catch (err: any) {
+      console.error("[coach] live-context error:", err.message);
+      res.status(500).json({ error: "Failed to build context" });
+    }
+  });
 
   // GET /api/coach/profile
   app.get("/api/coach/profile", requireAuth, async (req: AuthRequest, res) => {
@@ -1028,7 +1267,7 @@ export function registerCoachRoutes(app: Express): void {
   });
 
   // POST /api/coach/chat  — main chat endpoint
-  app.post("/api/coach/chat", requireAuth, async (req: AuthRequest, res) => {
+  app.post("/api/coach/chat", coachLimiter, requireAuth, async (req: AuthRequest, res) => {
     try {
       const userId = req.user!.id;
       const { message } = z.object({ message: z.string().min(1).max(2000) }).parse(req.body);

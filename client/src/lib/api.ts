@@ -134,6 +134,7 @@ export const api = {
     apiRequest("DELETE", provider ? `/api/coach/apikey?provider=${provider}` : "/api/coach/apikey"),
   coachUpdateProvider: (provider: string, model: string) =>
     apiRequest("PATCH", "/api/coach/provider", { provider, model }),
+  coachLiveContext: () => apiRequest("GET", "/api/coach/live-context"),
 };
 
 /** Store the JWT token in memory */

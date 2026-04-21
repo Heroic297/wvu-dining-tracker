@@ -350,7 +350,20 @@ export class PgStorage implements IStorage {
 
   async createDiningItemsBulk(items: InsertDiningItem[]) {
     if (items.length === 0) return [];
-    return db.insert(diningItems).values(items).returning();
+    return db
+      .insert(diningItems)
+      .values(items)
+      .onConflictDoUpdate({
+        target: [diningItems.menuId, diningItems.name],
+        set: {
+          calories: sql`EXCLUDED.calories`,
+          proteinG: sql`EXCLUDED.protein_g`,
+          carbsG: sql`EXCLUDED.carbs_g`,
+          fatG: sql`EXCLUDED.fat_g`,
+          rawMetadata: sql`EXCLUDED.raw_metadata`,
+        },
+      })
+      .returning();
   }
 
   async deleteDiningItemsByMenu(menuId: string) {
@@ -456,6 +469,19 @@ export class PgStorage implements IStorage {
       .where(eq(userMeals.id, mealId));
   }
 
+  /**
+   * Bulk-delete meals (and, via FK cascade, their items) for one user.
+   * If startDate/endDate are provided, only meals in [startDate, endDate]
+   * (inclusive, YYYY-MM-DD) are removed. Returns the number of meals deleted.
+   */
+  async deleteUserMealsForUser(userId: string, startDate?: string, endDate?: string) {
+    const conds = [eq(userMeals.userId, userId)];
+    if (startDate) conds.push(gte(userMeals.date, startDate));
+    if (endDate)   conds.push(lte(userMeals.date, endDate));
+    const result = await db.delete(userMeals).where(and(...conds));
+    return (result as unknown as { rowCount?: number }).rowCount ?? 0;
+  }
+
   // ── User Meal Items ────────────────────────────────────────────────────────
 
   async getUserMealItems(mealId: string) {
@@ -496,20 +522,6 @@ export class PgStorage implements IStorage {
     await this.recalcUserMealTotals(existing.userMealId);
   }
 
-  /**
-   * Bulk-delete meals (and, via FK cascade, their items) for one user.
-   * If startDate/endDate are provided, only meals in [startDate, endDate]
-   * (inclusive, YYYY-MM-DD) are removed. Returns the number of meals deleted.
-   */
-  async deleteUserMealsForUser(userId: string, startDate?: string, endDate?: string) {
-    const conds = [eq(userMeals.userId, userId)];
-    if (startDate) conds.push(gte(userMeals.date, startDate));
-    if (endDate)   conds.push(lte(userMeals.date, endDate));
-    const result = await db.delete(userMeals).where(and(...conds));
-    // drizzle returns a NodePgQueryResult in newer versions
-    return (result as unknown as { rowCount?: number }).rowCount ?? 0;
-  }
-
   // ── Weight Log ─────────────────────────────────────────────────────────────
 
   async getWeightLog(userId: string, date: string) {
@@ -545,8 +557,25 @@ export class PgStorage implements IStorage {
         },
       })
       .returning();
+
+    // Keep users.weightKg in sync with the most-recent weight-log entry so
+    // TDEE calculations always use the latest known weight.
+    const [latest] = await db
+      .select({ weightKg: weightLog.weightKg })
+      .from(weightLog)
+      .where(eq(weightLog.userId, entry.userId))
+      .orderBy(desc(weightLog.date))
+      .limit(1);
+    if (latest) {
+      await db
+        .update(users)
+        .set({ weightKg: latest.weightKg })
+        .where(eq(users.id, entry.userId));
+    }
+
     return row;
   }
+
 
   /**
    * Delete a single weight-log row, scoped to the owning user.
@@ -558,7 +587,6 @@ export class PgStorage implements IStorage {
       .where(and(eq(weightLog.id, id), eq(weightLog.userId, userId)));
     const n = (result as unknown as { rowCount?: number }).rowCount ?? 0;
     if (n > 0) {
-      // Keep users.weight_kg in sync with whatever is now the most-recent entry
       await this.syncUserLatestWeight(userId);
     }
     return n > 0;
@@ -618,6 +646,7 @@ export class PgStorage implements IStorage {
     return row;
   }
 
+
   /**
    * Bulk-delete water logs for a user, optionally bounded by date range.
    * Returns the number of rows removed.
@@ -633,12 +662,10 @@ export class PgStorage implements IStorage {
   /**
    * Return row counts for everything the “clear history” UI can wipe.
    * Used to preview an impending bulk delete before the user confirms.
-   * Uses raw SQL via the shared pool so tables that aren’t imported into
+   * Uses raw SQL via the shared pool so tables that aren't imported into
    * Drizzle here (supplement_logs, workout_logs, physique_photos) still work.
    */
   async countUserHistory(userId: string, startDate?: string, endDate?: string) {
-    // Params are positional — $1 userId, $2 startDate (or '-infinity'), $3 endDate (or 'infinity')
-    // This lets every query share the same SQL shape regardless of which bounds are set.
     const params = [userId, startDate ?? "-infinity", endDate ?? "infinity"];
     const range = (col: string) => `AND ${col} BETWEEN $2::date AND $3::date`;
 

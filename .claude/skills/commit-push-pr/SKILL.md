@@ -1,49 +1,19 @@
----
+﻿---
 name: commit-push-pr
-description: Creates a git commit and pushes to remote. Use -a to amend. Optionally accepts a commit message.
+description: Commit staged changes, push, open draft PR against develop.
 ---
 
-## Task
+## Steps
 
-Create a git commit with all modified code and push to the remote repository.
+1. `git status` — confirm what is staged vs unstaged. Stage only task-related files.
+2. If amending: `git commit --amend --no-edit` (or `-m "<msg>"` if a new message is provided).
+   Else: draft a concise message from `git diff --cached`, then `git commit -m "<msg>"`.
+3. Push: `git push` (add `-u origin <branch>` if no upstream; use `--force-with-lease` only when amending).
+4. PR: `gh pr view --json url 2>/dev/null`. If none, `gh pr create --draft --base develop --title "<t>" --body "<b>"`.
 
-### Step 1: Stage Changes
-
-Run `git status` to see what files have changed. Stage the relevant changes:
-
-- Stage files that are related to the current work
-- Do NOT stage unrelated changes or files that shouldn't be committed (e.g., local config, debug files)
-- Use `git add <file>` for specific files or `git add -A` if all changes should be committed
-
-### Step 2: Commit
-
-If amending:
-
-- If a commit message is provided, use `git commit --amend -m "<message>"`
-- Otherwise, use `git commit --amend --no-edit` to keep the previous message
-
-Otherwise:
-
-- If a commit message is provided, use it
-- If no message provided, run `git diff --cached` to see what's staged, then draft a concise commit message
-- Create a new commit with the message
-
-### Step 3: Push to Remote
-
-Push to the remote. If amending, use `git push --force-with-lease`. If no upstream exists, add `-u origin <branch-name>`. Both flags can be combined if needed.
-
-### Step 4: Create or Update PR
-
-Check if a PR already exists for this branch: `gh pr view --json url 2>/dev/null`
-
-- If no PR exists, create one as a **draft**: `gh pr create --draft --title "<title>" --body "<body>"`
-- If a PR already exists, skip this step (the push already updated it)
-
-### Important Notes
-
-- NEVER use `--force` unless explicitly requested
-- NEVER skip hooks (`--no-verify`) unless explicitly requested
-- ALWAYS create PRs as drafts — never create non-draft PRs
-- If the commit fails due to pre-commit hooks, fix the issues
-- If push fails due to remote changes, pull and rebase before retrying
-- If push fails with 403/permission denied, fork the repo (`gh repo fork --remote=true`), then push to the fork and open a PR against the upstream repo
+## Rules
+- Never `--force` (only `--force-with-lease` when amending).
+- Never `--no-verify`.
+- PRs always draft, always targeting `develop`.
+- If pre-commit hook fails, fix the issue — do not skip.
+- If push rejects, `git pull --rebase origin <branch>` then retry.

@@ -23,8 +23,6 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Checkbox } from "@/components/ui/checkbox";
-import { useLocalModelContext, } from "@/contexts/LocalModelContext";
-import type { ModelVariant } from "@/hooks/use-local-model";
 import { useQuery } from "@tanstack/react-query";
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -38,7 +36,6 @@ function formatBytes(bytes: number): string {
 
 export default function SettingsPage() {
   const { user, updateUser, logout } = useAuth();
-  const localModel = useLocalModelContext();
   const { toast } = useToast();
   const [saving, setSaving] = useState(false);
 
@@ -202,8 +199,13 @@ export default function SettingsPage() {
   };
 
   return (
-    <div className="p-4 md:p-6 max-w-xl space-y-6">
-      <h1 className="text-xl font-bold">Settings</h1>
+    <div className="p-4 md:p-6 max-w-xl space-y-6 fade-up">
+      <h1
+        className="text-3xl font-extrabold gradient-text"
+        style={{ fontFamily: "var(--font-display)" }}
+      >
+        Settings
+      </h1>
 
       {/* Timezone */}
       <section className="bg-card border border-border rounded-xl p-4 space-y-3">
@@ -528,121 +530,6 @@ export default function SettingsPage() {
               : `Without a key you get ${(coachProfile as any)?.dailyCap ?? 15} free messages/day via Groq.`}
             {" "}Pick your AI model in the Coach tab after saving.
           </p>
-        </div>
-      </section>
-
-      {/* AI Coach — Local Model */}
-      <section className="bg-card border border-border rounded-xl p-4 space-y-3">
-        <div className="flex items-center gap-2">
-          <HardDrive className="w-4 h-4 text-primary" />
-          <h2 className="text-sm font-semibold">AI Coach — Local Model</h2>
-        </div>
-        <p className="text-xs text-muted-foreground">
-          Download a local AI model for offline coach chat. The model runs entirely in your browser — no data sent to any server.
-        </p>
-
-        {!localModel.hasWebGPU && (
-          <div className="flex items-start gap-2 bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3">
-            <AlertTriangle className="w-4 h-4 text-yellow-500 flex-shrink-0 mt-0.5" />
-            <p className="text-xs text-yellow-600 dark:text-yellow-400">
-              Your browser does not support WebGPU. The local model will use a slower fallback (WASM). Response times may be 20-40 seconds on mobile.
-            </p>
-          </div>
-        )}
-
-        {localModel.error && (
-          <div className="flex items-start gap-2 bg-destructive/10 border border-destructive/30 rounded-lg p-3">
-            <AlertTriangle className="w-4 h-4 text-destructive flex-shrink-0 mt-0.5" />
-            <p className="text-xs text-destructive">{localModel.error}</p>
-          </div>
-        )}
-
-        {/* Model options */}
-        <div className="space-y-2">
-          {([
-            { id: "E2B" as ModelVariant, label: "Gemma 4 E2B", size: "~3.5 GB", desc: "Faster download, good for coaching" },
-            { id: "E4B" as ModelVariant, label: "Gemma 4 E4B", size: "~6 GB", desc: "Larger, better structured responses" },
-          ]).map((opt) => {
-            const isThisVariant = localModel.variant === opt.id;
-            // Model is fully ready: variant matches, loaded into memory, not currently loading
-            const isFullyReady = isThisVariant && localModel.ready && !localModel.loading;
-            // Model is reloading from cache (mount reload, no downloadingVariant set)
-            const isReloading = isThisVariant && localModel.loading && !localModel.downloadingVariant;
-            // Model variant is stored but not yet loaded (brief window before mount effect fires,
-            // or between renders) — treat as "pending reload"
-            const isPendingReload = isThisVariant && !localModel.ready && !localModel.loading;
-            // Fresh download in progress for this specific variant
-            const isDownloading = localModel.loading && localModel.downloadingVariant === opt.id;
-            // Any loading happening (disable all download buttons)
-            const isCurrentlyDownloading = localModel.loading;
-
-            return (
-              <div key={opt.id} className="border border-border rounded-lg p-3 space-y-2">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-medium">{opt.label} <span className="text-xs text-muted-foreground">({opt.size})</span></p>
-                    <p className="text-xs text-muted-foreground">{opt.desc}</p>
-                  </div>
-                  {isFullyReady ? (
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-green-500 font-medium flex items-center gap-1">
-                        <CheckCircle className="w-3.5 h-3.5" /> Installed
-                      </span>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => localModel.removeModel()}
-                        className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
-                        title="Remove model"
-                      >
-                        <X className="w-3.5 h-3.5" />
-                      </Button>
-                    </div>
-                  ) : (isReloading || isPendingReload) ? (
-                    <div className="flex items-center gap-2">
-                      <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />
-                      <span className="text-xs text-muted-foreground">Loading from cache...</span>
-                    </div>
-                  ) : (
-                    <Button
-                      size="sm"
-                      onClick={() => localModel.downloadModel(opt.id)}
-                      disabled={isCurrentlyDownloading}
-                      className="h-8 text-xs"
-                    >
-                      {isDownloading ? (
-                        <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" />
-                      ) : (
-                        <Download className="w-3.5 h-3.5 mr-1" />
-                      )}
-                      {isDownloading ? "Downloading..." : "Download"}
-                    </Button>
-                  )}
-                </div>
-
-                {/* Progress bar — show during fresh download only (not cache reload) */}
-                {isDownloading && (
-                  <div className="space-y-1">
-                    <div className="w-full h-2 bg-secondary rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-primary rounded-full transition-all duration-300"
-                        style={{ width: `${localModel.downloadProgress}%` }}
-                      />
-                    </div>
-                    <div className="flex items-center justify-between text-xs text-muted-foreground">
-                      <span>{localModel.statusText}</span>
-                      <span>
-                        {localModel.downloadProgress}%
-                        {localModel.totalBytes > 0 && (
-                          <> — {formatBytes(localModel.downloadedBytes)} / {formatBytes(localModel.totalBytes)}</>
-                        )}
-                      </span>
-                    </div>
-                  </div>
-                )}
-              </div>
-            );
-          })}
         </div>
       </section>
 

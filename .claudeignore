@@ -1,0 +1,69 @@
+﻿node_modules/
+client/node_modules/
+server/node_modules/
+
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+dist/
+build/
+client/dist/
+client/build/
+.vite/
+*.tsbuildinfo
+
+# Playwright artifacts (you have playwright ^1.58)
+test-results/
+playwright-report/
+playwright/.cache/
+
+# Drizzle generated metadata (schema.ts is the source of truth)
+migrations/meta/
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+
+# Logs & caches
+*.log
+npm-debug.log*
+.cache/
+.turbo/
+
+# Supabase local
+supabase/.branches/
+supabase/.temp/
+
+# Uploaded / generated data
+uploads/
+*.csv
+*.sqlite
+*.db
+*.pdf
+
+# Python detritus (your start script pip-installs at runtime)
+__pycache__/
+*.pyc
+requirements.txt
+
+# Human-facing docs — duplicates CLAUDE.md content
+README.md
+
+# One-time token audit artifacts
+audit*.txt
+script/audit-tokens.ps1
+
+# Stale root-level JS route copies (source of truth is server/routes/*.ts)
+routes/
+
+# Compiled JS alongside TS sources — read the .ts files instead
+server/routes/*.js

@@ -1,16 +1,17 @@
 import { Link } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
-import { Home, UtensilsCrossed, Activity, MessageCircle, Settings, CalendarDays } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/contexts/AuthContext";
+import { PRIMARY_TABS, SECONDARY_TABS } from "@/lib/nav-config";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
-const PRIMARY_TABS = [
-  { href: "/",          label: "Home",   icon: Home             },
-  { href: "/log",       label: "Log",    icon: UtensilsCrossed  },
-  { href: "/wearables", label: "Health", icon: Activity         },
-  { href: "/coach",     label: "Coach",  icon: MessageCircle    },
-];
-
-/** Inline "M" mark — two overlapping peaks, emerald on dark pill */
 function LogoMark({ size = 28 }: { size?: number }) {
   return (
     <svg
@@ -33,14 +34,23 @@ function LogoMark({ size = 28 }: { size?: number }) {
 
 export default function TopNav() {
   const [loc] = useHashLocation();
+  const { user, logout } = useAuth();
+  const showPhysique = user?.enablePhysiqueTracking === true;
+
+  const visibleTabs = PRIMARY_TABS.filter(t => !t.requiresPhysique || showPhysique);
+  const initials = (user?.displayName ?? user?.email ?? "?")[0].toUpperCase();
 
   return (
-    <header className="hidden md:flex items-center h-14 border-b border-border bg-slate-950/80 backdrop-blur-md px-4 gap-6 flex-shrink-0">
+    <header className="hidden md:flex items-center h-14 border-b border-white/5 bg-slate-950/60 backdrop-blur-xl px-4 gap-6 flex-shrink-0">
       {/* Brand */}
-      <Link href="/" className="flex items-center gap-2 mr-2">
+      <Link
+        href="/"
+        onClick={() => window.scrollTo({ top: 0, behavior: "instant" })}
+        className="flex items-center gap-2 mr-2"
+      >
         <LogoMark />
         <span
-          className="text-[15px] font-bold tracking-tight text-foreground"
+          className="text-[15px] font-bold tracking-tight gradient-text"
           style={{ fontFamily: "var(--font-display)" }}
         >
           Macro
@@ -49,20 +59,20 @@ export default function TopNav() {
 
       {/* Primary tabs */}
       <nav className="flex items-center gap-1">
-        {PRIMARY_TABS.map(({ href, label, icon: Icon }) => {
-          const active = href === "/"
-            ? loc === "/"
-            : loc.startsWith(href);
+        {visibleTabs.map(({ href, label, icon: Icon }) => {
+          const active = href === "/" ? loc === "/" : loc.startsWith(href);
           return (
             <Link
               key={href}
               href={href}
+              onClick={() => window.scrollTo({ top: 0, behavior: "instant" })}
               className={cn(
-                "flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors duration-150",
+                "flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-150",
                 active
-                  ? "bg-emerald-500/10 text-emerald-400"
+                  ? "bg-primary/10 text-primary"
                   : "text-muted-foreground hover:text-foreground hover:bg-secondary"
               )}
+              style={active ? { filter: "drop-shadow(0 0 6px hsl(var(--primary) / 0.5))" } : undefined}
             >
               <Icon className="w-4 h-4" />
               {label}
@@ -71,35 +81,56 @@ export default function TopNav() {
         })}
       </nav>
 
-      {/* Spacer */}
       <div className="flex-1" />
 
-      {/* Secondary icons */}
+      {/* Secondary links */}
       <div className="flex items-center gap-1">
-        <Link
-          href="/history"
-          className={cn(
-            "flex items-center justify-center w-9 h-9 rounded-lg transition-colors duration-150",
-            loc.startsWith("/history")
-              ? "bg-emerald-500/10 text-emerald-400"
-              : "text-muted-foreground hover:text-foreground hover:bg-secondary"
-          )}
-          title="History"
-        >
-          <CalendarDays className="w-[18px] h-[18px]" />
-        </Link>
-        <Link
-          href="/settings"
-          className={cn(
-            "flex items-center justify-center w-9 h-9 rounded-lg transition-colors duration-150",
-            loc.startsWith("/settings")
-              ? "bg-emerald-500/10 text-emerald-400"
-              : "text-muted-foreground hover:text-foreground hover:bg-secondary"
-          )}
-          title="Settings"
-        >
-          <Settings className="w-[18px] h-[18px]" />
-        </Link>
+        {SECONDARY_TABS.map(({ href, label, icon: Icon }) => {
+          const active = loc.startsWith(href);
+          return (
+            <Link
+              key={href}
+              href={href}
+              onClick={() => window.scrollTo({ top: 0, behavior: "instant" })}
+              className={cn(
+                "flex items-center justify-center w-9 h-9 rounded-lg transition-all duration-150",
+                active
+                  ? "bg-primary/10 text-primary"
+                  : "text-muted-foreground hover:text-foreground hover:bg-secondary"
+              )}
+              title={label}
+            >
+              <Icon className="w-[18px] h-[18px]" />
+            </Link>
+          );
+        })}
+
+        {/* Profile dropdown */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              className="ml-1 w-8 h-8 rounded-full bg-primary/20 border border-primary/30 flex items-center justify-center text-xs font-bold text-primary hover:bg-primary/30 transition-colors"
+              aria-label="User menu"
+            >
+              {initials}
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-48">
+            <DropdownMenuLabel className="text-xs font-normal text-muted-foreground truncate">
+              {user?.displayName ?? user?.email}
+            </DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem asChild>
+              <Link href="/settings" className="cursor-pointer">Settings</Link>
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={logout}
+              className="text-destructive focus:text-destructive cursor-pointer"
+            >
+              Sign out
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </header>
   );

@@ -42,7 +42,7 @@ export default function InvitePage() {
   // Guard — shouldn't normally be reachable, but just in case
   if (user?.email !== OWNER_EMAIL) {
     return (
-      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center">
+      <div className="min-h-screen text-slate-100 flex items-center justify-center">
         <p className="text-sm text-slate-500">Access restricted to the app owner.</p>
       </div>
     );
@@ -206,9 +206,14 @@ export default function InvitePage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 pb-24">
-      <div className="max-w-lg mx-auto px-4 pt-6 space-y-5">
-        <h1 className="text-xl font-semibold text-slate-100">Invite Codes</h1>
+    <div className="min-h-screen text-slate-100 pb-24">
+      <div className="max-w-lg mx-auto px-4 pt-6 space-y-5 fade-up">
+        <h1
+          className="text-3xl font-extrabold gradient-text"
+          style={{ fontFamily: "var(--font-display)" }}
+        >
+          Invite Codes
+        </h1>
 
         {/* Generate New Code — primary action */}
         <button

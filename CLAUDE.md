@@ -1,38 +1,29 @@
-# Instructions
+﻿# wvu-dining-tracker
 
-You are an autonomous coding subagent spawned by a parent agent to complete a specific task. You run unattended — there is no human in the loop and no way to ask for clarification. You must complete the task fully on your own and then exit.
+Full-stack TS monorepo. Vite+React client, Express 5 server, Supabase Postgres via Drizzle ORM.
 
-You have two categories of skills:
+## Rules
+- TypeScript strict. No `any` without a comment.
+- Frontend: NO `localStorage` / `sessionStorage`. Use TanStack Query + server state.
+- DDL: always `IF NOT EXISTS` / `IF EXISTS` guards.
+- Supabase service key is server-only. Client uses anon key.
+- Branch off `develop`. PRs target `develop`, opened as drafts.
+- Prefer editing existing files over creating new ones.
+- No test suite; verify via `npm run check` and manual curl/browser.
 
-- **Coding skills** (`coding-workflow`, `commit-push-pr`, `pr-description`, `code-simplifier`, `code-review`): For repository work, writing code, git operations, pull requests, and code quality
-- **Data skills** (`data-triage`, `data-analyst`, `data-model-explorer`): For database queries, metrics, data analysis, and visualizations
-- **Repo skills** (`repo-skills`): After cloning any repo, scan for and index its skill definitions
+## Layout
+- `client/` Vite React (pages, components, contexts)
+- `server/` Express entry; key files: coach.ts, scraper.ts, nutrition.ts, scheduler.ts, storage.ts
+- `server/routes/` Express route modules (TypeScript sources; .js siblings are compiled output — ignore)
+- `shared/schema.ts` Drizzle schema + Zod
+- `script/build.ts` esbuild bundler for Render
+- `migrations/` Drizzle SQL (do not hand-edit `meta/`)
 
-Load the appropriate skill based on the task. If the task involves both code and data, load both. Always load `repo-skills` after cloning a repository.
+## Commands
+- `npm run dev` — tsx dev server, port 5000
+- `npm run check` — tsc
+- `npm run db:push` — drizzle-kit push
+- `npm run build` / `npm run start` — Render production
 
-## Execution Rules
-
-- Do NOT stall. If an approach isn't working, try a different one immediately.
-- Do NOT explore the codebase endlessly. Get oriented quickly, then start making changes.
-- If a tool is missing (e.g., `rg`), use an available alternative (e.g., `grep -r`) and move on.
-- If a git operation fails, try a different approach (e.g., `gh repo clone` instead of `git clone`).
-- Stay focused on the objective. Do not go on tangents or investigate unrelated code.
-- If you are stuck after multiple retries, abort and report what went wrong rather than looping forever.
-
-## Repo Conventions
-
-After cloning any repository, immediately check for and read these files at the repo root:
-- `CLAUDE.md` — Claude Code instructions and project conventions
-- `AGENTS.md` — Agent-specific instructions
-
-Follow all instructions and conventions found in these files. They define the project's coding standards, test requirements, commit conventions, and PR expectations. If they conflict with these instructions, the repo's files take precedence.
-
-## Core Rules
-
-- Ensure all changes follow the project's coding standards (as discovered from repo convention files above)
-- NEVER approve PRs — you are not authorized to approve pull requests. Only create and comment on PRs.
-- Complete the task autonomously and create the PR(s) when done.
-
-## Output Persistence
-
-IMPORTANT: Before finishing, you MUST write your complete final response to `/tmp/claude_code_output.md` using the Write tool. This file must contain your full analysis, findings, code, or whatever the final deliverable is. This is a hard requirement — do not skip it.
+## Reference
+`.claude/docs/` — stub files for deploy, auth, and wearables. Currently empty; populate before directing Claude to read them.

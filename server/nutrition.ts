@@ -531,13 +531,19 @@ async function estimateWithAI(
         breakdown,
       };
     } catch (err: any) {
-      console.error("[nutrition] OpenRouter AI error:", err.message);
+      const status = err.response?.status ?? "N/A";
+      const detail = err.response?.data?.error?.message ?? err.message;
+      console.error(`[nutrition] OpenRouter AI error (HTTP ${status}): ${detail}`);
+      console.log("[nutrition] Falling back to Groq...");
       // Fall through to Groq as fallback
     }
   }
 
   const apiKey = process.env.GROQ_API_KEY;
-  if (!apiKey) return null;
+  if (!apiKey) {
+    console.warn("[nutrition] GROQ_API_KEY not set — Groq fallback unavailable");
+    return null;
+  }
 
   const groq = new Groq({ apiKey });
 
@@ -616,19 +622,31 @@ export async function lookupNutrition(
     }
   }
 
-  // Resolve OpenRouter override if user has an OpenRouter key
+  // Resolve OpenRouter override if user has an OpenRouter key and prefers it
   let openRouterOverride: OpenRouterOverride | undefined;
   if (options.userId) {
     try {
       const res = await pool.query(
-        "SELECT openrouter_api_key_encrypted FROM users WHERE id=$1",
+        "SELECT openrouter_api_key_encrypted, ai_provider, ai_model FROM users WHERE id=$1",
         [options.userId]
       );
-      const enc = res.rows[0]?.openrouter_api_key_encrypted;
-      if (enc) {
+      const row = res.rows[0];
+      const enc = row?.openrouter_api_key_encrypted;
+      const provider = row?.ai_provider;
+      const userModel = row?.ai_model;
+      if (enc && provider === "openrouter") {
         const orKey = decryptString(enc);
-        openRouterOverride = { apiKey: orKey, model: "qwen/qwen3.6-plus:free" };
-        console.log(`[nutrition] Using OpenRouter (qwen/qwen3.6-plus:free) for user ${options.userId}`);
+        const model = userModel || "qwen/qwen-2.5-72b-instruct:free";
+        openRouterOverride = { apiKey: orKey, model };
+        console.log(`[nutrition] Using OpenRouter (${model}) for user ${options.userId}`);
+      } else if (enc && !provider) {
+        // User has key but no provider set — default to openrouter
+        const orKey = decryptString(enc);
+        const model = userModel || "qwen/qwen-2.5-72b-instruct:free";
+        openRouterOverride = { apiKey: orKey, model };
+        console.log(`[nutrition] Using OpenRouter (${model}) for user ${options.userId} (no provider preference set)`);
+      } else {
+        console.log(`[nutrition] User ${options.userId} provider=${provider ?? "default"}, no OpenRouter override`);
       }
     } catch (err: any) {
       console.warn(`[nutrition] Failed to resolve OpenRouter key for user ${options.userId}:`, err.message);
@@ -673,6 +691,10 @@ export async function lookupNutrition(
   else {
     console.log(`[nutrition] Route: AI direct → "${parsed.cleanedQuery}"`);
     result = await estimateWithAI(parsed, openRouterOverride);
+  }
+
+  if (!result) {
+    console.warn(`[nutrition] All providers returned null for "${parsed.cleanedQuery}" — OpenRouter=${openRouterOverride ? "attempted" : "not configured"}, GROQ_API_KEY=${process.env.GROQ_API_KEY ? "set" : "MISSING"}`);
   }
 
   // 3. Cache

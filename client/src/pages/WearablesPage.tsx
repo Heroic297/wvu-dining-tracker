@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { api, kgToLbs, fmtLbs } from "@/lib/api";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -10,7 +10,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import {
   Watch, RefreshCw, Loader2, CheckCircle, XCircle, AlertCircle,
   Footprints, Moon, Heart, Brain, Battery, Activity, Scale,
-  Eye, EyeOff, Unplug,
+  Eye, EyeOff, Unplug, Smartphone, Copy, ExternalLink, ChevronDown, Download,
 } from "lucide-react";
 
 interface SleepLevel {
@@ -74,7 +74,14 @@ export default function WearablesPage() {
       const res = await apiRequest("GET", "/api/garmin/status");
       return res.json();
     },
-    refetchInterval: 60000, // Refresh every minute
+    staleTime: 5 * 60 * 1000,   // treat as fresh for 5 minutes
+    refetchOnWindowFocus: false, // don't re-fetch just because the user switched tabs
+    // Only poll when Garmin is actively connected and healthy — not on error/disconnected
+    refetchInterval: (query) => {
+      const d = query.state.data as GarminStatus | undefined;
+      if (!d?.connected || d?.status === "error" || d?.status === "disconnected") return false;
+      return 5 * 60 * 1000; // poll every 5 min only when connected
+    },
   });
 
   const connectMutation = useMutation({
@@ -163,10 +170,50 @@ export default function WearablesPage() {
     },
   });
 
+  // Apple Health
+  const { data: appleHealthStatus } = useQuery<{
+    connected: boolean;
+    setupComplete: boolean;
+    lastSyncDate: string | null;
+    lastSyncAt: string | null;
+    sleepDate: string | null;
+    latestData: any | null;
+  }>({
+    queryKey: ["apple-health-status"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/apple-health/status");
+      return res.json();
+    },
+  });
+  const [ahSetupLoading, setAhSetupLoading] = useState(false);
+  const [ahSetupData, setAhSetupData] = useState<{
+    webhookUrl: string;
+    configDownloadUrl: string;
+    recommendedApp: { name: string; appStoreUrl: string; description: string };
+    setupGuide: string[];
+    manualShortcutGuide: string[];
+  } | null>(null);
+  const [ahShowManualGuide, setAhShowManualGuide] = useState(false);
+  const handleAppleHealthSetup = useCallback(async () => {
+    setAhSetupLoading(true);
+    try {
+      const res = await apiRequest("GET", "/api/apple-health/setup");
+      const data = await res.json();
+      setAhSetupData(data);
+    } catch (err: any) {
+      toast({ title: "Setup failed", description: err.message, variant: "destructive" });
+    } finally {
+      setAhSetupLoading(false);
+    }
+  }, [toast]);
+
   const connected = garminData?.connected ?? false;
   const summary = garminData?.summary;
   const status = garminData?.status ?? "disconnected";
   const tokenType = garminData?.tokenType ?? "none";
+
+  // Hide Garmin section entirely when Apple Health is connected
+  const appleConnected = appleHealthStatus?.connected ?? false;
 
   const StatusIcon = () => {
     switch (status) {
@@ -195,11 +242,17 @@ export default function WearablesPage() {
   };
 
   return (
-    <div className="p-4 md:p-6 max-w-2xl space-y-6">
+    <div className="p-4 md:p-6 max-w-2xl space-y-6 fade-up">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold flex items-center gap-2">
-          <Watch className="w-5 h-5 text-primary" />
-          Wearables
+        <h1
+          className="text-3xl font-extrabold flex items-center gap-3"
+          style={{ fontFamily: "var(--font-display)" }}
+        >
+          <Watch
+            className="w-6 h-6 text-primary"
+            style={{ filter: "drop-shadow(0 0 8px hsl(var(--primary) / 0.5))" }}
+          />
+          <span className="gradient-text">Wearables</span>
         </h1>
         {connected && (
           <Button
@@ -215,8 +268,8 @@ export default function WearablesPage() {
         )}
       </div>
 
-      {/* Garmin connection card */}
-      <section className="bg-card border border-border rounded-xl p-4 space-y-4">
+      {/* Garmin connection card — hidden when Apple Health is active */}
+      {!appleConnected && <section className="bg-card border border-border rounded-xl p-4 space-y-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 bg-blue-500/10 rounded-lg flex items-center justify-center">
@@ -377,7 +430,7 @@ export default function WearablesPage() {
             )}
           </div>
         )}
-      </section>
+      </section>}
 
       {/* Data summary cards — only shown when connected and data exists */}
       {connected && summary && (
@@ -521,7 +574,7 @@ export default function WearablesPage() {
       )}
 
       {/* Empty state when connected but no data yet */}
-      {connected && !summary && !isLoading && (
+      {!appleConnected && connected && !summary && !isLoading && (
         <div className="bg-card border border-border rounded-xl p-8 text-center">
           <Watch className="w-8 h-8 text-muted-foreground mx-auto mb-3" />
           <p className="text-sm text-muted-foreground">
@@ -530,15 +583,270 @@ export default function WearablesPage() {
         </div>
       )}
 
+      {/* Apple Health card */}
+      <section className="bg-card border border-border rounded-xl p-4 space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg flex items-center justify-center" style={{ background: "linear-gradient(135deg, rgba(244,63,94,0.15), rgba(236,72,153,0.15))" }}>
+              <Heart className="w-5 h-5 text-pink-400" />
+            </div>
+            <div>
+              <h2 className="font-semibold text-sm">Apple Health</h2>
+              <p className="text-xs text-muted-foreground">
+                {appleHealthStatus?.connected
+                  ? <span className="flex items-center gap-1"><CheckCircle className="w-3 h-3 text-green-400 inline" /> Connected</span>
+                  : appleHealthStatus?.setupComplete
+                    ? <span className="flex items-center gap-1"><AlertCircle className="w-3 h-3 text-yellow-400 inline" /> Waiting for first sync...</span>
+                    : "Not connected"}
+              </p>
+            </div>
+          </div>
+          {appleHealthStatus?.connected && appleHealthStatus.lastSyncAt && (
+            <span className="text-[11px] text-muted-foreground">
+              Synced {fmtTime(appleHealthStatus.lastSyncAt)}
+            </span>
+          )}
+        </div>
+
+        {/* Connected state — show Apple Health data cards */}
+        {appleHealthStatus?.connected && appleHealthStatus.latestData && (() => {
+          const d = appleHealthStatus.latestData;
+          const fmt = (v: number | null | undefined, suffix?: string) =>
+            v != null ? `${v}${suffix ?? ""}` : "\u2014";
+          const fmtR = (v: number | null | undefined, decimals: number, suffix?: string) =>
+            v != null ? `${Number(v).toFixed(decimals)}${suffix ?? ""}` : "\u2014";
+          const sleepMin: number | null = d.sleep_duration_min ?? null;
+          const deepMin: number | null = d.deep_sleep_min ?? null;
+          const remMin: number | null = d.rem_sleep_min ?? null;
+          const hasSleepBreakdown = sleepMin != null && (deepMin != null || remMin != null);
+          // Compute a human label for the sleep date ("Last night", "2 nights ago", etc.)
+          const sleepStaleDays = (() => {
+            const sd = appleHealthStatus?.sleepDate;
+            if (!sd) return null;
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            const sleepD = new Date(sd + "T00:00:00");
+            return Math.round((today.getTime() - sleepD.getTime()) / 86400000);
+          })();
+          const sleepDateLabel = (() => {
+            if (sleepStaleDays == null) return null;
+            if (sleepStaleDays === 1) return "Last night";
+            if (sleepStaleDays === 2) return "2 nights ago";
+            if (sleepStaleDays > 2) return `${sleepStaleDays} nights ago`;
+            return null;
+          })();
+          const workouts: any[] | null = (() => {
+            try { return d.workouts ? (typeof d.workouts === "string" ? JSON.parse(d.workouts) : d.workouts) : null; } catch { return null; }
+          })();
+          return (
+            <div className="space-y-3">
+              {/* Sleep staleness warning */}
+              {sleepStaleDays !== null && sleepStaleDays >= 3 && (
+                <div className="flex items-start gap-2 text-sm bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2.5 text-amber-300">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                  <span>Sleep data last synced {sleepStaleDays} days ago. Check your Health Auto Export shortcut is running.</span>
+                </div>
+              )}
+
+              {/* Metric grid */}
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                <DataCard icon={Footprints} label="Steps" iconColor="text-green-400"
+                  value={d.total_steps != null ? Number(d.total_steps).toLocaleString() : "\u2014"} />
+                <DataCard icon={Activity} label="Total Calories" iconColor="text-orange-400"
+                  value={fmt(d.calories_burned, " kcal")}
+                  sub="Active + Resting" />
+                <DataCard icon={Heart} label="Resting HR" iconColor="text-red-400"
+                  value={fmt(d.resting_heart_rate, " bpm")} />
+                {sleepMin != null && !hasSleepBreakdown && (
+                  <DataCard icon={Moon} label="Sleep" iconColor="text-indigo-400"
+                    value={`${Math.floor(sleepMin / 60)}h ${sleepMin % 60}m`}
+                    sub={sleepDateLabel ?? undefined} />
+                )}
+                {sleepMin == null && !hasSleepBreakdown && (
+                  <DataCard icon={Moon} label="Sleep" iconColor="text-indigo-400"
+                    value={"\u2014"} />
+                )}
+                {d.vo2_max != null && (
+                  <DataCard icon={Activity} label="VO\u2082 Max" iconColor="text-cyan-400"
+                    value={fmtR(d.vo2_max, 1, " mL/kg/min")} />
+                )}
+                {d.respiratory_rate != null && (
+                  <DataCard icon={Activity} label="Resp. Rate" iconColor="text-sky-400"
+                    value={fmtR(d.respiratory_rate, 1, " /min")} />
+                )}
+                {d.weight_kg != null && (
+                  <DataCard icon={Scale} label="Weight" iconColor="text-blue-400"
+                    value={`${kgToLbs(d.weight_kg)} lbs`}
+                    sub={d.body_fat_pct ? `${Number(d.body_fat_pct).toFixed(1)}% body fat` : `${Number(d.weight_kg).toFixed(1)} kg`} />
+                )}
+              </div>
+
+              {/* Sleep breakdown */}
+              {hasSleepBreakdown && (
+                <section className="bg-card border border-border rounded-xl p-4 space-y-3">
+                  <h3 className="text-sm font-semibold flex items-center justify-between gap-2">
+                    <span className="flex items-center gap-2">
+                      <Moon className="w-4 h-4 text-indigo-400" />
+                      Sleep
+                    </span>
+                    {sleepDateLabel && <span className="text-xs font-normal text-muted-foreground">{sleepDateLabel}</span>}
+                  </h3>
+                  <AppleHealthSleepBar
+                    totalMin={sleepMin!}
+                    deepMin={deepMin ?? 0}
+                    remMin={remMin ?? 0}
+                  />
+                </section>
+              )}
+
+              {/* Workouts */}
+              {workouts && workouts.length > 0 && (
+                <section className="bg-card border border-border rounded-xl p-4 space-y-3">
+                  <h3 className="text-sm font-semibold flex items-center gap-2">
+                    <Activity className="w-4 h-4 text-orange-400" />
+                    Workouts
+                  </h3>
+                  <div className="space-y-2">
+                    {workouts.slice(0, 5).map((w: any, i: number) => (
+                      <div key={i} className="flex items-center justify-between py-1 border-b border-border last:border-0">
+                        <span className="text-sm">{w.activity_type ?? "Workout"}</span>
+                        <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                          {w.duration_min != null && <span>{Math.round(w.duration_min)}m</span>}
+                          {w.calories != null && <span>{Math.round(w.calories)} kcal</span>}
+                          {w.avg_heart_rate != null && <span>{Math.round(w.avg_heart_rate)} bpm avg</span>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )}
+            </div>
+          );
+        })()}
+
+        {/* Setup complete but waiting for first sync — auto-show setup guide */}
+        {!appleHealthStatus?.connected && appleHealthStatus?.setupComplete && !ahSetupData && (
+          <div className="space-y-3">
+            <div className="flex items-center gap-2 text-xs bg-yellow-500/10 border border-yellow-500/20 rounded-lg px-3 py-2">
+              <AlertCircle className="w-3.5 h-3.5 text-yellow-500 shrink-0" />
+              <span className="text-yellow-600 dark:text-yellow-400">
+                Webhook URL generated but no data received yet. Complete the setup steps below.
+              </span>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleAppleHealthSetup}
+              disabled={ahSetupLoading}
+              className="w-full"
+            >
+              {ahSetupLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <Heart className="w-3.5 h-3.5 mr-1 text-pink-400" />}
+              Show Setup Guide
+            </Button>
+          </div>
+        )}
+
+        {/* Not set up at all */}
+        {!appleHealthStatus?.connected && !appleHealthStatus?.setupComplete && !ahSetupData && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleAppleHealthSetup}
+            disabled={ahSetupLoading}
+            className="w-full"
+          >
+            {ahSetupLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <Heart className="w-3.5 h-3.5 mr-1 text-pink-400" />}
+            Set Up Apple Health
+          </Button>
+        )}
+
+        {/* Setup instructions */}
+        {ahSetupData && (
+          <div className="space-y-4">
+            {/* Step 1: Install app */}
+            <div className="bg-slate-900 border border-slate-800/60 rounded-xl p-4 space-y-2">
+              <div className="flex items-center gap-2">
+                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-pink-500/20 text-pink-400 text-xs font-bold">1</span>
+                <span className="text-sm font-semibold">Install {ahSetupData.recommendedApp.name}</span>
+              </div>
+              <p className="text-xs text-muted-foreground">{ahSetupData.recommendedApp.description}</p>
+              <a
+                href={ahSetupData.recommendedApp.appStoreUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 text-xs font-medium text-pink-400 hover:text-pink-300"
+              >
+                <ExternalLink className="w-3.5 h-3.5" /> Open in App Store
+              </a>
+            </div>
+
+            {/* Step 2: Webhook URL */}
+            <div className="bg-slate-900 border border-slate-800/60 rounded-xl p-4 space-y-2">
+              <div className="flex items-center gap-2">
+                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-pink-500/20 text-pink-400 text-xs font-bold">2</span>
+                <span className="text-sm font-semibold">Copy your Webhook URL</span>
+              </div>
+              <div className="flex gap-2">
+                <Input readOnly value={ahSetupData.webhookUrl} className="text-xs font-mono" />
+                <Button
+                  size="sm" variant="outline"
+                  onClick={() => {
+                    navigator.clipboard.writeText(ahSetupData.webhookUrl);
+                    toast({ title: "Copied to clipboard" });
+                  }}
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                </Button>
+              </div>
+            </div>
+
+            {/* Step 3: Import config + instructions */}
+            <div className="bg-slate-900 border border-slate-800/60 rounded-xl p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-pink-500/20 text-pink-400 text-xs font-bold">3</span>
+                <span className="text-sm font-semibold">Import the pre-built config</span>
+              </div>
+              <a
+                href={ahSetupData.configDownloadUrl}
+                download="wvu-dining-hae-config.json"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-pink-500/20 hover:bg-pink-500/30 text-pink-400 hover:text-pink-300 text-xs font-medium transition-colors"
+              >
+                <Download className="w-3.5 h-3.5" />
+                Download HAE Config
+              </a>
+              <ol className="text-xs text-muted-foreground space-y-1 list-decimal list-inside ml-1">
+                {ahSetupData.setupGuide.map((step, i) => <li key={i}>{step}</li>)}
+              </ol>
+            </div>
+
+            {/* Collapsible manual guide */}
+            <button
+              onClick={() => setAhShowManualGuide(v => !v)}
+              className="w-full flex items-center justify-between text-xs text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <span>Advanced: Manual Shortcut Setup</span>
+              <ChevronDown className={`w-3.5 h-3.5 transition-transform ${ahShowManualGuide ? "rotate-180" : ""}`} />
+            </button>
+            {ahShowManualGuide && (
+              <ol className="text-xs text-muted-foreground space-y-0.5 list-decimal list-inside ml-1 border-t border-border pt-2">
+                {ahSetupData.manualShortcutGuide.map((step, i) => <li key={i}>{step}</li>)}
+              </ol>
+            )}
+          </div>
+        )}
+      </section>
+
       {/* Info footer */}
-      <div className="text-xs text-muted-foreground space-y-1">
-        <p>
-          Garmin data syncs when you open this page or tap "Sync now". Your session token is encrypted at rest.
-        </p>
-        <p>
-          Weight from Garmin is treated as your current weight unless you log a newer manual weight in Settings.
-        </p>
-      </div>
+      {!appleConnected && (
+        <div className="text-xs text-muted-foreground space-y-1">
+          <p>
+            Garmin data syncs when you open this page or tap "Sync now". Your session token is encrypted at rest.
+          </p>
+          <p>
+            Weight from Garmin is treated as your current weight unless you log a newer manual weight in Settings.
+          </p>
+        </div>
+      )}
     </div>
   );
 }
@@ -564,6 +872,51 @@ function DataCard({
       </div>
       <p className="text-lg font-semibold">{value}</p>
       {sub && <p className="text-[11px] text-muted-foreground">{sub}</p>}
+    </div>
+  );
+}
+
+// --- Apple Health Sleep Bar ---
+
+function AppleHealthSleepBar({
+  totalMin,
+  deepMin,
+  remMin,
+}: {
+  totalMin: number;
+  deepMin: number;
+  remMin: number;
+}) {
+  const lightMin = Math.max(0, totalMin - deepMin - remMin);
+  const stages = [
+    { label: "Deep", min: deepMin, color: "#6D28D9" },
+    { label: "REM", min: remMin, color: "#2DD4BF" },
+    { label: "Light", min: lightMin, color: "#818CF8" },
+  ].filter((s) => s.min > 0);
+
+  return (
+    <div className="space-y-3">
+      <p className="text-2xl font-bold">
+        {Math.floor(totalMin / 60)}h {totalMin % 60}m
+      </p>
+      <div className="flex h-3 rounded-full overflow-hidden">
+        {stages.map((s) => (
+          <div
+            key={s.label}
+            style={{ width: `${(s.min / totalMin) * 100}%`, backgroundColor: s.color }}
+          />
+        ))}
+      </div>
+      <div className="flex gap-4 flex-wrap">
+        {stages.map((s) => (
+          <div key={s.label} className="flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full" style={{ backgroundColor: s.color }} />
+            <span className="text-xs text-muted-foreground">
+              {s.label}: {Math.floor(s.min / 60) > 0 ? `${Math.floor(s.min / 60)}h ` : ""}{s.min % 60}m
+            </span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

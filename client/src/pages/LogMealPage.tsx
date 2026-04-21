@@ -13,7 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { Plus, Trash2, Search, Loader2, ChefHat, ScanBarcode, CheckCheck, Camera } from "lucide-react";
 import BarcodeScanner from "@/components/BarcodeScanner";
-import { useLocalModelContext } from "@/contexts/LocalModelContext";
+
 
 const MEAL_TYPES = ["breakfast", "lunch", "dinner", "brunch"];
 const NO_LOCATION = "__none__";
@@ -137,7 +137,6 @@ export default function LogMealPage() {
   const [showScanner, setShowScanner] = useState(false);
 
   // Photo log state
-  const localModel = useLocalModelContext();
   const photoInputRef = useRef<HTMLInputElement>(null);
   const [photoAnalyzing, setPhotoAnalyzing] = useState(false);
   const [photoItems, setPhotoItems] = useState<Array<{
@@ -279,7 +278,7 @@ export default function LogMealPage() {
       } else {
         setSearchResult({ error: "Not found — please enter values manually" });
       }
-      console.error("[handleSearch] lookup error:", err);
+      if (import.meta.env.DEV) console.error("[handleSearch] lookup error:", err);
     } finally {
       setSearching(false);
     }
@@ -349,9 +348,13 @@ export default function LogMealPage() {
     // Reset file input so same file can be re-selected
     e.target.value = "";
 
-    if (!localModel.ready) {
-      setPhotoError("Local model is loading...");
-      setShowPhotoResults(true);
+    // Validate file before uploading
+    if (!file.type.startsWith("image/")) {
+      toast({ title: "Invalid file", description: "Please select an image file.", variant: "destructive" });
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      toast({ title: "File too large", description: "Please select an image under 10 MB.", variant: "destructive" });
       return;
     }
 
@@ -362,38 +365,34 @@ export default function LogMealPage() {
 
     try {
       const imageData = await resizeImage(file);
-      const prompt = `Identify every distinct food item visible in this image. For each item return a JSON array: [{"name": "...", "estimated_grams": ..., "calories": ..., "protein_g": ..., "carbs_g": ..., "fat_g": ...}]. Base gram estimates on standard USDA portion sizes for what is visible. Return only the JSON array, no other text.`;
 
-      const response = await localModel.analyzeImage(imageData, prompt);
+      const resp = await fetch("/api/vision/analyze-food", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ imageBase64: imageData }),
+      });
+      if (!resp.ok) throw new Error("Photo analysis failed");
+      const data = await resp.json();
+      const items = data.items ?? [];
 
-      // Try to parse JSON from the response
-      const jsonMatch = response.match(/\[[\s\S]*\]/);
-      if (!jsonMatch) {
+      if (!Array.isArray(items) || items.length === 0) {
         setPhotoError("Couldn't identify food items clearly. Try the search bar instead.");
         return;
       }
 
-      const parsed = JSON.parse(jsonMatch[0]) as Array<{
-        name: string;
-        estimated_grams: number;
-        calories: number;
-        protein_g: number;
-        carbs_g: number;
-        fat_g: number;
-      }>;
-
-      if (!Array.isArray(parsed) || parsed.length === 0) {
-        setPhotoError("Couldn't identify food items clearly. Try the search bar instead.");
-        return;
-      }
-
-      setPhotoItems(parsed.map((item) => ({
-        ...item,
+      setPhotoItems(items.map((item: any) => ({
+        name: item.name,
+        estimated_grams: 0,
+        calories: item.calories,
+        protein_g: item.proteinG,
+        carbs_g: item.carbsG,
+        fat_g: item.fatG,
         checked: true,
         multiplier: 1,
       })));
     } catch (err: any) {
-      console.error("[photoLog] analysis error:", err);
+      if (import.meta.env.DEV) console.error("[photoLog] analysis error:", err);
       setPhotoError("Couldn't identify food items clearly. Try the search bar instead.");
     } finally {
       setPhotoAnalyzing(false);
@@ -557,8 +556,13 @@ export default function LogMealPage() {
         />
       )}
 
-      <div className="p-4 md:p-6 max-w-2xl space-y-5">
-        <h1 className="text-xl font-bold">Log meal</h1>
+      <div className="p-4 md:p-6 max-w-2xl space-y-5 fade-up">
+        <h1
+          className="text-3xl font-extrabold gradient-text"
+          style={{ fontFamily: "var(--font-display)" }}
+        >
+          Log meal
+        </h1>
 
         {/* Controls */}
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
@@ -801,28 +805,24 @@ export default function LogMealPage() {
               >
                 <ScanBarcode className="w-4 h-4" />
               </Button>
-              {localModel.variant && (
-                <>
-                  <input
-                    ref={photoInputRef}
-                    type="file"
-                    accept="image/*"
-                    capture="environment"
-                    onChange={handlePhotoCapture}
-                    className="hidden"
-                  />
-                  <Button
-                    variant="outline"
-                    onClick={() => photoInputRef.current?.click()}
-                    disabled={searching || photoAnalyzing}
-                    data-testid="button-photo-log"
-                    title="Photo Log — identify food with AI"
-                    className="text-primary border-primary/40 hover:bg-primary/10"
-                  >
-                    <Camera className="w-4 h-4" />
-                  </Button>
-                </>
-              )}
+              <input
+                ref={photoInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                onChange={handlePhotoCapture}
+                className="hidden"
+              />
+              <Button
+                variant="outline"
+                onClick={() => photoInputRef.current?.click()}
+                disabled={searching || photoAnalyzing}
+                data-testid="button-photo-log"
+                title="Photo Log — identify food with AI"
+                className="text-primary border-primary/40 hover:bg-primary/10"
+              >
+                <Camera className="w-4 h-4" />
+              </Button>
             </div>
 
             {/* ── Photo log analyzing spinner ────────────────────────────── */}

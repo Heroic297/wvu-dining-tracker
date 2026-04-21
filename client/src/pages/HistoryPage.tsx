@@ -140,18 +140,23 @@ export default function HistoryPage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 pb-24">
-      <div className="max-w-lg mx-auto px-4 pt-6 space-y-5">
+    <div className="min-h-screen text-slate-100 pb-24">
+      <div className="max-w-lg mx-auto px-4 pt-6 space-y-5 fade-up">
         {/* Page title */}
         <div className="flex items-center justify-between">
-          <h1 className="text-xl font-semibold text-slate-100">History</h1>
-          <div className="flex items-center gap-2">
-            <button onClick={prevMonth} className="p-1.5 rounded-lg hover:bg-slate-800 transition-colors" data-testid="button-prev-month">
-              <ChevronLeft className="w-4 h-4 text-slate-400" />
+          <h1
+            className="text-3xl font-extrabold gradient-text"
+            style={{ fontFamily: "var(--font-display)" }}
+          >
+            History
+          </h1>
+          <div className="flex items-center gap-2 surface-card px-2 py-1">
+            <button onClick={prevMonth} className="p-1.5 rounded-lg hover:bg-white/5 transition-colors" data-testid="button-prev-month">
+              <ChevronLeft className="w-4 h-4 text-slate-300" />
             </button>
-            <p className="text-sm font-medium text-slate-300">{monthName} {viewYear}</p>
-            <button onClick={nextMonth} className="p-1.5 rounded-lg hover:bg-slate-800 transition-colors" data-testid="button-next-month">
-              <ChevronRight className="w-4 h-4 text-slate-400" />
+            <p className="text-sm font-medium text-slate-200">{monthName} {viewYear}</p>
+            <button onClick={nextMonth} className="p-1.5 rounded-lg hover:bg-white/5 transition-colors" data-testid="button-next-month">
+              <ChevronRight className="w-4 h-4 text-slate-300" />
             </button>
           </div>
         </div>
@@ -214,7 +219,7 @@ export default function HistoryPage() {
                 const carbsPct = Math.min(100, (dayData.carbs / carbsGoal) * 100);
                 const fatPct = Math.min(100, (dayData.fat / fatGoal) * 100);
                 return (
-                  <div className={`rounded-2xl bg-slate-900 border p-5 transition-all duration-200 ${adherenceBorder(dayData.calories)}`}>
+                  <div className={`surface-card p-5 transition-all duration-200 ${adherenceBorder(dayData.calories)}`}>
                     <div className="flex items-center justify-between">
                       <p className="text-sm font-semibold text-slate-200">{formatDate(selectedDate)}</p>
                       {weightMap[selectedDate] && (
@@ -257,7 +262,7 @@ export default function HistoryPage() {
 
               {/* Individual meal cards */}
               {selectedMeals.map((meal: any) => (
-                <div key={meal.id} className="rounded-2xl bg-slate-900 border border-slate-800/60 overflow-hidden" data-testid={`history-meal-${meal.id}`}>
+                <div key={meal.id} className="surface-card overflow-hidden" data-testid={`history-meal-${meal.id}`}>
                   {/* Meal header row */}
                   <div className="flex items-center justify-between px-4 py-3">
                     <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -349,7 +354,7 @@ export default function HistoryPage() {
                     <button
                       key={dateStr}
                       onClick={() => setSelectedDate(dateStr)}
-                      className={`w-full text-left rounded-2xl bg-slate-900 border p-5 transition-all duration-200 hover:bg-slate-800/80 ${adherenceBorder(dayData.calories)}`}
+                      className={`w-full text-left surface-card p-5 transition-all duration-200 hover:bg-slate-800/80 ${adherenceBorder(dayData.calories)}`}
                     >
                       <div className="flex items-center justify-between">
                         <p className="text-sm font-semibold text-slate-200">{formatDate(dateStr)}</p>

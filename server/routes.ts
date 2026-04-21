@@ -29,20 +29,36 @@ import { z } from "zod";
 import { randomUUID } from "crypto";
 import crypto from "crypto";
 import { registerCoachRoutes } from "./coach.js";
+import { registerAppleHealthRoutes } from "./appleHealth.js";
+import { registerProgramRoutes } from "./programs.js";
+import { authLimiter, nutritionLimiter } from "./rateLimit.js";
 
-const CRON_SECRET = process.env.CRON_SECRET ?? "cron-secret";
-const ADMIN_SECRET = process.env.ADMIN_SECRET ?? "";
+const CRON_SECRET = process.env.CRON_SECRET;
+const ADMIN_SECRET = process.env.ADMIN_SECRET;
 
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+  // ── Health check ──────────────────────────────────────────────────────
+  app.get("/health", async (_req, res) => {
+    try {
+      await pool.query("SELECT 1");
+      res.json({ status: "ok", db: "connected", timestamp: new Date().toISOString() });
+    } catch (err: any) {
+      console.error("[health] DB check failed:", err.message);
+      res.status(503).json({ status: "error", db: "disconnected", timestamp: new Date().toISOString() });
+    }
+  });
+
   // ── AI Coach ──────────────────────────────────────────────────────────
   registerCoachRoutes(app);
+  registerAppleHealthRoutes(app);
+  registerProgramRoutes(app);
 
   // ── Auth ───────────────────────────────────────────────────────────────────
 
-  app.post("/api/auth/register", async (req, res) => {
+  app.post("/api/auth/register", authLimiter, async (req, res) => {
     try {
       const schema = z.object({
         email: z.string().email(),
@@ -84,18 +100,26 @@ export async function registerRoutes(
 
   // ── Admin: Invite Code Management ──────────────────────────────────────────
   // Gated to the owner account by email — uses normal JWT auth.
-  const OWNER_EMAIL = process.env.OWNER_EMAIL ?? "owengidusko@gmail.com";
+  const OWNER_EMAIL = process.env.OWNER_EMAIL;
+  if (!OWNER_EMAIL) {
+    console.warn("[routes] OWNER_EMAIL env var not set — admin endpoints will deny all requests");
+  }
 
   const requireOwner = (req: AuthRequest, res: any, next: any) => {
-    if (!req.user || req.user.email !== OWNER_EMAIL) {
+    if (!OWNER_EMAIL || !req.user || req.user.email !== OWNER_EMAIL) {
       return res.status(403).json({ error: "Forbidden" });
     }
     next();
   };
 
   app.get("/api/admin/invites", requireAuth as any, requireOwner as any, async (_req, res) => {
-    const codes = await storage.listInviteCodes();
-    res.json(codes);
+    try {
+      const codes = await storage.listInviteCodes();
+      res.json(codes);
+    } catch (err: any) {
+      console.error("[admin/invites GET]", err);
+      res.status(500).json({ error: "Failed to fetch invites" });
+    }
   });
 
   app.post("/api/admin/invites", requireAuth as any, requireOwner as any, async (req: AuthRequest, res) => {
@@ -125,16 +149,26 @@ export async function registerRoutes(
   });
 
   app.patch("/api/admin/invites/:id/revoke", requireAuth as any, requireOwner as any, async (req, res) => {
-    await storage.revokeInviteCode(req.params.id);
-    res.json({ ok: true });
+    try {
+      await storage.revokeInviteCode(req.params.id);
+      res.json({ ok: true });
+    } catch (err: any) {
+      console.error("[admin/invites PATCH]", err);
+      res.status(500).json({ error: "Failed to revoke invite" });
+    }
   });
 
   app.delete("/api/admin/invites/:id", requireAuth as any, requireOwner as any, async (req, res) => {
-    await storage.deleteInviteCode(req.params.id);
-    res.json({ ok: true });
+    try {
+      await storage.deleteInviteCode(req.params.id);
+      res.json({ ok: true });
+    } catch (err: any) {
+      console.error("[admin/invites DELETE]", err);
+      res.status(500).json({ error: "Failed to delete invite" });
+    }
   });
 
-  app.post("/api/auth/login", async (req, res) => {
+  app.post("/api/auth/login", authLimiter, async (req, res) => {
     try {
       const schema = z.object({
         email: z.string().email(),
@@ -217,6 +251,8 @@ export async function registerRoutes(
           mlSize: z.number().positive(),
         })).optional(),
         waterUnit: z.enum(["ml", "oz", "L", "gal"]).optional(),
+        enablePhysiqueTracking: z.boolean().optional(),
+        enableWaterCut: z.boolean().optional(),
         onboardingComplete: z.boolean().optional(),
       });
       const data = updateSchema.parse(req.body);
@@ -443,21 +479,42 @@ export async function registerRoutes(
 
         // Check if menu is already cached
         let menu = await storage.getDiningMenu(location.id, date, mealType);
+        let items: Awaited<ReturnType<typeof storage.getDiningItems>> = [];
 
-        if (!menu) {
-          // On-demand scrape
+        if (menu) {
+          items = await storage.getDiningItems(menu.id);
+        }
+
+        // Trigger on-demand scrape if no menu row exists OR if the menu
+        // row exists but has zero items (orphaned by a prior failed scrape).
+        // To avoid hammering the remote site when a dining hall genuinely
+        // has no items, only re-scrape empty menus if scrapedAt is > 10 min old.
+        const RESCRAPE_COOLDOWN_MS = 10 * 60 * 1000;
+        const staleEnough = !menu?.scrapedAt ||
+          Date.now() - new Date(menu.scrapedAt).getTime() > RESCRAPE_COOLDOWN_MS;
+        const needsScrape = !menu || (items.length === 0 && staleEnough);
+        if (needsScrape) {
+          const reason = !menu
+            ? "no menu row"
+            : `menu exists but has 0 items (scraped ${menu.scrapedAt})`;
           console.log(
-            `[routes] On-demand scrape for ${locationSlug}/${mealType}/${date}`
+            `[routes] On-demand scrape for ${locationSlug}/${mealType}/${date} (${reason})`
           );
-          await scrapeLocationDate(locationSlug, date);
+          try {
+            const scraped = await scrapeLocationDate(locationSlug, date);
+            console.log(`[routes] On-demand scrape result for ${locationSlug}/${date}: ${scraped ? "success" : "no data found"}`);
+          } catch (scrapeErr: any) {
+            console.error(`[routes] On-demand scrape failed for ${locationSlug}/${date}:`, scrapeErr.message);
+          }
           menu = await storage.getDiningMenu(location.id, date, mealType);
+          if (menu) {
+            items = await storage.getDiningItems(menu.id);
+          }
         }
 
         if (!menu) {
           return res.json({ menu: null, items: [], message: "No menu available for this selection" });
         }
-
-        let items = await storage.getDiningItems(menu.id);
 
         // Deduplicate items by name in case of prior double-scrape bug.
         // If duplicates exist, clean them from the DB so future reads are clean.
@@ -493,6 +550,7 @@ export async function registerRoutes(
 
   app.get(
     "/api/nutrition/lookup",
+    nutritionLimiter,
     requireAuth as any,
     async (req: AuthRequest, res) => {
       try {
@@ -1455,6 +1513,77 @@ export async function registerRoutes(
           }
         }
 
+        // Training today card
+        let trainingToday: {
+          programName: string;
+          weekNumber: number;
+          dayLabel: string;
+          exerciseCount: number;
+          alreadyLogged: boolean;
+        } | null = null;
+        try {
+          const progRes = await pool.query(
+            `SELECT id, name, parsed_blocks, created_at, start_date FROM training_programs
+             WHERE user_id = $1 AND is_active = true LIMIT 1`,
+            [user.id]
+          );
+          const prog = progRes.rows[0];
+          if (prog) {
+            const blocks = typeof prog.parsed_blocks === "string"
+              ? JSON.parse(prog.parsed_blocks)
+              : prog.parsed_blocks;
+            const weeks: any[] = blocks?.weeks ?? [];
+
+            const lastLogRes = await pool.query(
+              `SELECT week_number, day_label FROM workout_logs WHERE user_id = $1 ORDER BY date DESC LIMIT 1`,
+              [user.id]
+            );
+            const lastLog = lastLogRes.rows[0];
+
+            let scheduledDay: any = null;
+            let scheduledWeekNum = 1;
+
+            if (!lastLog) {
+              if (weeks.length > 0 && weeks[0].days?.length > 0) {
+                scheduledDay = weeks[0].days[0];
+                scheduledWeekNum = weeks[0].weekNumber;
+              }
+            } else {
+              outer: for (let wi = 0; wi < weeks.length; wi++) {
+                if (weeks[wi].weekNumber !== lastLog.week_number) continue;
+                for (let di = 0; di < weeks[wi].days.length; di++) {
+                  if (weeks[wi].days[di].label !== lastLog.day_label) continue;
+                  if (di + 1 < weeks[wi].days.length) {
+                    scheduledDay = weeks[wi].days[di + 1];
+                    scheduledWeekNum = weeks[wi].weekNumber;
+                  } else if (wi + 1 < weeks.length && weeks[wi + 1].days?.length > 0) {
+                    scheduledDay = weeks[wi + 1].days[0];
+                    scheduledWeekNum = weeks[wi + 1].weekNumber;
+                  } else {
+                    scheduledDay = weeks[wi].days[di];
+                    scheduledWeekNum = weeks[wi].weekNumber;
+                  }
+                  break outer;
+                }
+              }
+            }
+
+            if (scheduledDay) {
+              const todayLogRes = await pool.query(
+                `SELECT id FROM workout_logs WHERE user_id = $1 AND date = $2 LIMIT 1`,
+                [user.id, date]
+              );
+              trainingToday = {
+                programName: prog.name,
+                weekNumber: scheduledWeekNum,
+                dayLabel: scheduledDay.label,
+                exerciseCount: scheduledDay.exercises?.length ?? 0,
+                alreadyLogged: todayLogRes.rows.length > 0,
+              };
+            }
+          }
+        } catch { /* non-fatal */ }
+
         res.json({
           date,
           meals: mealsWithItems,
@@ -1469,6 +1598,7 @@ export async function registerRoutes(
           enableWaterTracking: user.enableWaterTracking ?? false,
           waterBottles: user.waterBottles ?? [],
           waterUnit: user.waterUnit ?? "oz",
+          trainingToday,
         });
       } catch (err) {
         console.error("[dashboard]", err);
@@ -1476,6 +1606,270 @@ export async function registerRoutes(
       }
     }
   );
+
+  // ── Vision — Food Photo Analysis ──────────────────────────────────────────
+  app.post("/api/vision/analyze-food", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const { imageBase64 } = req.body;
+      if (!imageBase64 || typeof imageBase64 !== "string") {
+        return res.status(400).json({ error: "imageBase64 required" });
+      }
+      const base64Data = imageBase64.replace(/^data:image\/[a-z]+;base64,/, "");
+      if (!/^[A-Za-z0-9+/]+=*$/.test(base64Data.slice(0, 100))) {
+        return res.status(400).json({ error: "Invalid image data" });
+      }
+      const groqKey = process.env.GROQ_API_KEY;
+      if (!groqKey) return res.status(503).json({ error: "Vision service unavailable" });
+
+      const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${groqKey}` },
+        body: JSON.stringify({
+          model: "meta-llama/llama-4-scout-17b-16e-instruct",
+          messages: [{
+            role: "user",
+            content: [
+              { type: "image_url", image_url: { url: `data:image/jpeg;base64,${base64Data}` } },
+              { type: "text", text: `Analyze this food image. Identify each distinct food item visible.\nFor each item return a JSON array with this exact shape:\n[{ "name": string, "calories": number, "proteinG": number, "carbsG": number, "fatG": number, "servingSize": string, "confidence": "high"|"medium"|"low" }]\nUse realistic nutritional estimates based on visible portion size.\nRespond ONLY with the JSON array, no other text.` },
+            ],
+          }],
+          max_tokens: 512,
+          temperature: 0.1,
+        }),
+      });
+
+      if (!response.ok) {
+        const err = await response.text();
+        console.error("[vision] Groq error:", err);
+        return res.status(502).json({ error: "Vision analysis failed" });
+      }
+
+      const data = await response.json();
+      const content = data.choices?.[0]?.message?.content ?? "[]";
+      let items: any[] = [];
+      try {
+        const match = content.match(/\[[\s\S]*\]/);
+        items = match ? JSON.parse(match[0]) : [];
+      } catch { items = []; }
+
+      const sanitized = items.map((item: any) => ({
+        name: String(item.name ?? "Unknown food").slice(0, 100),
+        calories: Math.max(0, Number(item.calories) || 0),
+        proteinG: Math.max(0, Number(item.proteinG) || 0),
+        carbsG: Math.max(0, Number(item.carbsG) || 0),
+        fatG: Math.max(0, Number(item.fatG) || 0),
+        servingSize: String(item.servingSize ?? "1 serving").slice(0, 80),
+        confidence: ["high", "medium", "low"].includes(item.confidence) ? item.confidence : "medium",
+      }));
+      res.json({ items: sanitized });
+    } catch (err: any) {
+      console.error("[vision] error:", err.message);
+      res.status(500).json({ error: "Vision analysis failed" });
+    }
+  });
+
+  // ── Supplements ────────────────────────────────────────────────────────────
+  app.get("/api/supplements", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const userId = req.user!.id;
+      const result = await pool.query(
+        "SELECT * FROM supplements WHERE user_id=$1 AND is_active=TRUE ORDER BY name",
+        [userId]
+      );
+      res.json(result.rows);
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post("/api/supplements", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const userId = req.user!.id;
+      const { name, brand, barcode, servingSize, servingUnit, calories, proteinG, carbsG, fatG, fiberG, sodiumMg, vitaminCMg, vitaminDIu, vitaminB12Mcg, zincMg, magnesiumMg, calciumMg, ironMg, customNutrients, notes } = req.body;
+      const result = await pool.query(
+        `INSERT INTO supplements (user_id, name, brand, barcode, serving_size, serving_unit, calories, protein_g, carbs_g, fat_g, fiber_g, sodium_mg, vitamin_c_mg, vitamin_d_iu, vitamin_b12_mcg, zinc_mg, magnesium_mg, calcium_mg, iron_mg, custom_nutrients, notes)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21) RETURNING *`,
+        [userId, name, brand, barcode, servingSize, servingUnit ?? 'serving', calories, proteinG, carbsG, fatG, fiberG, sodiumMg, vitaminCMg, vitaminDIu, vitaminB12Mcg, zincMg, magnesiumMg, calciumMg, ironMg, customNutrients ? JSON.stringify(customNutrients) : null, notes]
+      );
+      res.json(result.rows[0]);
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.patch("/api/supplements/:id", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const userId = req.user!.id;
+      const { id } = req.params;
+      const fields: string[] = [];
+      const values: any[] = [];
+      let idx = 1;
+      for (const [key, val] of Object.entries(req.body)) {
+        const col = key.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
+        fields.push(`${col}=$${idx++}`);
+        values.push(val);
+      }
+      if (fields.length === 0) return res.status(400).json({ error: "No fields to update" });
+      values.push(id, userId);
+      const result = await pool.query(
+        `UPDATE supplements SET ${fields.join(", ")} WHERE id=$${idx++} AND user_id=$${idx} RETURNING *`,
+        values
+      );
+      if (!result.rows[0]) return res.status(404).json({ error: "Not found" });
+      res.json(result.rows[0]);
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.delete("/api/supplements/:id", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const userId = req.user!.id;
+      await pool.query("UPDATE supplements SET is_active=FALSE WHERE id=$1 AND user_id=$2", [req.params.id, userId]);
+      res.json({ ok: true });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.get("/api/supplements/barcode/:barcode", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const userId = req.user!.id;
+      const result = await pool.query(
+        "SELECT * FROM supplements WHERE user_id=$1 AND barcode=$2 AND is_active=TRUE LIMIT 1",
+        [userId, req.params.barcode]
+      );
+      if (result.rows[0]) return res.json(result.rows[0]);
+      res.status(404).json({ error: "Not found" });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.get("/api/supplement-logs", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const userId = req.user!.id;
+      const date = String(req.query.date ?? "").slice(0, 10) || new Date().toISOString().slice(0, 10);
+      const result = await pool.query(
+        `SELECT sl.*, s.name as supplement_name, s.brand, s.calories, s.protein_g, s.serving_size
+         FROM supplement_logs sl JOIN supplements s ON s.id = sl.supplement_id
+         WHERE sl.user_id=$1 AND sl.date=$2 ORDER BY sl.logged_at`,
+        [userId, date]
+      );
+      res.json(result.rows);
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post("/api/supplement-logs", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const userId = req.user!.id;
+      const { supplementId, date, servings } = req.body;
+      const result = await pool.query(
+        "INSERT INTO supplement_logs (user_id, supplement_id, date, servings) VALUES ($1,$2,$3,$4) RETURNING *",
+        [userId, supplementId, date ?? new Date().toISOString().slice(0, 10), servings ?? 1]
+      );
+      res.json(result.rows[0]);
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.delete("/api/supplement-logs/:id", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const userId = req.user!.id;
+      await pool.query("DELETE FROM supplement_logs WHERE id=$1 AND user_id=$2", [req.params.id, userId]);
+      res.json({ ok: true });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  // ── Physique Tracking ──────────────────────────────────────────────────────
+  app.get("/api/physique/photos", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const userId = req.user!.id;
+      const result = await pool.query(
+        "SELECT * FROM physique_photos WHERE user_id=$1 ORDER BY photo_date DESC",
+        [userId]
+      );
+      res.json(result.rows);
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post("/api/physique/photos", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const userId = req.user!.id;
+      const { photoUrl, photoDate, weightKg, bodyFatPct, notes } = req.body;
+      if (!photoUrl || !photoDate) return res.status(400).json({ error: "photoUrl and photoDate required" });
+      const result = await pool.query(
+        "INSERT INTO physique_photos (user_id, photo_url, photo_date, weight_kg, body_fat_pct, notes) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *",
+        [userId, photoUrl, photoDate, weightKg ?? null, bodyFatPct ?? null, notes ?? null]
+      );
+      res.json(result.rows[0]);
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.delete("/api/physique/photos/:id", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const userId = req.user!.id;
+      await pool.query("DELETE FROM physique_photos WHERE id=$1 AND user_id=$2", [req.params.id, userId]);
+      res.json({ ok: true });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post("/api/physique/compare", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const { photoId1, photoId2 } = req.body;
+      const userId = req.user!.id;
+      const photos = await pool.query(
+        "SELECT * FROM physique_photos WHERE id = ANY($1) AND user_id=$2",
+        [[photoId1, photoId2], userId]
+      );
+      if (photos.rows.length !== 2) return res.status(404).json({ error: "Photos not found" });
+
+      const [p1, p2] = photos.rows.sort((a: any, b: any) =>
+        new Date(a.photo_date).getTime() - new Date(b.photo_date).getTime()
+      );
+      const groqKey = process.env.GROQ_API_KEY;
+      if (!groqKey) return res.status(503).json({ error: "AI unavailable" });
+
+      const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${groqKey}` },
+        body: JSON.stringify({
+          model: "meta-llama/llama-4-scout-17b-16e-instruct",
+          messages: [{
+            role: "user",
+            content: [
+              { type: "image_url", image_url: { url: p1.photo_url } },
+              { type: "image_url", image_url: { url: p2.photo_url } },
+              { type: "text", text: `These are two physique progress photos. The first is from ${p1.photo_date}${p1.weight_kg ? ` at ${(p1.weight_kg * 2.20462).toFixed(1)} lbs` : ""}. The second is from ${p2.photo_date}${p2.weight_kg ? ` at ${(p2.weight_kg * 2.20462).toFixed(1)} lbs` : ""}.\nProvide a concise, factual comparison focusing on visible changes in muscle definition, body composition, and overall physique. Be specific and positive. Under 150 words.` }
+            ]
+          }],
+          max_tokens: 200,
+          temperature: 0.4,
+        }),
+      });
+      const data = await response.json();
+      const analysis = data.choices?.[0]?.message?.content ?? "No analysis available.";
+      await pool.query("UPDATE physique_photos SET groq_analysis=$1 WHERE id=$2", [analysis, p2.id]);
+      res.json({ analysis, photo1: p1, photo2: p2 });
+    } catch (err: any) {
+      console.error("[physique] compare error:", err.message);
+      res.status(500).json({ error: "Comparison failed" });
+    }
+  });
+
+  // ── Daily Micronutrients ───────────────────────────────────────────────────
+  app.get("/api/nutrition/daily-micros", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const date = String(req.query.date ?? "").slice(0, 10) || new Date().toISOString().slice(0, 10);
+      const userId = req.user!.id;
+      const result = await pool.query(`
+        SELECT
+          ROUND(SUM(umi.fiber_g)::numeric, 1)         as fiber_g,
+          ROUND(SUM(umi.sugar_g)::numeric, 1)         as sugar_g,
+          ROUND(SUM(umi.sodium_mg)::numeric, 0)       as sodium_mg,
+          ROUND(SUM(umi.potassium_mg)::numeric, 0)    as potassium_mg,
+          ROUND(SUM(umi.vitamin_c_mg)::numeric, 1)    as vitamin_c_mg,
+          ROUND(SUM(umi.calcium_mg)::numeric, 0)      as calcium_mg,
+          ROUND(SUM(umi.iron_mg)::numeric, 1)         as iron_mg,
+          ROUND(SUM(umi.vitamin_d_iu)::numeric, 0)    as vitamin_d_iu,
+          ROUND(SUM(umi.saturated_fat_g)::numeric, 1) as saturated_fat_g,
+          ROUND(SUM(umi.cholesterol_mg)::numeric, 0)  as cholesterol_mg
+        FROM user_meal_items umi
+        JOIN user_meals um ON um.id = umi.user_meal_id
+        WHERE um.user_id=$1 AND um.date=$2
+      `, [userId, date]);
+      res.json(result.rows[0] ?? {});
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
 
   return httpServer;
 }
