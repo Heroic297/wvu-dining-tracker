@@ -116,8 +116,9 @@ function ImportProgramModal({
   onOpenChange: (v: boolean) => void;
 }) {
   const queryClient = useQueryClient();
-  const [importTab, setImportTab] = useState("sheets");
-  const [sheetsUrl, setSheetsUrl] = useState("");
+  const [importTab, setImportTab] = useState("file");
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [sheetNames, setSheetNames] = useState<string[]>([]);
   const [pasteContent, setPasteContent] = useState("");
   const [useAI, setUseAI] = useState(false);
   const [goal, setGoal] = useState("strength");
@@ -133,34 +134,47 @@ function ImportProgramModal({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/programs"] });
       onOpenChange(false);
-      setSheetsUrl("");
+      setSelectedFile(null);
+      setSheetNames([]);
       setPasteContent("");
       setUseAI(false);
     },
   });
 
-  const handleSheetsSubmit = () => {
-    if (!sheetsUrl.trim()) return;
-    importMutation.mutate({ type: "sheets", url: sheetsUrl.trim() });
-  };
-
-  const handleFileUpload = useCallback(
+  const handleFileSelect = useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       if (!file) return;
-      const reader = new FileReader();
-      reader.onload = () => {
-        const base64 = (reader.result as string).split(",")[1];
-        importMutation.mutate({
-          type: "paste",
-          file: base64,
-          fileName: file.name,
-        });
-      };
-      reader.readAsDataURL(file);
+      setSelectedFile(file);
+      setSheetNames([]);
+
+      if (/\.(xlsx|xls)$/i.test(file.name)) {
+        try {
+          const XLSX = await import("xlsx");
+          const buf = await file.arrayBuffer();
+          const wb = XLSX.read(buf, { type: "array" });
+          setSheetNames(wb.SheetNames);
+        } catch {
+          // preview failed — server will still parse it
+        }
+      }
     },
-    [importMutation],
+    [],
   );
+
+  const handleFileSubmit = useCallback(() => {
+    if (!selectedFile) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const base64 = (reader.result as string).split(",")[1];
+      importMutation.mutate({
+        type: "paste",
+        file: base64,
+        fileName: selectedFile.name,
+      });
+    };
+    reader.readAsDataURL(selectedFile);
+  }, [selectedFile, importMutation]);
 
   const handlePasteSubmit = () => {
     if (!pasteContent.trim()) return;
@@ -191,9 +205,6 @@ function ImportProgramModal({
 
         <Tabs value={importTab} onValueChange={setImportTab}>
           <TabsList className="w-full">
-            <TabsTrigger value="sheets" className="flex-1 text-xs">
-              Google Sheets
-            </TabsTrigger>
             <TabsTrigger value="file" className="flex-1 text-xs">
               Upload File
             </TabsTrigger>
@@ -202,21 +213,50 @@ function ImportProgramModal({
             </TabsTrigger>
           </TabsList>
 
-          {/* Google Sheets tab */}
-          <TabsContent value="sheets" className="space-y-4 mt-4">
+          {/* Upload File tab */}
+          <TabsContent value="file" className="space-y-4 mt-4">
             <div className="space-y-2">
-              <Label htmlFor="sheets-url">Google Sheets URL</Label>
+              <Label htmlFor="file-upload">Upload PDF, DOCX, Excel, or CSV</Label>
               <Input
-                id="sheets-url"
-                placeholder="https://docs.google.com/spreadsheets/d/..."
-                value={sheetsUrl}
-                onChange={(e) => setSheetsUrl(e.target.value)}
-                className="bg-slate-900 border-slate-700"
+                id="file-upload"
+                type="file"
+                accept=".pdf,.docx,.xlsx,.xls,.csv"
+                onChange={handleFileSelect}
+                disabled={importMutation.isPending}
+                className="bg-slate-900 border-slate-700 file:text-slate-300 file:bg-slate-800 file:border-0 file:rounded file:px-3 file:py-1 file:mr-3"
               />
+              <p className="text-xs text-slate-500 leading-relaxed">
+                Spreadsheets: name each tab "Week 1", "Week 2"… or "Push Day",
+                "Legs", etc. Column A = exercise name; B–D = sets, reps, weight.
+              </p>
             </div>
+
+            {sheetNames.length > 0 && (
+              <div className="space-y-1.5">
+                <p className="text-xs text-slate-400">Detected sheets:</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {sheetNames.map((name) => (
+                    <span
+                      key={name}
+                      className="text-xs bg-slate-800 text-slate-300 px-2 py-0.5 rounded-full border border-slate-700"
+                    >
+                      {name}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {importMutation.isPending && importTab === "file" && (
+              <div className="flex items-center gap-2 text-sm text-slate-400">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Processing file...
+              </div>
+            )}
+
             <Button
-              onClick={handleSheetsSubmit}
-              disabled={importMutation.isPending || !sheetsUrl.trim()}
+              onClick={handleFileSubmit}
+              disabled={importMutation.isPending || !selectedFile}
               className="w-full"
             >
               {importMutation.isPending ? (
@@ -224,29 +264,8 @@ function ImportProgramModal({
               ) : (
                 <Upload className="h-4 w-4 mr-2" />
               )}
-              Import from Sheets
+              Import File
             </Button>
-          </TabsContent>
-
-          {/* Upload File tab */}
-          <TabsContent value="file" className="space-y-4 mt-4">
-            <div className="space-y-2">
-              <Label htmlFor="file-upload">Upload PDF or DOCX</Label>
-              <Input
-                id="file-upload"
-                type="file"
-                accept=".pdf,.docx"
-                onChange={handleFileUpload}
-                disabled={importMutation.isPending}
-                className="bg-slate-900 border-slate-700 file:text-slate-300 file:bg-slate-800 file:border-0 file:rounded file:px-3 file:py-1 file:mr-3"
-              />
-            </div>
-            {importMutation.isPending && importTab === "file" && (
-              <div className="flex items-center gap-2 text-sm text-slate-400">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Processing file...
-              </div>
-            )}
           </TabsContent>
 
           {/* Paste / Generate tab */}
@@ -279,9 +298,7 @@ function ImportProgramModal({
             {!useAI ? (
               <>
                 <div className="space-y-2">
-                  <Label htmlFor="paste-content">
-                    Paste your program text
-                  </Label>
+                  <Label htmlFor="paste-content">Paste your program text</Label>
                   <Textarea
                     id="paste-content"
                     placeholder="Paste your training program here..."
@@ -346,18 +363,14 @@ function ImportProgramModal({
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="beginner">Beginner</SelectItem>
-                      <SelectItem value="intermediate">
-                        Intermediate
-                      </SelectItem>
+                      <SelectItem value="intermediate">Intermediate</SelectItem>
                       <SelectItem value="advanced">Advanced</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="equipment">
-                    Available Equipment (optional)
-                  </Label>
+                  <Label htmlFor="equipment">Available Equipment (optional)</Label>
                   <Input
                     id="equipment"
                     placeholder="e.g. barbell, dumbbells, pull-up bar..."
@@ -549,10 +562,20 @@ function TodayTab() {
     return week.days[dayIndex];
   })();
 
-  // Build initial exercise log state from the current day's exercises
+  const [manualDay, setManualDay] = useState<DayBlock | null>(null);
+  const [manualWeekNumber, setManualWeekNumber] = useState<number>(0);
+
+  const activeDay = currentDay ?? manualDay;
+  const activeWeekNumber = currentDay ? weekNumber : manualWeekNumber;
+
+  const allProgramDays = activeProgram?.parsedBlocks?.weeks?.flatMap((week) =>
+    week.days.map((day) => ({ day, weekNumber: week.weekNumber })),
+  ) ?? [];
+
+  // Build initial exercise log state from the active day's exercises
   const buildInitialLogs = useCallback((): ExerciseLog[] => {
-    if (!currentDay) return [];
-    return currentDay.exercises.map((ex) => ({
+    if (!activeDay) return [];
+    return activeDay.exercises.map((ex) => ({
       name: ex.name,
       sets: Array.from({ length: ex.sets }, () => ({
         reps: parseInt(ex.reps) || 0,
@@ -561,7 +584,7 @@ function TodayTab() {
         completed: false,
       })),
     }));
-  }, [currentDay]);
+  }, [activeDay]);
 
   const [exerciseLogs, setExerciseLogs] = useState<ExerciseLog[]>([]);
   const [notes, setNotes] = useState("");
@@ -575,8 +598,8 @@ function TodayTab() {
       const res = await apiRequest("POST", "/api/workout-logs", {
         programId: activeProgram!.id,
         date: todayStr(),
-        weekNumber,
-        dayLabel: currentDay?.label ?? `Day ${dayIndex + 1}`,
+        weekNumber: activeWeekNumber,
+        dayLabel: activeDay?.label ?? `Day ${dayIndex + 1}`,
         exercises: exerciseLogs,
         notes,
       });
@@ -621,14 +644,28 @@ function TodayTab() {
     );
   }
 
-  if (!currentDay) {
+  if (!activeDay) {
     return (
-      <div className="text-center py-12 text-slate-400">
-        <Dumbbell className="h-12 w-12 mx-auto mb-3 opacity-40" />
-        <p className="text-sm">
-          No workout scheduled for today (Week {weekNumber + 1}, Day{" "}
-          {dayIndex + 1}).
-        </p>
+      <div className="space-y-4 py-4">
+        <div className="text-center text-slate-400">
+          <Dumbbell className="h-10 w-10 mx-auto mb-2 opacity-40" />
+          <p className="text-sm">No workout scheduled for today. Pick a day to log:</p>
+        </div>
+        <div className="space-y-2">
+          {allProgramDays.map(({ day, weekNumber: wn }, i) => (
+            <button
+              key={i}
+              onClick={() => { setManualDay(day); setManualWeekNumber(wn); }}
+              className="w-full text-left bg-card border border-border rounded-xl p-3 hover:bg-slate-800/50 transition-colors"
+            >
+              <span className="text-sm font-medium text-slate-200">{day.label}</span>
+              <span className="text-xs text-slate-500 ml-2">Week {wn}</span>
+              <span className="text-xs text-slate-600 ml-2">
+                {day.exercises.length} exercise{day.exercises.length !== 1 ? "s" : ""}
+              </span>
+            </button>
+          ))}
+        </div>
       </div>
     );
   }
@@ -638,10 +675,10 @@ function TodayTab() {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-lg font-semibold text-slate-100">
-            {currentDay.label}
+            {activeDay.label}
           </h2>
           <p className="text-xs text-slate-500">
-            Week {weekNumber + 1} &middot; {activeProgram.name}
+            Week {activeWeekNumber + 1} &middot; {activeProgram.name}
           </p>
         </div>
         <Button
@@ -818,7 +855,7 @@ function HistoryTab() {
                     {log.dayLabel}
                   </span>
                   <span className="text-xs text-slate-500">
-                    {new Date(log.date).toLocaleDateString()}
+                    {new Date(log.date + "T00:00:00").toLocaleDateString()}
                   </span>
                 </div>
                 <p className="text-xs text-slate-400">
