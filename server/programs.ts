@@ -159,7 +159,7 @@ async function extractSpreadsheet(base64: string, ext: string): Promise<Spreadsh
     }
 
     const headers = (rows[headerRowIdx] as any[]).map((c: any) => String(c).toLowerCase().trim());
-    const col = (aliases: string[]) => headers.findIndex((h) => aliases.includes(h));
+    const col = (aliases: string[]) => headers.findIndex((h) => aliases.some(a => h === a || h.startsWith(a + " ") || h.startsWith(a + "(")));
 
     const exerciseCol = col(["exercise", "name", "movement", "lift"]);
     const setsCol = col(["sets", "set"]);
@@ -169,6 +169,72 @@ async function extractSpreadsheet(base64: string, ext: string): Promise<Spreadsh
     const notesCol = col(["notes", "note"]);
 
     if (exerciseCol === -1 || (setsCol === -1 && repsCol === -1)) continue;
+
+    // Detect inline section-based layout: single sheet with "WEEK N" and "Day N" row headers
+    const weekHeaderRe = /^WEEK\s+(\d+)/i;
+    const dayHeaderRe = /^\s*Day\s+(\d+)\s*[—–\-]/i;
+    let hasSectionedLayout = false;
+    for (let r = headerRowIdx + 1; r < Math.min(rows.length, 30); r++) {
+      if (weekHeaderRe.test(String((rows[r] as any[])[0] ?? "").trim())) {
+        hasSectionedLayout = true;
+        break;
+      }
+    }
+
+    if (hasSectionedLayout) {
+      let weekNum = 0;
+      let dayLabel = "";
+      let dayExercises: any[] = [];
+      const weekMap = new Map<number, { weekNumber: number; days: any[] }>();
+
+      const flushDay = () => {
+        if (weekNum > 0 && dayLabel && dayExercises.length > 0) {
+          let w = weekMap.get(weekNum);
+          if (!w) { w = { weekNumber: weekNum, days: [] }; weekMap.set(weekNum, w); }
+          w.days.push({ label: dayLabel, exercises: [...dayExercises] });
+        }
+        dayExercises = [];
+      };
+
+      for (let r = headerRowIdx + 1; r < rows.length; r++) {
+        const row = rows[r] as any[];
+        const firstCell = String(row[0] ?? "").trim();
+
+        const wm = weekHeaderRe.exec(firstCell);
+        if (wm) { flushDay(); weekNum = parseInt(wm[1]); dayLabel = ""; continue; }
+
+        const dm = dayHeaderRe.exec(firstCell);
+        if (dm) { flushDay(); dayLabel = firstCell.trim(); continue; }
+
+        if (!weekNum || !dayLabel) continue;
+        const name = String(row[exerciseCol] ?? "").trim();
+        if (!name) continue;
+
+        dayExercises.push({
+          name,
+          sets: setsCol !== -1 ? Number(row[setsCol]) || 3 : 3,
+          reps: repsCol !== -1 ? String(row[repsCol] ?? "") : "",
+          weight: weightCol !== -1 ? String(row[weightCol] ?? "") : "",
+          rpe: rpeCol !== -1 ? Number(row[rpeCol]) || null : null,
+          notes: notesCol !== -1 ? String(row[notesCol] ?? "") : "",
+        });
+      }
+      flushDay();
+
+      if (weekMap.size > 0) {
+        const sectionWeeks = Array.from(weekMap.values()).sort((a, b) => a.weekNumber - b.weekNumber);
+        const sectionTotal = sectionWeeks.reduce((s, w) => s + w.days.reduce((ds, d) => ds + d.exercises.length, 0), 0);
+        if (sectionTotal >= 2) {
+          totalExercises += sectionTotal;
+          if (isWeekNamed) {
+            weeks.push(...sectionWeeks);
+          } else {
+            weeks.push(...sectionWeeks);
+          }
+          continue;
+        }
+      }
+    }
 
     const exercises: any[] = [];
     for (let r = headerRowIdx + 1; r < rows.length; r++) {
@@ -595,6 +661,32 @@ export function registerProgramRoutes(app: Express): void {
       } catch (err: any) {
         console.error("[programs] workout-logs history error:", err);
         res.status(500).json({ error: "Failed to get workout log history" });
+      }
+    }
+  );
+
+  // ── DELETE /api/workout-logs/:id ─────────────────────────────────────────
+  app.delete(
+    "/api/workout-logs/:id",
+    requireAuth,
+    async (req: AuthRequest, res: Response) => {
+      try {
+        const userId = req.user!.id;
+        const { id } = req.params;
+
+        const result = await pool.query(
+          `DELETE FROM workout_logs WHERE id = $1 AND user_id = $2 RETURNING id`,
+          [id, userId]
+        );
+
+        if (result.rows.length === 0) {
+          return res.status(404).json({ error: "Workout log not found" });
+        }
+
+        res.json({ success: true, id: result.rows[0].id });
+      } catch (err: any) {
+        console.error("[programs] workout-log delete error:", err);
+        res.status(500).json({ error: "Failed to delete workout log" });
       }
     }
   );

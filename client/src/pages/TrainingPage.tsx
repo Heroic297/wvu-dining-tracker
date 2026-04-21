@@ -910,14 +910,40 @@ function TodayTab() {
 
 // ── History Tab ─────────────────────────────────────────────────────────────
 
+function formatLogDate(raw: unknown): string {
+  if (raw instanceof Date) {
+    const y = raw.getFullYear();
+    const m = String(raw.getMonth() + 1).padStart(2, "0");
+    const d = String(raw.getDate()).padStart(2, "0");
+    return new Date(`${y}-${m}-${d}T12:00:00`).toLocaleDateString();
+  }
+  if (typeof raw === "string") {
+    const s = raw.includes("T") ? raw : raw + "T12:00:00";
+    return new Date(s).toLocaleDateString();
+  }
+  return String(raw);
+}
+
 function HistoryTab() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const queryClient = useQueryClient();
 
   const { data: history = [], isLoading } = useQuery<WorkoutLog[]>({
     queryKey: ["/api/workout-logs/history"],
     queryFn: async () => {
       const res = await apiRequest("GET", "/api/workout-logs/history");
       return res.json();
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("DELETE", `/api/workout-logs/${id}`);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/workout-logs/history"] });
+      setExpandedId(null);
     },
   });
 
@@ -959,7 +985,7 @@ function HistoryTab() {
                     {log.dayLabel}
                   </span>
                   <span className="text-xs text-slate-500">
-                    {new Date(log.date + "T00:00:00").toLocaleDateString()}
+                    {formatLogDate(log.date)}
                   </span>
                 </div>
                 <p className="text-xs text-slate-400">
@@ -1007,6 +1033,20 @@ function HistoryTab() {
                     {log.notes}
                   </p>
                 )}
+                <div className="pt-2 flex justify-end">
+                  <button
+                    onClick={() => {
+                      if (confirm("Delete this workout log?")) {
+                        deleteMutation.mutate(log.id);
+                      }
+                    }}
+                    disabled={deleteMutation.isPending}
+                    className="flex items-center gap-1.5 text-xs text-red-400 hover:text-red-300 disabled:opacity-50 transition-colors"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    Delete log
+                  </button>
+                </div>
               </div>
             )}
           </div>
