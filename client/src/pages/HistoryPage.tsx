@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { api, fmt1, formatDate, kgToLbs } from "@/lib/api";
+import { api, fmt1, formatDate, kgToLbs, fmtLbs } from "@/lib/api";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
@@ -218,7 +218,7 @@ export default function HistoryPage() {
                     <div className="flex items-center justify-between">
                       <p className="text-sm font-semibold text-slate-200">{formatDate(selectedDate)}</p>
                       {weightMap[selectedDate] && (
-                        <p className="text-xs text-slate-500">{kgToLbs(weightMap[selectedDate])} lbs</p>
+                        <p className="text-xs text-slate-500">{fmtLbs(kgToLbs(weightMap[selectedDate]))} lbs</p>
                       )}
                     </div>
                     <div className="mt-1">
