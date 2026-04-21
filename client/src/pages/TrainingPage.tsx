@@ -63,6 +63,7 @@ interface Program {
   source: string;
   isActive: boolean;
   createdAt: string;
+  startDate?: string | null;
   parsedBlocks: ParsedBlocks;
 }
 
@@ -90,16 +91,45 @@ interface WorkoutLog {
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-function getWeekNumber(createdAt: string): number {
-  const created = new Date(createdAt);
-  const now = new Date();
-  const diffMs = now.getTime() - created.getTime();
-  const diffWeeks = Math.floor(diffMs / (7 * 24 * 60 * 60 * 1000));
-  return Math.max(0, diffWeeks);
+function getWeekNumber(program: Program): number {
+  const base = new Date(program.startDate ?? program.createdAt);
+  const diffMs = Date.now() - base.getTime();
+  return Math.max(0, Math.floor(diffMs / (7 * 24 * 60 * 60 * 1000)));
 }
 
-function getDayOfWeek(): number {
-  return new Date().getDay();
+function getNextSequentialDay(
+  program: Program,
+  lastWeekNumber: number | null,
+  lastDayLabel: string | null,
+): { day: DayBlock; weekNumber: number } | null {
+  const weeks = program.parsedBlocks?.weeks ?? [];
+  if (weeks.length === 0) return null;
+
+  if (lastWeekNumber == null || lastDayLabel == null) {
+    if (weeks[0].days?.length > 0) {
+      return { day: weeks[0].days[0], weekNumber: weeks[0].weekNumber };
+    }
+    return null;
+  }
+
+  for (let wi = 0; wi < weeks.length; wi++) {
+    if (weeks[wi].weekNumber !== lastWeekNumber) continue;
+    for (let di = 0; di < weeks[wi].days.length; di++) {
+      if (weeks[wi].days[di].label !== lastDayLabel) continue;
+      if (di + 1 < weeks[wi].days.length) {
+        return { day: weeks[wi].days[di + 1], weekNumber: weeks[wi].weekNumber };
+      }
+      if (wi + 1 < weeks.length && weeks[wi + 1].days?.length > 0) {
+        return { day: weeks[wi + 1].days[0], weekNumber: weeks[wi + 1].weekNumber };
+      }
+      return { day: weeks[wi].days[di], weekNumber: weeks[wi].weekNumber };
+    }
+  }
+
+  if (weeks[0].days?.length > 0) {
+    return { day: weeks[0].days[0], weekNumber: weeks[0].weekNumber };
+  }
+  return null;
 }
 
 function todayStr(): string {
@@ -125,6 +155,7 @@ function ImportProgramModal({
   const [daysPerWeek, setDaysPerWeek] = useState(4);
   const [experience, setExperience] = useState("intermediate");
   const [equipment, setEquipment] = useState("");
+  const [startDate, setStartDate] = useState(todayStr());
 
   const importMutation = useMutation({
     mutationFn: async (body: Record<string, unknown>) => {
@@ -171,19 +202,21 @@ function ImportProgramModal({
         type: "paste",
         file: base64,
         fileName: selectedFile.name,
+        startDate: startDate || undefined,
       });
     };
     reader.readAsDataURL(selectedFile);
-  }, [selectedFile, importMutation]);
+  }, [selectedFile, startDate, importMutation]);
 
   const handlePasteSubmit = () => {
     if (!pasteContent.trim()) return;
-    importMutation.mutate({ type: "paste", content: pasteContent.trim() });
+    importMutation.mutate({ type: "paste", content: pasteContent.trim(), startDate: startDate || undefined });
   };
 
   const handleGenerateSubmit = () => {
     importMutation.mutate({
       type: "generate",
+      startDate: startDate || undefined,
       generateParams: {
         goal,
         daysPerWeek,
@@ -247,6 +280,17 @@ function ImportProgramModal({
               </div>
             )}
 
+            <div className="space-y-2">
+              <Label htmlFor="start-date-file">Program start date</Label>
+              <Input
+                id="start-date-file"
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                className="bg-slate-900 border-slate-700"
+              />
+            </div>
+
             {importMutation.isPending && importTab === "file" && (
               <div className="flex items-center gap-2 text-sm text-slate-400">
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -305,6 +349,16 @@ function ImportProgramModal({
                     value={pasteContent}
                     onChange={(e) => setPasteContent(e.target.value)}
                     rows={8}
+                    className="bg-slate-900 border-slate-700"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="start-date-paste">Program start date</Label>
+                  <Input
+                    id="start-date-paste"
+                    type="date"
+                    value={startDate}
+                    onChange={(e) => setStartDate(e.target.value)}
                     className="bg-slate-900 border-slate-700"
                   />
                 </div>
@@ -380,6 +434,16 @@ function ImportProgramModal({
                   />
                 </div>
 
+                <div className="space-y-2">
+                  <Label htmlFor="start-date-gen">Program start date</Label>
+                  <Input
+                    id="start-date-gen"
+                    type="date"
+                    value={startDate}
+                    onChange={(e) => setStartDate(e.target.value)}
+                    className="bg-slate-900 border-slate-700"
+                  />
+                </div>
                 <Button
                   onClick={handleGenerateSubmit}
                   disabled={importMutation.isPending}
@@ -546,51 +610,57 @@ function TodayTab() {
     },
   });
 
+  const { data: history = [] } = useQuery<WorkoutLog[]>({
+    queryKey: ["/api/workout-logs/history"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/workout-logs/history");
+      return res.json();
+    },
+  });
+
   const activeProgram = programs.find((p) => p.isActive);
-
-  const weekNumber = activeProgram
-    ? getWeekNumber(activeProgram.createdAt)
-    : 0;
-  const dayIndex = getDayOfWeek();
-
-  const currentDay: DayBlock | null = (() => {
-    if (!activeProgram?.parsedBlocks?.weeks) return null;
-    const week = activeProgram.parsedBlocks.weeks.find(
-      (w) => w.weekNumber === weekNumber,
-    );
-    if (!week?.days?.[dayIndex]) return null;
-    return week.days[dayIndex];
-  })();
 
   const [manualDay, setManualDay] = useState<DayBlock | null>(null);
   const [manualWeekNumber, setManualWeekNumber] = useState<number>(0);
+  const [defaultApplied, setDefaultApplied] = useState(false);
 
-  const activeDay = currentDay ?? manualDay;
-  const activeWeekNumber = currentDay ? weekNumber : manualWeekNumber;
+  // Initialize selection from workout history once data loads
+  useEffect(() => {
+    if (!activeProgram || defaultApplied) return;
+    setDefaultApplied(true);
 
-  const allProgramDays = activeProgram?.parsedBlocks?.weeks?.flatMap((week) =>
-    week.days.map((day) => ({ day, weekNumber: week.weekNumber })),
-  ) ?? [];
+    const lastLog = history[0] ?? null;
+    const result = getNextSequentialDay(
+      activeProgram,
+      lastLog?.weekNumber ?? null,
+      lastLog?.dayLabel ?? null,
+    );
+    if (result) {
+      setManualDay(result.day);
+      setManualWeekNumber(result.weekNumber);
+    }
+  }, [activeProgram, history, defaultApplied]);
 
-  // Build initial exercise log state from the active day's exercises
+  // Build initial exercise log state — weight starts empty; programmed weight is placeholder
   const buildInitialLogs = useCallback((): ExerciseLog[] => {
-    if (!activeDay) return [];
-    return activeDay.exercises.map((ex) => ({
+    if (!manualDay) return [];
+    return manualDay.exercises.map((ex) => ({
       name: ex.name,
       sets: Array.from({ length: ex.sets }, () => ({
         reps: parseInt(ex.reps) || 0,
-        weight: parseFloat(ex.weight || "0") || 0,
+        weight: 0,
         rpe: 0,
         completed: false,
       })),
     }));
-  }, [activeDay]);
+  }, [manualDay]);
 
   const [exerciseLogs, setExerciseLogs] = useState<ExerciseLog[]>([]);
   const [notes, setNotes] = useState("");
 
   useEffect(() => {
     setExerciseLogs(buildInitialLogs());
+    setNotes("");
   }, [buildInitialLogs]);
 
   const saveMutation = useMutation({
@@ -598,17 +668,15 @@ function TodayTab() {
       const res = await apiRequest("POST", "/api/workout-logs", {
         programId: activeProgram!.id,
         date: todayStr(),
-        weekNumber: activeWeekNumber,
-        dayLabel: activeDay?.label ?? `Day ${dayIndex + 1}`,
+        weekNumber: manualWeekNumber,
+        dayLabel: manualDay?.label ?? "Unknown Day",
         exercises: exerciseLogs,
         notes,
       });
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: ["/api/workout-logs"],
-      });
+      queryClient.invalidateQueries({ queryKey: ["/api/workout-logs"] });
     },
   });
 
@@ -618,8 +686,8 @@ function TodayTab() {
     field: keyof SetLog,
     value: number | boolean,
   ) => {
-    setExerciseLogs((prev) => {
-      const next = prev.map((ex, ei) => {
+    setExerciseLogs((prev) =>
+      prev.map((ex, ei) => {
         if (ei !== exIdx) return ex;
         return {
           ...ex,
@@ -628,9 +696,8 @@ function TodayTab() {
             return { ...s, [field]: value };
           }),
         };
-      });
-      return next;
-    });
+      }),
+    );
   };
 
   if (!activeProgram) {
@@ -644,162 +711,199 @@ function TodayTab() {
     );
   }
 
-  if (!activeDay) {
-    return (
-      <div className="space-y-4 py-4">
-        <div className="text-center text-slate-400">
-          <Dumbbell className="h-10 w-10 mx-auto mb-2 opacity-40" />
-          <p className="text-sm">No workout scheduled for today. Pick a day to log:</p>
-        </div>
-        <div className="space-y-2">
-          {allProgramDays.map(({ day, weekNumber: wn }, i) => (
+  const weeks = activeProgram.parsedBlocks?.weeks ?? [];
+  const selectedWeekDays =
+    weeks.find((w) => w.weekNumber === manualWeekNumber)?.days ?? [];
+
+  return (
+    <div className="space-y-4">
+      {/* Week selector */}
+      <div className="space-y-2">
+        <p className="text-xs text-slate-500 font-medium uppercase tracking-wide">Week</p>
+        <div className="flex flex-wrap gap-2">
+          {weeks.map((week) => (
             <button
-              key={i}
-              onClick={() => { setManualDay(day); setManualWeekNumber(wn); }}
-              className="w-full text-left bg-card border border-border rounded-xl p-3 hover:bg-slate-800/50 transition-colors"
+              key={week.weekNumber}
+              onClick={() => {
+                setManualWeekNumber(week.weekNumber);
+                if (week.days.length > 0) setManualDay(week.days[0]);
+              }}
+              className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
+                manualWeekNumber === week.weekNumber
+                  ? "bg-emerald-600 border-emerald-600 text-white"
+                  : "bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200"
+              }`}
             >
-              <span className="text-sm font-medium text-slate-200">{day.label}</span>
-              <span className="text-xs text-slate-500 ml-2">Week {wn}</span>
-              <span className="text-xs text-slate-600 ml-2">
-                {day.exercises.length} exercise{day.exercises.length !== 1 ? "s" : ""}
-              </span>
+              Week {week.weekNumber}
             </button>
           ))}
         </div>
       </div>
-    );
-  }
 
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-lg font-semibold text-slate-100">
-            {activeDay.label}
-          </h2>
-          <p className="text-xs text-slate-500">
-            Week {activeWeekNumber + 1} &middot; {activeProgram.name}
-          </p>
-        </div>
-        <Button
-          onClick={() => saveMutation.mutate()}
-          disabled={saveMutation.isPending}
-          size="sm"
-        >
-          {saveMutation.isPending ? (
-            <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
-          ) : (
-            <Check className="h-4 w-4 mr-1.5" />
-          )}
-          Save Workout
-        </Button>
-      </div>
-
-      {saveMutation.isSuccess && (
-        <div className="bg-emerald-900/30 border border-emerald-700 rounded-lg px-3 py-2 text-sm text-emerald-300">
-          Workout saved successfully!
+      {/* Day selector */}
+      {selectedWeekDays.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-xs text-slate-500 font-medium uppercase tracking-wide">Day</p>
+          <div className="flex flex-wrap gap-2">
+            {selectedWeekDays.map((day, i) => (
+              <button
+                key={i}
+                onClick={() => setManualDay(day)}
+                className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
+                  manualDay?.label === day.label
+                    ? "bg-blue-600 border-blue-600 text-white"
+                    : "bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                {day.label}
+              </button>
+            ))}
+          </div>
         </div>
       )}
 
-      <div className="space-y-4">
-        {exerciseLogs.map((exercise, exIdx) => (
-          <div
-            key={exIdx}
-            className="bg-card border border-border rounded-xl p-4 space-y-3"
-          >
-            <h3 className="font-medium text-slate-100 flex items-center gap-2">
-              <Dumbbell className="h-4 w-4 text-slate-400" />
-              {exercise.name}
-            </h3>
-
-            <div className="grid grid-cols-[auto_1fr_1fr_1fr_auto] gap-2 text-xs text-slate-500 px-1">
-              <span>Set</span>
-              <span>Reps</span>
-              <span>Weight</span>
-              <span>RPE</span>
-              <span></span>
+      {manualDay && (
+        <>
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-100">
+                {manualDay.label}
+              </h2>
+              <p className="text-xs text-slate-500">
+                Week {manualWeekNumber} &middot; {activeProgram.name}
+              </p>
             </div>
-
-            {exercise.sets.map((set, setIdx) => (
-              <div
-                key={setIdx}
-                className={`grid grid-cols-[auto_1fr_1fr_1fr_auto] gap-2 items-center px-1 ${
-                  set.completed ? "opacity-60" : ""
-                }`}
-              >
-                <span className="text-xs text-slate-500 w-6 text-center">
-                  {setIdx + 1}
-                </span>
-                <Input
-                  type="number"
-                  value={set.reps || ""}
-                  onChange={(e) =>
-                    updateSet(exIdx, setIdx, "reps", parseInt(e.target.value) || 0)
-                  }
-                  placeholder="Reps"
-                  className="h-8 text-sm bg-slate-900 border-slate-700"
-                />
-                <Input
-                  type="number"
-                  value={set.weight || ""}
-                  onChange={(e) =>
-                    updateSet(
-                      exIdx,
-                      setIdx,
-                      "weight",
-                      parseFloat(e.target.value) || 0,
-                    )
-                  }
-                  placeholder="lbs"
-                  className="h-8 text-sm bg-slate-900 border-slate-700"
-                />
-                <Input
-                  type="number"
-                  min={1}
-                  max={10}
-                  value={set.rpe || ""}
-                  onChange={(e) =>
-                    updateSet(
-                      exIdx,
-                      setIdx,
-                      "rpe",
-                      Math.min(10, Math.max(1, parseInt(e.target.value) || 0)),
-                    )
-                  }
-                  placeholder="RPE"
-                  className="h-8 text-sm bg-slate-900 border-slate-700"
-                />
-                <Button
-                  variant={set.completed ? "default" : "outline"}
-                  size="sm"
-                  className={`h-8 w-8 p-0 ${
-                    set.completed
-                      ? "bg-emerald-600 hover:bg-emerald-700 border-emerald-600"
-                      : ""
-                  }`}
-                  onClick={() =>
-                    updateSet(exIdx, setIdx, "completed", !set.completed)
-                  }
-                >
-                  <Check className="h-3.5 w-3.5" />
-                </Button>
-              </div>
-            ))}
+            <Button
+              onClick={() => saveMutation.mutate()}
+              disabled={saveMutation.isPending}
+              size="sm"
+            >
+              {saveMutation.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
+              ) : (
+                <Check className="h-4 w-4 mr-1.5" />
+              )}
+              Save Workout
+            </Button>
           </div>
-        ))}
-      </div>
 
-      <div className="space-y-2">
-        <Label htmlFor="workout-notes">Notes</Label>
-        <Textarea
-          id="workout-notes"
-          placeholder="How did the workout feel?"
-          value={notes}
-          onChange={(e) => setNotes(e.target.value)}
-          rows={3}
-          className="bg-slate-900 border-slate-700"
-        />
-      </div>
+          {saveMutation.isSuccess && (
+            <div className="bg-emerald-900/30 border border-emerald-700 rounded-lg px-3 py-2 text-sm text-emerald-300">
+              Workout saved successfully!
+            </div>
+          )}
+
+          <div className="space-y-4">
+            {exerciseLogs.map((exercise, exIdx) => {
+              const programmedWeight = manualDay.exercises[exIdx]?.weight;
+              return (
+                <div
+                  key={exIdx}
+                  className="bg-card border border-border rounded-xl p-4 space-y-3"
+                >
+                  <div className="flex items-center justify-between">
+                    <h3 className="font-medium text-slate-100 flex items-center gap-2">
+                      <Dumbbell className="h-4 w-4 text-slate-400" />
+                      {exercise.name}
+                    </h3>
+                    {programmedWeight && (
+                      <span className="text-xs text-slate-500">
+                        Target: {programmedWeight} lb
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-[auto_1fr_1fr_1fr_auto] gap-2 text-xs text-slate-500 px-1">
+                    <span>Set</span>
+                    <span>Reps</span>
+                    <span>Weight</span>
+                    <span>RPE</span>
+                    <span></span>
+                  </div>
+
+                  {exercise.sets.map((set, setIdx) => (
+                    <div
+                      key={setIdx}
+                      className={`grid grid-cols-[auto_1fr_1fr_1fr_auto] gap-2 items-center px-1 ${
+                        set.completed ? "opacity-60" : ""
+                      }`}
+                    >
+                      <span className="text-xs text-slate-500 w-6 text-center">
+                        {setIdx + 1}
+                      </span>
+                      <Input
+                        type="number"
+                        value={set.reps || ""}
+                        onChange={(e) =>
+                          updateSet(exIdx, setIdx, "reps", parseInt(e.target.value) || 0)
+                        }
+                        placeholder="Reps"
+                        className="h-8 text-sm bg-slate-900 border-slate-700"
+                      />
+                      <Input
+                        type="number"
+                        value={set.weight || ""}
+                        onChange={(e) =>
+                          updateSet(
+                            exIdx,
+                            setIdx,
+                            "weight",
+                            parseFloat(e.target.value) || 0,
+                          )
+                        }
+                        placeholder={programmedWeight || "lbs"}
+                        className="h-8 text-sm bg-slate-900 border-slate-700"
+                      />
+                      <Input
+                        type="number"
+                        min={1}
+                        max={10}
+                        value={set.rpe || ""}
+                        onChange={(e) =>
+                          updateSet(
+                            exIdx,
+                            setIdx,
+                            "rpe",
+                            Math.min(10, Math.max(1, parseInt(e.target.value) || 0)),
+                          )
+                        }
+                        placeholder="RPE"
+                        className="h-8 text-sm bg-slate-900 border-slate-700"
+                      />
+                      <Button
+                        variant={set.completed ? "default" : "outline"}
+                        size="sm"
+                        className={`h-8 w-8 p-0 ${
+                          set.completed
+                            ? "bg-emerald-600 hover:bg-emerald-700 border-emerald-600"
+                            : ""
+                        }`}
+                        onClick={() =>
+                          updateSet(exIdx, setIdx, "completed", !set.completed)
+                        }
+                      >
+                        <Check className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="workout-notes">Notes</Label>
+            <Textarea
+              id="workout-notes"
+              placeholder="How did the workout feel?"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              rows={3}
+              className="bg-slate-900 border-slate-700"
+            />
+          </div>
+        </>
+      )}
     </div>
   );
 }

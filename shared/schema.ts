@@ -743,6 +743,7 @@ export const trainingPrograms = pgTable(
     rawContent: text("raw_content"),
     parsedBlocks: jsonb("parsed_blocks"),
     isActive: boolean("is_active").default(true),
+    startDate: date("start_date"),
     createdAt: timestamp("created_at").default(sql`now()`),
     updatedAt: timestamp("updated_at").default(sql`now()`),
   },

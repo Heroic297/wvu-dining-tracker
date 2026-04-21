@@ -620,16 +620,19 @@ export default function WearablesPage() {
           const remMin: number | null = d.rem_sleep_min ?? null;
           const hasSleepBreakdown = sleepMin != null && (deepMin != null || remMin != null);
           // Compute a human label for the sleep date ("Last night", "2 nights ago", etc.)
-          const sleepDateLabel = (() => {
+          const sleepStaleDays = (() => {
             const sd = appleHealthStatus?.sleepDate;
             if (!sd) return null;
             const today = new Date();
             today.setHours(0, 0, 0, 0);
             const sleepD = new Date(sd + "T00:00:00");
-            const diffDays = Math.round((today.getTime() - sleepD.getTime()) / 86400000);
-            if (diffDays === 1) return "Last night";
-            if (diffDays === 2) return "2 nights ago";
-            if (diffDays > 2) return `${diffDays} nights ago`;
+            return Math.round((today.getTime() - sleepD.getTime()) / 86400000);
+          })();
+          const sleepDateLabel = (() => {
+            if (sleepStaleDays == null) return null;
+            if (sleepStaleDays === 1) return "Last night";
+            if (sleepStaleDays === 2) return "2 nights ago";
+            if (sleepStaleDays > 2) return `${sleepStaleDays} nights ago`;
             return null;
           })();
           const workouts: any[] | null = (() => {
@@ -637,6 +640,14 @@ export default function WearablesPage() {
           })();
           return (
             <div className="space-y-3">
+              {/* Sleep staleness warning */}
+              {sleepStaleDays !== null && sleepStaleDays >= 3 && (
+                <div className="flex items-start gap-2 text-sm bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2.5 text-amber-300">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                  <span>Sleep data last synced {sleepStaleDays} days ago. Check your Health Auto Export shortcut is running.</span>
+                </div>
+              )}
+
               {/* Metric grid */}
               <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                 <DataCard icon={Footprints} label="Steps" iconColor="text-green-400"
