@@ -9,7 +9,17 @@ import bcrypt from "bcryptjs";
 import { storage } from "./storage.js";
 import type { User } from "../shared/schema.js";
 
-const JWT_SECRET = process.env.JWT_SECRET || "dev-secret-change-in-production";
+const _rawJwtSecret = process.env.JWT_SECRET;
+if (
+  process.env.NODE_ENV === "production" &&
+  (!_rawJwtSecret || _rawJwtSecret === "dev-secret-change-in-production")
+) {
+  throw new Error(
+    "[auth] JWT_SECRET must be set to a strong, unique value in production. " +
+    "Do not use the default placeholder."
+  );
+}
+const JWT_SECRET = _rawJwtSecret || "dev-secret-change-in-production";
 const SUPABASE_JWT_SECRET = process.env.SUPABASE_JWT_SECRET || "";
 
 export interface AuthRequest extends Request {

@@ -33,10 +33,22 @@ app.use(
 
 app.use(express.urlencoded({ extended: false, limit: "50mb" }));
 
+// Guard: require strong secrets in production
+const _sessionSecret = process.env.SESSION_SECRET;
+if (
+  process.env.NODE_ENV === "production" &&
+  (!_sessionSecret || _sessionSecret === "wvu-dining-session-secret")
+) {
+  throw new Error(
+    "[server] SESSION_SECRET must be set to a strong, unique value in production. " +
+    "Do not use the default placeholder."
+  );
+}
+
 // Session (used as fallback token store)
 app.use(
   session({
-    secret: process.env.SESSION_SECRET ?? "wvu-dining-session-secret",
+    secret: _sessionSecret ?? "wvu-dining-session-secret",
     resave: false,
     saveUninitialized: false,
     cookie: {
