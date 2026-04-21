@@ -120,7 +120,7 @@ function normalizeHealthPayload(body: any): any[] {
 
   const results: any[] = [];
 
-  for (const date of dateSet) {
+  for (const date of Array.from(dateSet)) {
     const steps       = getForDate(date, "step_count", "steps", "stepCount");
     // Active energy = move-ring / workout calories (active_energy in HAE JSON).
     // Basal energy  = resting metabolic rate calories (basal_energy_burned in HAE JSON).
