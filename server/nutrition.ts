@@ -49,7 +49,7 @@ export interface NutritionResult {
   fatG: number;
   servingSize: string;
   source: "usda" | "usda_branded" | "open_food_facts" | "ai_estimated" | "manual_exact";
-  confidence?: string;
+  confidence?: "high" | "medium" | "low";
   foodName: string;
   breakdown?: NutritionComponent[];
 }
@@ -470,6 +470,16 @@ interface RawAIResponse {
   }>;
 }
 
+/**
+ * Coerce free-form LLM-supplied confidence strings into the narrow union the
+ * schema and UI expect. Unknown / malformed values fall back to "medium".
+ */
+function normalizeConfidence(raw: unknown): "high" | "medium" | "low" {
+  const s = typeof raw === "string" ? raw.toLowerCase().trim() : "";
+  if (s === "high" || s === "medium" || s === "low") return s;
+  return "medium";
+}
+
 interface OpenRouterOverride {
   apiKey: string;
   model: string;
@@ -515,7 +525,7 @@ async function estimateWithAI(
         carbsG:   Math.round(b.carbsG   * 10) / 10,
         fatG:     Math.round(b.fatG     * 10) / 10,
         servingSize: b.servingSize ?? "1 serving",
-        confidence: (b.confidence as NutritionComponent["confidence"]) ?? "medium",
+        confidence: normalizeConfidence(b.confidence),
       }));
 
       console.log(`[nutrition] OpenRouter (${openRouterOverride.model}) response for "${parsed.cleanedQuery}": ${p.calories} kcal`);
@@ -526,7 +536,7 @@ async function estimateWithAI(
         fatG:     Math.round(p.fatG     * 10) / 10,
         servingSize: p.servingSize ?? "1 serving",
         source: "ai_estimated",
-        confidence: p.confidence ?? "medium",
+        confidence: normalizeConfidence(p.confidence),
         foodName: parsed.cleanedQuery,
         breakdown,
       };
@@ -572,7 +582,7 @@ async function estimateWithAI(
       carbsG:   Math.round(b.carbsG   * 10) / 10,
       fatG:     Math.round(b.fatG     * 10) / 10,
       servingSize: b.servingSize ?? "1 serving",
-      confidence: (b.confidence as NutritionComponent["confidence"]) ?? "medium",
+      confidence: normalizeConfidence(b.confidence),
     }));
 
     return {
@@ -582,7 +592,7 @@ async function estimateWithAI(
       fatG:     Math.round(p.fatG     * 10) / 10,
       servingSize: p.servingSize ?? "1 serving",
       source: "ai_estimated",
-      confidence: p.confidence ?? "medium",
+      confidence: normalizeConfidence(p.confidence),
       foodName: parsed.cleanedQuery,
       breakdown,
     };
