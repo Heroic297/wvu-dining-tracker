@@ -231,6 +231,129 @@ export async function registerRoutes(
     }
   });
 
+  // ── History / Data Management ────────────────────────────────────────────
+  //
+  // These endpoints let a signed-in user wipe their own historical logs — useful
+  // when test/debug data has polluted their real history. All queries are scoped
+  // to req.user!.id; there is no cross-user access path. The destructive
+  // endpoint requires an explicit `confirm: "DELETE"` body field so a misfired
+  // request can't wipe someone's data silently.
+
+  const historyScopeSchema = z.object({
+    startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    endDate:   z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  });
+
+  // Preview counts of what a bulk-clear would remove. Safe, read-only.
+  app.get(
+    "/api/user/history/preview",
+    requireAuth as any,
+    async (req: AuthRequest, res) => {
+      try {
+        const { startDate, endDate } = historyScopeSchema.parse({
+          startDate: req.query.startDate,
+          endDate: req.query.endDate,
+        });
+        const counts = await storage.countUserHistory(req.user!.id, startDate, endDate);
+        res.json({ counts, startDate: startDate ?? null, endDate: endDate ?? null });
+      } catch (err: any) {
+        if (err.name === "ZodError") return res.status(400).json({ error: err.errors[0].message });
+        console.error("[history/preview]", err);
+        res.status(500).json({ error: "Failed to preview history" });
+      }
+    }
+  );
+
+  // Bulk-clear selected history tables for the authenticated user. Each flag
+  // defaults to false, so the caller must opt in per table. Optional startDate/
+  // endDate bound the range; both are inclusive.
+  app.delete(
+    "/api/user/history",
+    requireAuth as any,
+    async (req: AuthRequest, res) => {
+      try {
+        const schema = z.object({
+          confirm: z.literal("DELETE", {
+            errorMap: () => ({ message: "Must send confirm: 'DELETE' to wipe history" }),
+          }),
+          startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+          endDate:   z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+          meals:          z.boolean().optional(),
+          weightLogs:     z.boolean().optional(),
+          waterLogs:      z.boolean().optional(),
+          supplementLogs: z.boolean().optional(),
+          workoutLogs:    z.boolean().optional(),
+          physiquePhotos: z.boolean().optional(),
+          coachMemory:    z.boolean().optional(),
+        });
+        const body = schema.parse(req.body);
+        const userId = req.user!.id;
+        const { startDate, endDate } = body;
+
+        // Range-aware raw delete for tables not wired up in storage helpers
+        const params = [userId, startDate ?? "-infinity", endDate ?? "infinity"];
+        const rangeClause = (col: string) =>
+          `AND ${col} BETWEEN $2::date AND $3::date`;
+
+        const deleted = {
+          meals:          0,
+          weightLogs:     0,
+          waterLogs:      0,
+          supplementLogs: 0,
+          workoutLogs:    0,
+          physiquePhotos: 0,
+          coachMemoryCleared: false,
+        };
+
+        if (body.meals) {
+          deleted.meals = await storage.deleteUserMealsForUser(userId, startDate, endDate);
+        }
+        if (body.weightLogs) {
+          deleted.weightLogs = await storage.deleteWeightLogsForUser(userId, startDate, endDate);
+        }
+        if (body.waterLogs) {
+          deleted.waterLogs = await storage.deleteWaterLogsForUser(userId, startDate, endDate);
+        }
+        if (body.supplementLogs) {
+          const r = await pool.query(
+            `DELETE FROM supplement_logs WHERE user_id=$1 ${rangeClause("date")}`,
+            params,
+          );
+          deleted.supplementLogs = r.rowCount ?? 0;
+        }
+        if (body.workoutLogs) {
+          const r = await pool.query(
+            `DELETE FROM workout_logs WHERE user_id=$1 ${rangeClause("date")}`,
+            params,
+          );
+          deleted.workoutLogs = r.rowCount ?? 0;
+        }
+        if (body.physiquePhotos) {
+          const r = await pool.query(
+            `DELETE FROM physique_photos WHERE user_id=$1 ${rangeClause("photo_date")}`,
+            params,
+          );
+          deleted.physiquePhotos = r.rowCount ?? 0;
+        }
+        if (body.coachMemory) {
+          // Clear rolling summary + chat messages so the coach starts from scratch
+          await pool.query(`DELETE FROM chat_messages WHERE user_id=$1`, [userId]);
+          await pool.query(
+            `UPDATE ai_profiles SET rolling_summary=NULL, updated_at=now() WHERE user_id=$1`,
+            [userId],
+          );
+          deleted.coachMemoryCleared = true;
+        }
+
+        res.json({ ok: true, deleted });
+      } catch (err: any) {
+        if (err.name === "ZodError") return res.status(400).json({ error: err.errors[0].message });
+        console.error("[history DELETE]", err);
+        res.status(500).json({ error: "Failed to clear history" });
+      }
+    }
+  );
+
   // ── Diet Targets ──────────────────────────────────────────────────────────
 
   app.get("/api/targets", requireAuth as any, async (req: AuthRequest, res) => {
@@ -797,6 +920,22 @@ export async function registerRoutes(
           return res.status(400).json({ error: err.errors[0].message });
         }
         res.status(500).json({ error: "Failed to log weight" });
+      }
+    }
+  );
+
+  // Delete a single weight-log entry (scoped to the owning user).
+  app.delete(
+    "/api/weight/:id",
+    requireAuth as any,
+    async (req: AuthRequest, res) => {
+      try {
+        const ok = await storage.deleteWeightLog(req.user!.id, req.params.id as string);
+        if (!ok) return res.status(404).json({ error: "Weight log not found" });
+        res.json({ ok: true });
+      } catch (err) {
+        console.error("[weight DELETE]", err);
+        res.status(500).json({ error: "Failed to delete weight log" });
       }
     }
   );

@@ -316,18 +316,22 @@ export default function DietPlanPage() {
     );
   }
 
+  // Parse YYYY-MM-DD as local midnight (not UTC) so "days until" is stable
+  // across timezones — `new Date("2026-05-01")` is UTC midnight, which in EDT
+  // renders as Apr 30 and shifts the day count by one.
+  const parseLocalDate = (s: string) => new Date(`${s}T00:00:00`);
   const daysToTarget = user?.meetDate
     ? Math.max(
         0,
         Math.round(
-          (new Date(user.meetDate).getTime() - Date.now()) / 86400000
+          (parseLocalDate(user.meetDate).getTime() - Date.now()) / 86400000
         )
       )
     : user?.targetDate
     ? Math.max(
         0,
         Math.round(
-          (new Date(user.targetDate).getTime() - Date.now()) / 86400000
+          (parseLocalDate(user.targetDate).getTime() - Date.now()) / 86400000
         )
       )
     : null;
@@ -637,11 +641,11 @@ export default function DietPlanPage() {
           </div>
           <div className="grid grid-cols-3 gap-2 text-center">
             <div className="bg-secondary rounded-lg p-2">
-              <p className="text-sm font-bold">{kgToLbs(waterCutAnalysis.currentWeightKg).toFixed(1)}</p>
+              <p className="text-sm font-bold">{r1(kgToLbs(waterCutAnalysis.currentWeightKg)).toFixed(1)}</p>
               <p className="text-xs text-muted-foreground">Current (lbs)</p>
             </div>
             <div className="bg-secondary rounded-lg p-2">
-              <p className="text-sm font-bold text-blue-400">{kgToLbs(waterCutAnalysis.cutKg).toFixed(1)}</p>
+              <p className="text-sm font-bold text-blue-400">{r1(kgToLbs(waterCutAnalysis.cutKg)).toFixed(1)}</p>
               <p className="text-xs text-muted-foreground">To cut (lbs)</p>
             </div>
             <div className="bg-secondary rounded-lg p-2">

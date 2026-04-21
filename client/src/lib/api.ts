@@ -63,6 +63,28 @@ export const api = {
     apiRequest("GET", `/api/weight${limit ? `?limit=${limit}` : ""}`),
   logWeight: (data: Record<string, any>) =>
     apiRequest("POST", "/api/weight", data),
+  deleteWeightLog: (id: string) => apiRequest("DELETE", `/api/weight/${id}`),
+
+  // History / data management
+  previewHistoryClear: (startDate?: string, endDate?: string) => {
+    const qs = new URLSearchParams();
+    if (startDate) qs.set("startDate", startDate);
+    if (endDate)   qs.set("endDate", endDate);
+    const q = qs.toString();
+    return apiRequest("GET", `/api/user/history/preview${q ? `?${q}` : ""}`);
+  },
+  clearHistory: (data: {
+    confirm: "DELETE";
+    startDate?: string;
+    endDate?: string;
+    meals?: boolean;
+    weightLogs?: boolean;
+    waterLogs?: boolean;
+    supplementLogs?: boolean;
+    workoutLogs?: boolean;
+    physiquePhotos?: boolean;
+    coachMemory?: boolean;
+  }) => apiRequest("DELETE", "/api/user/history", data),
 
   // Water
   getWater: (date: string) => apiRequest("GET", `/api/water?date=${date}`),
@@ -148,14 +170,37 @@ export function fmt1(n: number | null | undefined): string {
   return (Math.round(n * 10) / 10).toString();
 }
 
-/** Convert kg to lbs */
+/**
+ * Convert kg to lbs.
+ *
+ * IMPORTANT: returns the full-precision value. Rounding here caused a
+ * round-trip drift bug — e.g. a user-entered 148 lb became 67.1 kg on save,
+ * which then rendered back as 147.9 lb on next load, drifting further every
+ * save. Use `fmtLbs` / `fmtKg` when formatting for display.
+ */
 export function kgToLbs(kg: number): number {
-  return Math.round(kg * 2.20462 * 10) / 10;
+  return kg * 2.20462262185;
 }
 
-/** Convert lbs to kg */
+/**
+ * Convert lbs to kg.
+ *
+ * Full precision — see note on `kgToLbs`.
+ */
 export function lbsToKg(lbs: number): number {
-  return Math.round((lbs / 2.20462) * 10) / 10;
+  return lbs / 2.20462262185;
+}
+
+/** Format a lbs value for display (1 decimal). */
+export function fmtLbs(lbs: number | null | undefined): string {
+  if (lbs == null || Number.isNaN(lbs)) return "";
+  return (Math.round(lbs * 10) / 10).toString();
+}
+
+/** Format a kg value for display (1 decimal). */
+export function fmtKg(kg: number | null | undefined): string {
+  if (kg == null || Number.isNaN(kg)) return "";
+  return (Math.round(kg * 10) / 10).toString();
 }
 
 /** Format date as Month Day, Year */
