@@ -110,6 +110,98 @@ async function extractDocx(base64: string): Promise<string> {
   return result.value;
 }
 
+interface SpreadsheetResult {
+  text: string;
+  sheetNames: string[];
+  parsedBlocks?: any;
+  confidence: "high" | "low";
+}
+
+async function extractSpreadsheet(base64: string, ext: string): Promise<SpreadsheetResult> {
+  const buffer = Buffer.from(base64, "base64");
+
+  if (ext === "csv") {
+    return { text: buffer.toString("utf-8"), sheetNames: ["Sheet1"], confidence: "low" };
+  }
+
+  const XLSX = await import("xlsx");
+  const workbook = XLSX.read(buffer, { type: "buffer" });
+  const sheetNames = workbook.SheetNames;
+
+  const sheetTexts = sheetNames.map((name) => {
+    const ws = workbook.Sheets[name];
+    return `=== Sheet: ${name} ===\n${XLSX.utils.sheet_to_csv(ws)}`;
+  });
+  const fallbackText = sheetTexts.join("\n\n");
+
+  const weekPattern = /^(week\s*\d+|w\d+|block\s*\d+)$/i;
+  const weekNameCount = sheetNames.filter((n) => weekPattern.test(n.trim())).length;
+  const isWeekNamed = weekNameCount >= 2;
+
+  const weeks: any[] = [];
+  let totalExercises = 0;
+
+  for (let si = 0; si < sheetNames.length; si++) {
+    const sheetName = sheetNames[si];
+    const ws = workbook.Sheets[sheetName];
+    const rows = XLSX.utils.sheet_to_json<any[]>(ws, { header: 1, defval: "" });
+
+    if (rows.length < 2) continue;
+
+    // Find header row (first row containing a recognisable column name)
+    let headerRowIdx = 0;
+    for (let r = 0; r < Math.min(5, rows.length); r++) {
+      const cells = (rows[r] as any[]).map((c: any) => String(c).toLowerCase().trim());
+      if (cells.some((c) => ["exercise", "name", "movement", "lift"].includes(c))) {
+        headerRowIdx = r;
+        break;
+      }
+    }
+
+    const headers = (rows[headerRowIdx] as any[]).map((c: any) => String(c).toLowerCase().trim());
+    const col = (aliases: string[]) => headers.findIndex((h) => aliases.includes(h));
+
+    const exerciseCol = col(["exercise", "name", "movement", "lift"]);
+    const setsCol = col(["sets", "set"]);
+    const repsCol = col(["reps", "rep"]);
+    const weightCol = col(["weight", "load", "intensity", "kg", "lbs"]);
+    const rpeCol = col(["rpe"]);
+    const notesCol = col(["notes", "note"]);
+
+    if (exerciseCol === -1 || (setsCol === -1 && repsCol === -1)) continue;
+
+    const exercises: any[] = [];
+    for (let r = headerRowIdx + 1; r < rows.length; r++) {
+      const row = rows[r] as any[];
+      const name = String(row[exerciseCol] ?? "").trim();
+      if (!name) continue;
+      exercises.push({
+        name,
+        sets: setsCol !== -1 ? Number(row[setsCol]) || 3 : 3,
+        reps: repsCol !== -1 ? String(row[repsCol] ?? "") : "",
+        weight: weightCol !== -1 ? String(row[weightCol] ?? "") : "",
+        rpe: rpeCol !== -1 ? Number(row[rpeCol]) || null : null,
+        notes: notesCol !== -1 ? String(row[notesCol] ?? "") : "",
+      });
+    }
+
+    if (exercises.length === 0) continue;
+    totalExercises += exercises.length;
+
+    if (isWeekNamed) {
+      weeks.push({ weekNumber: si + 1, days: [{ label: sheetName, exercises }] });
+    } else {
+      if (weeks.length === 0) weeks.push({ weekNumber: 1, days: [] });
+      weeks[0].days.push({ label: sheetName, exercises });
+    }
+  }
+
+  if (totalExercises >= 2) {
+    return { text: fallbackText, sheetNames, parsedBlocks: { weeks }, confidence: "high" };
+  }
+  return { text: fallbackText, sheetNames, confidence: "low" };
+}
+
 async function generateProgram(params: any): Promise<string> {
   const groqKey = process.env.GROQ_API_KEY!;
   const prompt = `Generate a complete ${params.daysPerWeek}-day per week training program.
@@ -166,45 +258,51 @@ export function registerProgramRoutes(app: Express): void {
         const body = schema.parse(req.body);
         const userId = req.user!.id;
         let rawText: string;
-        let source = body.type;
+        let source: string = body.type;
+        let precomputedBlocks: any | null = null;
+        let programName: string | undefined;
 
         if (body.type === "sheets") {
           if (!body.url) {
             return res.status(400).json({ error: "url is required for sheets import" });
           }
-          const csvText = await fetchGoogleSheets(body.url);
-          rawText = csvText;
+          rawText = await fetchGoogleSheets(body.url);
         } else if (body.type === "paste") {
-          // Check for file uploads (PDF / DOCX)
           if (body.file && body.fileName) {
             const ext = body.fileName.toLowerCase();
-            if (ext.endsWith(".pdf")) {
+            if (ext.endsWith(".xlsx") || ext.endsWith(".xls")) {
+              const result = await extractSpreadsheet(body.file, "xlsx");
+              rawText = result.text;
+              source = "xlsx";
+              if (result.confidence === "high" && result.parsedBlocks) {
+                precomputedBlocks = result.parsedBlocks;
+                programName = body.fileName.replace(/\.[^.]+$/, "");
+              }
+            } else if (ext.endsWith(".csv")) {
+              const result = await extractSpreadsheet(body.file, "csv");
+              rawText = result.text;
+              source = "csv";
+            } else if (ext.endsWith(".pdf")) {
               rawText = await extractPdf(body.file);
             } else if (ext.endsWith(".docx")) {
               rawText = await extractDocx(body.file);
             } else {
-              // Treat as plain text
               rawText = Buffer.from(body.file, "base64").toString("utf-8");
             }
           } else {
             if (!body.content) {
-              return res
-                .status(400)
-                .json({ error: "content is required for paste import" });
+              return res.status(400).json({ error: "content is required for paste import" });
             }
             rawText = body.content;
           }
         } else {
-          // generate
           if (!body.generateParams) {
-            return res
-              .status(400)
-              .json({ error: "generateParams is required for generate type" });
+            return res.status(400).json({ error: "generateParams is required for generate type" });
           }
           rawText = await generateProgram(body.generateParams);
         }
 
-        const parsed = await parseWithGroq(rawText);
+        const parsed = precomputedBlocks ?? await parseWithGroq(rawText!);
 
         const result = await pool.query(
           `INSERT INTO training_programs (user_id, name, source, raw_content, parsed_blocks)
@@ -212,9 +310,9 @@ export function registerProgramRoutes(app: Express): void {
            RETURNING ${PROGRAM_COLS}`,
           [
             userId,
-            parsed.name || "Imported Program",
+            programName || parsed.name || "Imported Program",
             source,
-            rawText,
+            rawText!,
             JSON.stringify(parsed),
           ]
         );
