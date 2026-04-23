@@ -1,36 +1,32 @@
 {
   "mcpServers": {
-    "agent_handler": {
+    "code-review-graph": {
+      "type": "stdio",
+      "command": "python",
+      "args": [
+        "-m",
+        "code_review_graph",
+        "serve"
+      ]
+    },
+    "filesystem": {
       "command": "cmd",
       "args": [
         "/c",
         "npx",
-        "-y",
-        "mcp-remote@latest",
-        "https://agent-proxy.perplexity.ai/merge_mcp",
-        "--header",
-        "Authorization: Bearer ${AUTH_TOKEN}"
-      ],
-      "env": {
-        "AUTH_TOKEN": "${AUTH_TOKEN}"
-      }
-    },
-    "code-review-graph": {
-      "type": "stdio",
-      "command": "python",
-      "args": ["-m", "code_review_graph", "serve"]
-    },
-    "filesystem": {
-      "command": "npx",
-      "args": [
         "-y",
         "@modelcontextprotocol/server-filesystem",
         "C:\\dev\\wvu-dining-tracker"
       ]
     },
     "github": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-github@2025.4.8"]
+      "command": "cmd",
+      "args": [
+        "/c",
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-github@2025.4.8"
+      ]
     }
   }
 }
