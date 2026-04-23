@@ -290,7 +290,6 @@ export function registerAppleHealthRoutes(app: Express): void {
         const baseUrl =
           process.env.APP_URL ?? "https://wvu-dining-tracker.onrender.com";
         const webhookUrl = `${baseUrl}/api/apple-health/push/${token}`;
-        const configDownloadUrl = `${baseUrl}/hae-config.json`;
 
         const shortcutRecipe = [
           "Open the Shortcuts app → tap + to create a new Shortcut. Name it \"Sync to Dining Tracker\".",
@@ -306,7 +305,6 @@ export function registerAppleHealthRoutes(app: Express): void {
 
         res.json({
           webhookUrl,
-          configDownloadUrl,
           recommendedApp: {
             name: "iOS Shortcuts (built-in)",
             appStoreUrl: "https://apps.apple.com/app/shortcuts/id1462947752",
@@ -314,17 +312,6 @@ export function registerAppleHealthRoutes(app: Express): void {
           },
           setupGuide: shortcutRecipe,
           manualShortcutGuide: shortcutRecipe,
-          haeFallback: {
-            name: "Health Auto Export",
-            appStoreUrl: "https://apps.apple.com/app/health-auto-export-json-csv/id1115567069",
-            description: "Paid app alternative. Requires a subscription after the trial, but needs no Shortcut setup.",
-            guide: [
-              "Download the pre-built config file using the button below.",
-              "In Health Auto Export, go to Automations → tap the ⊕ icon → Import → select the downloaded file.",
-              "When prompted, paste your Webhook URL into the URL field.",
-              "Save — HAE will automatically push your health data on the configured schedule.",
-            ],
-          },
         });
       } catch (err: any) {
         console.error("[apple-health] setup error:", err.message);

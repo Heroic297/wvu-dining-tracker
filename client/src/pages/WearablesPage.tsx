@@ -10,7 +10,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import {
   Watch, RefreshCw, Loader2, CheckCircle, XCircle, AlertCircle,
   Footprints, Moon, Heart, Brain, Battery, Activity, Scale,
-  Eye, EyeOff, Unplug, Smartphone, Copy, ExternalLink, ChevronDown, Download,
+  Eye, EyeOff, Unplug, Smartphone, Copy, ExternalLink,
 } from "lucide-react";
 
 interface SleepLevel {
@@ -188,18 +188,10 @@ export default function WearablesPage() {
   const [ahSetupLoading, setAhSetupLoading] = useState(false);
   const [ahSetupData, setAhSetupData] = useState<{
     webhookUrl: string;
-    configDownloadUrl: string;
     recommendedApp: { name: string; appStoreUrl: string; description: string };
     setupGuide: string[];
     manualShortcutGuide: string[];
-    haeFallback?: {
-      name: string;
-      appStoreUrl: string;
-      description: string;
-      guide: string[];
-    };
   } | null>(null);
-  const [ahShowHaeFallback, setAhShowHaeFallback] = useState(false);
   const handleAppleHealthSetup = useCallback(async () => {
     setAhSetupLoading(true);
     try {
@@ -650,7 +642,7 @@ export default function WearablesPage() {
               {sleepStaleDays !== null && sleepStaleDays >= 3 && (
                 <div className="flex items-start gap-2 text-sm bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2.5 text-amber-300">
                   <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-                  <span>Sleep data last synced {sleepStaleDays} days ago. Check that your sync Shortcut (or Health Auto Export) is running.</span>
+                  <span>Sleep data last synced {sleepStaleDays} days ago. Check that your sync Shortcut is running on schedule.</span>
                 </div>
               )}
 
@@ -810,43 +802,6 @@ export default function WearablesPage() {
               </ol>
             </div>
 
-            {/* Collapsible: paid HAE fallback */}
-            {ahSetupData.haeFallback && (
-              <>
-                <button
-                  onClick={() => setAhShowHaeFallback(v => !v)}
-                  className="w-full flex items-center justify-between text-xs text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  <span>Prefer a paid app instead? (Health Auto Export)</span>
-                  <ChevronDown className={`w-3.5 h-3.5 transition-transform ${ahShowHaeFallback ? "rotate-180" : ""}`} />
-                </button>
-                {ahShowHaeFallback && (
-                  <div className="bg-slate-900 border border-slate-800/60 rounded-xl p-4 space-y-3">
-                    <div className="text-sm font-semibold">{ahSetupData.haeFallback.name}</div>
-                    <p className="text-xs text-muted-foreground">{ahSetupData.haeFallback.description}</p>
-                    <a
-                      href={ahSetupData.haeFallback.appStoreUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1.5 text-xs font-medium text-pink-400 hover:text-pink-300"
-                    >
-                      <ExternalLink className="w-3.5 h-3.5" /> Open in App Store
-                    </a>
-                    <a
-                      href={ahSetupData.configDownloadUrl}
-                      download="wvu-dining-hae-config.json"
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-pink-500/20 hover:bg-pink-500/30 text-pink-400 hover:text-pink-300 text-xs font-medium transition-colors"
-                    >
-                      <Download className="w-3.5 h-3.5" />
-                      Download HAE Config
-                    </a>
-                    <ol className="text-xs text-muted-foreground space-y-1 list-decimal list-inside ml-1">
-                      {ahSetupData.haeFallback.guide.map((step, i) => <li key={i}>{step}</li>)}
-                    </ol>
-                  </div>
-                )}
-              </>
-            )}
           </div>
         )}
       </section>
