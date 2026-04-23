@@ -653,11 +653,24 @@ export function registerProgramRoutes(app: Express): void {
         const userId = req.user!.id;
 
         const result = await pool.query(
-          `SELECT * FROM workout_logs WHERE user_id = $1 ORDER BY date DESC LIMIT 30`,
+          `SELECT id, user_id, program_id, date, week_number, day_label, exercises, notes, logged_at
+             FROM workout_logs WHERE user_id = $1 ORDER BY date DESC LIMIT 30`,
           [userId]
         );
 
-        res.json(result.rows);
+        res.json(
+          result.rows.map((r) => ({
+            id: r.id,
+            userId: r.user_id,
+            programId: r.program_id,
+            date: r.date,
+            weekNumber: r.week_number,
+            dayLabel: r.day_label,
+            exercises: r.exercises,
+            notes: r.notes,
+            loggedAt: r.logged_at,
+          }))
+        );
       } catch (err: any) {
         console.error("[programs] workout-logs history error:", err);
         res.status(500).json({ error: "Failed to get workout log history" });

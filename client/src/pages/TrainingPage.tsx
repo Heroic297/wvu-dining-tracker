@@ -1058,8 +1058,14 @@ function HistoryTab() {
 
 // ── Main Page ───────────────────────────────────────────────────────────────
 
+function getInitialTab(): string {
+  if (typeof window === "undefined") return "programs";
+  const t = new URLSearchParams(window.location.search).get("tab");
+  return t === "today" || t === "history" || t === "programs" ? t : "programs";
+}
+
 export default function TrainingPage() {
-  const [tab, setTab] = useState("programs");
+  const [tab, setTab] = useState(getInitialTab);
 
   return (
     <div className="min-h-screen text-slate-100 pb-24">
