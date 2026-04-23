@@ -192,8 +192,14 @@ export default function WearablesPage() {
     recommendedApp: { name: string; appStoreUrl: string; description: string };
     setupGuide: string[];
     manualShortcutGuide: string[];
+    haeFallback?: {
+      name: string;
+      appStoreUrl: string;
+      description: string;
+      guide: string[];
+    };
   } | null>(null);
-  const [ahShowManualGuide, setAhShowManualGuide] = useState(false);
+  const [ahShowHaeFallback, setAhShowHaeFallback] = useState(false);
   const handleAppleHealthSetup = useCallback(async () => {
     setAhSetupLoading(true);
     try {
@@ -644,7 +650,7 @@ export default function WearablesPage() {
               {sleepStaleDays !== null && sleepStaleDays >= 3 && (
                 <div className="flex items-start gap-2 text-sm bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2.5 text-amber-300">
                   <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-                  <span>Sleep data last synced {sleepStaleDays} days ago. Check your Health Auto Export shortcut is running.</span>
+                  <span>Sleep data last synced {sleepStaleDays} days ago. Check that your sync Shortcut (or Health Auto Export) is running.</span>
                 </div>
               )}
 
@@ -763,29 +769,13 @@ export default function WearablesPage() {
         {/* Setup instructions */}
         {ahSetupData && (
           <div className="space-y-4">
-            {/* Step 1: Install app */}
+            {/* Step 1: Copy webhook URL — first, since you need it for every path */}
             <div className="bg-slate-900 border border-slate-800/60 rounded-xl p-4 space-y-2">
               <div className="flex items-center gap-2">
                 <span className="flex items-center justify-center w-6 h-6 rounded-full bg-pink-500/20 text-pink-400 text-xs font-bold">1</span>
-                <span className="text-sm font-semibold">Install {ahSetupData.recommendedApp.name}</span>
-              </div>
-              <p className="text-xs text-muted-foreground">{ahSetupData.recommendedApp.description}</p>
-              <a
-                href={ahSetupData.recommendedApp.appStoreUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 text-xs font-medium text-pink-400 hover:text-pink-300"
-              >
-                <ExternalLink className="w-3.5 h-3.5" /> Open in App Store
-              </a>
-            </div>
-
-            {/* Step 2: Webhook URL */}
-            <div className="bg-slate-900 border border-slate-800/60 rounded-xl p-4 space-y-2">
-              <div className="flex items-center gap-2">
-                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-pink-500/20 text-pink-400 text-xs font-bold">2</span>
                 <span className="text-sm font-semibold">Copy your Webhook URL</span>
               </div>
+              <p className="text-xs text-muted-foreground">This is your personal endpoint. Keep it private — the token in the URL is its authentication.</p>
               <div className="flex gap-2">
                 <Input readOnly value={ahSetupData.webhookUrl} className="text-xs font-mono" />
                 <Button
@@ -800,37 +790,62 @@ export default function WearablesPage() {
               </div>
             </div>
 
-            {/* Step 3: Import config + instructions */}
+            {/* Step 2: Free path via iOS Shortcuts */}
             <div className="bg-slate-900 border border-slate-800/60 rounded-xl p-4 space-y-3">
               <div className="flex items-center gap-2">
-                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-pink-500/20 text-pink-400 text-xs font-bold">3</span>
-                <span className="text-sm font-semibold">Import the pre-built config</span>
+                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-pink-500/20 text-pink-400 text-xs font-bold">2</span>
+                <span className="text-sm font-semibold">Build the sync Shortcut — free, built into iOS</span>
               </div>
+              <p className="text-xs text-muted-foreground">{ahSetupData.recommendedApp.description}</p>
               <a
-                href={ahSetupData.configDownloadUrl}
-                download="wvu-dining-hae-config.json"
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-pink-500/20 hover:bg-pink-500/30 text-pink-400 hover:text-pink-300 text-xs font-medium transition-colors"
+                href={ahSetupData.recommendedApp.appStoreUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 text-xs font-medium text-pink-400 hover:text-pink-300"
               >
-                <Download className="w-3.5 h-3.5" />
-                Download HAE Config
+                <ExternalLink className="w-3.5 h-3.5" /> Open Shortcuts in App Store
               </a>
-              <ol className="text-xs text-muted-foreground space-y-1 list-decimal list-inside ml-1">
+              <ol className="text-xs text-muted-foreground space-y-1.5 list-decimal list-inside ml-1 marker:text-pink-400">
                 {ahSetupData.setupGuide.map((step, i) => <li key={i}>{step}</li>)}
               </ol>
             </div>
 
-            {/* Collapsible manual guide */}
-            <button
-              onClick={() => setAhShowManualGuide(v => !v)}
-              className="w-full flex items-center justify-between text-xs text-muted-foreground hover:text-foreground transition-colors"
-            >
-              <span>Advanced: Manual Shortcut Setup</span>
-              <ChevronDown className={`w-3.5 h-3.5 transition-transform ${ahShowManualGuide ? "rotate-180" : ""}`} />
-            </button>
-            {ahShowManualGuide && (
-              <ol className="text-xs text-muted-foreground space-y-0.5 list-decimal list-inside ml-1 border-t border-border pt-2">
-                {ahSetupData.manualShortcutGuide.map((step, i) => <li key={i}>{step}</li>)}
-              </ol>
+            {/* Collapsible: paid HAE fallback */}
+            {ahSetupData.haeFallback && (
+              <>
+                <button
+                  onClick={() => setAhShowHaeFallback(v => !v)}
+                  className="w-full flex items-center justify-between text-xs text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  <span>Prefer a paid app instead? (Health Auto Export)</span>
+                  <ChevronDown className={`w-3.5 h-3.5 transition-transform ${ahShowHaeFallback ? "rotate-180" : ""}`} />
+                </button>
+                {ahShowHaeFallback && (
+                  <div className="bg-slate-900 border border-slate-800/60 rounded-xl p-4 space-y-3">
+                    <div className="text-sm font-semibold">{ahSetupData.haeFallback.name}</div>
+                    <p className="text-xs text-muted-foreground">{ahSetupData.haeFallback.description}</p>
+                    <a
+                      href={ahSetupData.haeFallback.appStoreUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5 text-xs font-medium text-pink-400 hover:text-pink-300"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" /> Open in App Store
+                    </a>
+                    <a
+                      href={ahSetupData.configDownloadUrl}
+                      download="wvu-dining-hae-config.json"
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-pink-500/20 hover:bg-pink-500/30 text-pink-400 hover:text-pink-300 text-xs font-medium transition-colors"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      Download HAE Config
+                    </a>
+                    <ol className="text-xs text-muted-foreground space-y-1 list-decimal list-inside ml-1">
+                      {ahSetupData.haeFallback.guide.map((step, i) => <li key={i}>{step}</li>)}
+                    </ol>
+                  </div>
+                )}
+              </>
             )}
           </div>
         )}

@@ -292,26 +292,39 @@ export function registerAppleHealthRoutes(app: Express): void {
         const webhookUrl = `${baseUrl}/api/apple-health/push/${token}`;
         const configDownloadUrl = `${baseUrl}/hae-config.json`;
 
+        const shortcutRecipe = [
+          "Open the Shortcuts app → tap + to create a new Shortcut. Name it \"Sync to Dining Tracker\".",
+          "Add action: Current Date → then Format Date. Set Format to Custom, Format String yyyy-MM-dd. Tap the result and rename the variable to date.",
+          "Add Find Health Samples → Sample Type: Steps → Period: Today → Sort by Start Date → Limit 1 → Get Sum. Rename the result to steps.",
+          "Repeat Find Health Samples + Get Sum for: Active Energy (kcal) → calories_burned, Apple Exercise Time (min) → active_minutes, Heart Rate Variability SDNN (ms) → hrv_ms, Resting Heart Rate (bpm) → resting_heart_rate, Body Mass (lb or kg) → weight, Body Fat Percentage → body_fat_pct.",
+          "Add Find Health Samples → Sleep Analysis → Period: Last 24 hours → Get Sum of Duration in Minutes. Rename to sleep_duration_min.",
+          "Add Dictionary action. Add keys matching the variables: date, steps, calories_burned, active_minutes, sleep_duration_min, resting_heart_rate, hrv_ms, weight_kg, body_fat_pct. Set each value to its corresponding variable. (If your Weight sample is in lbs, convert: insert Calculate → weight × 0.453592, then use that for weight_kg.)",
+          "Add Get Contents of URL. Paste your Webhook URL. Method: POST. Headers: Content-Type = application/json. Request Body: JSON. Body: the Dictionary from the previous step.",
+          "Tap Done. Run the Shortcut once manually — you should see a success toast in the Wearables page within a minute.",
+          "Open the Automation tab → + → Personal Automation → Time of Day → 11:55 PM → Daily → Next → Run Shortcut → pick \"Sync to Dining Tracker\" → turn OFF \"Ask Before Running\". Done.",
+        ];
+
         res.json({
           webhookUrl,
           configDownloadUrl,
           recommendedApp: {
+            name: "iOS Shortcuts (built-in)",
+            appStoreUrl: "https://apps.apple.com/app/shortcuts/id1462947752",
+            description: "Free, built into every iPhone. Build one Shortcut, schedule it via Personal Automation, done.",
+          },
+          setupGuide: shortcutRecipe,
+          manualShortcutGuide: shortcutRecipe,
+          haeFallback: {
             name: "Health Auto Export",
             appStoreUrl: "https://apps.apple.com/app/health-auto-export-json-csv/id1115567069",
-            description: "Free app that auto-syncs Apple Health data to your webhook. No coding needed.",
+            description: "Paid app alternative. Requires a subscription after the trial, but needs no Shortcut setup.",
+            guide: [
+              "Download the pre-built config file using the button below.",
+              "In Health Auto Export, go to Automations → tap the ⊕ icon → Import → select the downloaded file.",
+              "When prompted, paste your Webhook URL into the URL field.",
+              "Save — HAE will automatically push your health data on the configured schedule.",
+            ],
           },
-          setupGuide: [
-            "Download the pre-built config file using the button below.",
-            "In Health Auto Export, go to Automations → tap the ⊕ icon → Import → select the downloaded file.",
-            "When prompted, paste your Webhook URL (copied in Step 2) into the URL field.",
-            "Save — HAE will automatically push your health data on the configured schedule.",
-          ],
-          manualShortcutGuide: [
-            "Alternatively, use the iOS Shortcuts app:",
-            "1. Create a new Shortcut with 'Find Health Samples' actions for each metric.",
-            "2. Add 'Get Contents of URL' pointing to your Webhook URL (POST, JSON body).",
-            "3. Set an Automation to run it daily at 11 PM.",
-          ],
         });
       } catch (err: any) {
         console.error("[apple-health] setup error:", err.message);
