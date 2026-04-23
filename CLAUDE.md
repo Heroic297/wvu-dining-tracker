@@ -27,3 +27,10 @@ Full-stack TS monorepo. Vite+React client, Express 5 server, Supabase Postgres v
 
 ## Reference
 `.claude/docs/` — stub files for deploy, auth, and wearables. Currently empty; populate before directing Claude to read them.
+
+## ECC Conventions
+- Slash commands available: `/feature-development`, `/add-language-rules`, `/database-migration` (see `.claude/commands/`)
+- Project MCP servers: agent_handler, code-review-graph, filesystem, github (see `.mcp.json`)
+- Global MCP servers (from `~/.claude/.mcp.json`): memory, sequential-thinking — inherited automatically
+- Required env vars for MCP: `AUTH_TOKEN` (perplexity agent proxy), `GITHUB_TOKEN` (if not using global)
+- Run `npm run check` before every commit; TypeScript strict mode enforced
