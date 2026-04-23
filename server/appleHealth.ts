@@ -546,4 +546,24 @@ export function registerAppleHealthRoutes(app: Express): void {
       }
     }
   );
+
+  // ── POST /api/apple-health/disconnect ────────────────────────────────────
+  // Rotates the webhook token (invalidates the old URL so HAE / any stale client
+  // starts 401'ing) and wipes the user's apple_health_daily rows so the UI
+  // resets to "Not connected". Historical weight_log entries are preserved.
+  app.post(
+    "/api/apple-health/disconnect",
+    requireAuth,
+    async (req: AuthRequest, res: Response) => {
+      try {
+        const userId = req.user!.id;
+        await pool.query(`UPDATE users SET apple_health_token = NULL WHERE id = $1`, [userId]);
+        await pool.query(`DELETE FROM apple_health_daily WHERE user_id = $1`, [userId]);
+        res.json({ ok: true });
+      } catch (err: any) {
+        console.error("[apple-health] disconnect error:", err.message);
+        res.status(500).json({ error: "Failed to disconnect Apple Health" });
+      }
+    }
+  );
 }

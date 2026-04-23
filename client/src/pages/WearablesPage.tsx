@@ -205,6 +205,21 @@ export default function WearablesPage() {
     }
   }, [toast]);
 
+  const appleHealthDisconnectMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/apple-health/disconnect");
+      return res.json();
+    },
+    onSuccess: () => {
+      setAhSetupData(null);
+      queryClient.invalidateQueries({ queryKey: ["apple-health-status"] });
+      toast({ title: "Apple Health disconnected", description: "Tap Set Up Apple Health to generate a fresh webhook URL for the Shortcut." });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Disconnect failed", description: err.message, variant: "destructive" });
+    },
+  });
+
   const connected = garminData?.connected ?? false;
   const summary = garminData?.summary;
   const status = garminData?.status ?? "disconnected";
@@ -599,11 +614,29 @@ export default function WearablesPage() {
               </p>
             </div>
           </div>
-          {appleHealthStatus?.connected && appleHealthStatus.lastSyncAt && (
-            <span className="text-[11px] text-muted-foreground">
-              Synced {fmtTime(appleHealthStatus.lastSyncAt)}
-            </span>
-          )}
+          <div className="flex items-center gap-2">
+            {appleHealthStatus?.connected && appleHealthStatus.lastSyncAt && (
+              <span className="text-[11px] text-muted-foreground">
+                Synced {fmtTime(appleHealthStatus.lastSyncAt)}
+              </span>
+            )}
+            {(appleHealthStatus?.setupComplete || appleHealthStatus?.connected) && (
+              <Button
+                variant="ghost" size="sm"
+                onClick={() => {
+                  if (confirm("Disconnect Apple Health? This rotates your webhook URL (existing HAE or Shortcut setups will stop working) and clears cached metrics. Historical weight entries are kept.")) {
+                    appleHealthDisconnectMutation.mutate();
+                  }
+                }}
+                disabled={appleHealthDisconnectMutation.isPending}
+                className="text-muted-foreground hover:text-destructive h-7 px-2"
+              >
+                {appleHealthDisconnectMutation.isPending
+                  ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  : <><Unplug className="w-3.5 h-3.5 mr-1" />Disconnect</>}
+              </Button>
+            )}
+          </div>
         </div>
 
         {/* Connected state — show Apple Health data cards */}
