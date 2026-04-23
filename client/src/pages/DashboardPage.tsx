@@ -363,7 +363,7 @@ export default function DashboardPage() {
 
         {/* Training Today Card */}
         {trainingToday && (
-          <Link href="/training">
+          <Link href="/train">
             <div className="surface-card p-4 flex items-center justify-between gap-3 cursor-pointer hover:bg-slate-800/60 transition-colors">
               <div className="flex items-center gap-3 min-w-0">
                 <Dumbbell className="w-5 h-5 text-emerald-400 flex-shrink-0" />
