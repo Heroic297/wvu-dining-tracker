@@ -620,7 +620,7 @@ type HistoryScopeKey = keyof HistoryCounts | "coachMemory";
 
 const SCOPE_LABELS: Record<HistoryScopeKey, { label: string; desc: string }> = {
   meals:          { label: "Meals",            desc: "Logged meals and every item inside them" },
-  weightLogs:     { label: "Weight log",       desc: "All weigh-ins (manual + wearable)" },
+  weightLogs:     { label: "Weight log",       desc: "All weigh-ins" },
   waterLogs:      { label: "Water log",        desc: "Daily ml totals" },
   supplementLogs: { label: "Supplement log",   desc: "Daily supplement servings (keeps supplements themselves)" },
   workoutLogs:    { label: "Workout log",      desc: "Training-log entries (keeps the program itself)" },

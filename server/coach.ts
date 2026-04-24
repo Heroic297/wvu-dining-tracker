@@ -16,7 +16,6 @@ import { scrapeLocationDate } from "./scraper.js";
 import { lookupNutrition } from "./nutrition.js";
 import { computeDailyTargets, analyzeWaterCut } from "./tdee.js";
 import { storage } from "./storage.js";
-import { getGarminCoachContext } from "./garmin.js";
 import { buildContextSnapshot } from "./memoryBridge.js";
 import { z } from "zod";
 
@@ -382,49 +381,6 @@ async function buildLiveContext(userId: string, rawUser: any): Promise<string> {
   if (snapshot) liveLines.splice(liveLines.length - 1, 0, snapshot);
   const liveContext = liveLines.join("\n");
 
-  // Append Garmin wearable data if connected and available (gated — only when detected)
-  let garminContext = "";
-  try {
-    const gc = await getGarminCoachContext(userId);
-    if (gc) garminContext = "\n" + gc;
-  } catch { /* non-fatal — coach works fine without wearable data */ }
-
-  // Append Apple Health data if available
-  let appleHealthContext = "";
-  try {
-    const ahRes = await pool.query(
-      `SELECT total_steps, calories_burned, active_minutes, sleep_duration_min,
-              resting_heart_rate, avg_overnight_hrv, weight_kg, body_fat_pct,
-              workouts, vo2_max
-       FROM apple_health_daily WHERE user_id=$1 AND date=$2`,
-      [userId, today]
-    );
-    const ah = ahRes.rows[0];
-    if (ah) {
-      const parts: string[] = [];
-      if (ah.total_steps) parts.push(`Steps: ${ah.total_steps.toLocaleString()}`);
-      if (ah.calories_burned) parts.push(`Active cal burned: ${ah.calories_burned}`);
-      if (ah.active_minutes) parts.push(`Active minutes: ${ah.active_minutes}`);
-      if (ah.sleep_duration_min) parts.push(`Sleep: ${Math.floor(ah.sleep_duration_min / 60)}h ${ah.sleep_duration_min % 60}m`);
-      if (ah.resting_heart_rate) parts.push(`RHR: ${ah.resting_heart_rate} bpm`);
-      if (ah.avg_overnight_hrv) parts.push(`HRV: ${ah.avg_overnight_hrv.toFixed(1)} ms`);
-      if (ah.weight_kg) parts.push(`Weight: ${(ah.weight_kg * 2.20462).toFixed(1)} lbs`);
-      if (ah.workouts) {
-        const workouts = typeof ah.workouts === 'string' ? JSON.parse(ah.workouts) : ah.workouts;
-        if (Array.isArray(workouts) && workouts.length > 0) {
-          const workoutStr = workouts.map((w: any) =>
-            `${w.activity_type}: ${w.duration_min}min, ${w.calories}cal${w.avg_heart_rate ? `, avg HR ${w.avg_heart_rate}` : ''}`
-          ).join("; ");
-          parts.push(`Workouts: ${workoutStr}`);
-        }
-      }
-      if (ah.vo2_max) parts.push(`VO2 Max: ${ah.vo2_max}`);
-      if (parts.length > 0) {
-        appleHealthContext = "\n[Apple Health Today] " + parts.join(" | ");
-      }
-    }
-  } catch { /* non-fatal */ }
-
   // Append active training program + today's workout + recent logs
   let trainingContext = "";
   try {
@@ -533,7 +489,7 @@ async function buildLiveContext(userId: string, rawUser: any): Promise<string> {
     }
   } catch { /* non-fatal */ }
 
-  return liveContext + garminContext + appleHealthContext + trainingContext + supplementContext;
+  return liveContext + trainingContext + supplementContext;
 }
 
 // ─── System Prompt ────────────────────────────────────────────────────────────

@@ -96,8 +96,6 @@ export const users = pgTable("users", {
   waterUnit: text("water_unit").$type<"ml" | "oz" | "L" | "gal">().default("oz"),
   // Physique tracking
   enablePhysiqueTracking: boolean("enable_physique_tracking").default(false),
-  // Apple Health
-  appleHealthToken: text("apple_health_token"),
   // Onboarding
   onboardingComplete: boolean("onboarding_complete").default(false),
   // AI Coach — per-provider encrypted API keys (AES-256-GCM, hex-encoded iv:tag:ciphertext)
@@ -120,35 +118,7 @@ export const insertUserSchema = createInsertSchema(users).omit({
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
 
-// ─── Wearable OAuth Tokens ────────────────────────────────────────────────────
-
-export const wearableTokens = pgTable(
-  "wearable_tokens",
-  {
-    id: varchar("id", { length: 36 })
-      .primaryKey()
-      .default(sql`gen_random_uuid()`),
-    userId: varchar("user_id", { length: 36 })
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-    source: wearableSourceEnum("source").notNull(),
-    accessToken: text("access_token").notNull(),
-    refreshToken: text("refresh_token"),
-    expiresAt: timestamp("expires_at"),
-    scope: text("scope"),
-    rawPayload: jsonb("raw_payload"),
-    updatedAt: timestamp("updated_at").default(sql`now()`),
-  },
-  (t) => [uniqueIndex("wearable_tokens_user_source").on(t.userId, t.source)]
-);
-
-export const insertWearableTokenSchema = createInsertSchema(
-  wearableTokens
-).omit({ id: true, updatedAt: true });
-export type InsertWearableToken = z.infer<typeof insertWearableTokenSchema>;
-export type WearableToken = typeof wearableTokens.$inferSelect;
-
-// ─── Daily Activity (from wearables) ─────────────────────────────────────────
+// ─── Daily Activity ──────────────────────────────────────────────────────────
 
 export const dailyActivity = pgTable(
   "daily_activity",
@@ -517,128 +487,6 @@ export const chatMessages = pgTable(
 export const insertChatMessageSchema = createInsertSchema(chatMessages).omit({ id: true, createdAt: true });
 export type InsertChatMessage = z.infer<typeof insertChatMessageSchema>;
 export type ChatMessage = typeof chatMessages.$inferSelect;
-
-// ─── Garmin Session Tokens (unofficial garmin-connect library) ───────────────
-// Stores encrypted OAuth1/OAuth2 tokens from the garmin-connect library so
-// the user doesn't need to re-enter credentials on every visit.
-
-export const garminSessions = pgTable("garmin_sessions", {
-  id: varchar("id", { length: 36 })
-    .primaryKey()
-    .default(sql`gen_random_uuid()`),
-  userId: varchar("user_id", { length: 36 })
-    .notNull()
-    .references(() => users.id, { onDelete: "cascade" })
-    .unique(),
-  /** AES-256-GCM encrypted JSON blob of { oauth1, oauth2 } or { di_token, di_refresh_token, di_client_id } */
-  encryptedTokens: text("encrypted_tokens").notNull(),
-  /** "connected" | "error" | "expired" */
-  status: text("status").notNull().default("connected").$type<"connected" | "error" | "expired">(),
-  /** "garmin-connect" (username/password) | "di-token" (direct API) */
-  tokenType: text("token_type").notNull().default("garmin-connect").$type<"garmin-connect" | "di-token">(),
-  lastSyncAt: timestamp("last_sync_at"),
-  lastError: text("last_error"),
-  createdAt: timestamp("created_at").default(sql`now()`),
-  updatedAt: timestamp("updated_at").default(sql`now()`),
-});
-
-export const insertGarminSessionSchema = createInsertSchema(garminSessions).omit({ id: true, createdAt: true, updatedAt: true });
-export type InsertGarminSession = z.infer<typeof insertGarminSessionSchema>;
-export type GarminSession = typeof garminSessions.$inferSelect;
-
-// ─── Garmin Daily Summary (normalized wearable data) ─────────────────────────
-// One row per user per date. Stores the most useful fields from all Garmin
-// categories for display and coach context.
-
-export const garminDailySummary = pgTable(
-  "garmin_daily_summary",
-  {
-    id: varchar("id", { length: 36 })
-      .primaryKey()
-      .default(sql`gen_random_uuid()`),
-    userId: varchar("user_id", { length: 36 })
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-    date: date("date").notNull(),
-    // Activity
-    totalSteps: integer("total_steps"),
-    caloriesBurned: integer("calories_burned"),
-    activeMinutes: integer("active_minutes"),
-    // Sleep
-    sleepDurationMin: integer("sleep_duration_min"),
-    deepSleepMin: integer("deep_sleep_min"),
-    lightSleepMin: integer("light_sleep_min"),
-    remSleepMin: integer("rem_sleep_min"),
-    awakeSleepMin: integer("awake_sleep_min"),
-    sleepScore: integer("sleep_score"),
-    // Heart rate
-    restingHeartRate: integer("resting_heart_rate"),
-    maxHeartRate: integer("max_heart_rate"),
-    // Stress / Body Battery / HRV
-    avgStress: integer("avg_stress"),
-    bodyBatteryHigh: integer("body_battery_high"),
-    bodyBatteryLow: integer("body_battery_low"),
-    avgOvernightHrv: real("avg_overnight_hrv"),
-    hrvStatus: text("hrv_status"),
-    // Weight / Body composition
-    weightKg: real("weight_kg"),
-    bodyFatPct: real("body_fat_pct"),
-    // Recent activities summary (JSON array of {name, type, durationMin, calories})
-    recentActivities: jsonb("recent_activities").$type<Array<{
-      name: string;
-      type: string;
-      durationMin: number;
-      calories: number;
-    }>>(),
-    // Raw payloads for debugging
-    rawPayload: jsonb("raw_payload"),
-    syncedAt: timestamp("synced_at").default(sql`now()`),
-  },
-  (t) => [uniqueIndex("garmin_daily_user_date").on(t.userId, t.date)]
-);
-
-export type GarminDailySummary = typeof garminDailySummary.$inferSelect;
-export type InsertGarminDailySummary = typeof garminDailySummary.$inferInsert;
-
-// ─── Apple Health Daily ──────────────────────────────────────────────────────
-
-export const appleHealthDaily = pgTable(
-  "apple_health_daily",
-  {
-    id: varchar("id", { length: 36 })
-      .primaryKey()
-      .default(sql`gen_random_uuid()`),
-    userId: varchar("user_id", { length: 36 })
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-    date: date("date").notNull(),
-    totalSteps: integer("total_steps"),
-    caloriesBurned: integer("calories_burned"),
-    activeMinutes: integer("active_minutes"),
-    sleepDurationMin: integer("sleep_duration_min"),
-    deepSleepMin: integer("deep_sleep_min"),
-    remSleepMin: integer("rem_sleep_min"),
-    restingHeartRate: integer("resting_heart_rate"),
-    avgOvernightHrv: real("avg_overnight_hrv"),
-    weightKg: real("weight_kg"),
-    bodyFatPct: real("body_fat_pct"),
-    // Extra columns written by appleHealth.ts — must exist or the push route errors
-    workouts: jsonb("workouts").$type<Array<{
-      activity_type: string;
-      duration_min: number;
-      calories: number;
-      distance_km?: number;
-      avg_heart_rate?: number;
-      date?: string;
-    }>>(),
-    vo2Max: real("vo2_max"),
-    respiratoryRate: real("respiratory_rate"),
-    syncedAt: timestamp("synced_at").default(sql`now()`),
-  },
-  (t) => [uniqueIndex("apple_health_daily_user_date").on(t.userId, t.date)]
-);
-
-export type AppleHealthDaily = typeof appleHealthDaily.$inferSelect;
 
 // ─── Supplements ─────────────────────────────────────────────────────────────
 

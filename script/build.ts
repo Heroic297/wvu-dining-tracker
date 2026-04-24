@@ -1,6 +1,6 @@
 import { build as esbuild } from "esbuild";
 import { build as viteBuild } from "vite";
-import { rm, readFile, mkdir, copyFile } from "fs/promises";
+import { rm, readFile } from "fs/promises";
 
 // server deps to bundle to reduce openat(2) syscalls
 // which helps cold start times
@@ -59,13 +59,6 @@ async function buildAll() {
     external: externals,
     logLevel: "info",
   });
-
-  // Copy Python sidecar + requirements.txt into dist/server/ so path resolution
-  // finds them even if process.cwd() isn't the repo root
-  console.log("copying Python sidecar to dist/server/...");
-  await mkdir("dist/server", { recursive: true });
-  await copyFile("server/garmin_sidecar.py", "dist/server/garmin_sidecar.py");
-  await copyFile("requirements.txt", "dist/requirements.txt").catch(() => {});
 }
 
 buildAll().catch((err) => {

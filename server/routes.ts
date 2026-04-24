@@ -9,27 +9,9 @@ import { requireAuth, optionalAuth, hashPassword, verifyPassword, signToken, typ
 import { scrapeLocationDate, scrapeAllLocations, todayString } from "./scraper.js";
 import { lookupNutrition } from "./nutrition.js";
 import { computeDailyTargets, generateWaterCutPlan, generatePeakWeekPlan, analyzeWaterCut, calcDailyWaterMl } from "./tdee.js";
-import {
-  getFitbitAuthUrl,
-  exchangeFitbitCode,
-  getGarminAuthUrl,
-  exchangeGarminCode,
-  syncUserWearable,
-} from "./wearables.js";
-import {
-  garminLogin,
-  getGarminStatus,
-  getGarminSummary,
-  syncGarminData,
-  disconnectGarmin,
-  importDiToken,
-} from "./garmin.js";
 import { pool } from "./db.js";
 import { z } from "zod";
-import { randomUUID } from "crypto";
-import crypto from "crypto";
 import { registerCoachRoutes } from "./coach.js";
-import { registerAppleHealthRoutes } from "./appleHealth.js";
 import { registerProgramRoutes } from "./programs.js";
 import { authLimiter, nutritionLimiter } from "./rateLimit.js";
 
@@ -53,7 +35,6 @@ export async function registerRoutes(
 
   // ── AI Coach ──────────────────────────────────────────────────────────
   registerCoachRoutes(app);
-  registerAppleHealthRoutes(app);
   registerProgramRoutes(app);
 
   // ── Auth ───────────────────────────────────────────────────────────────────
@@ -397,23 +378,12 @@ export async function registerRoutes(
       const date = (req.query.date as string) ?? todayString();
       const user = req.user!;
 
-      // Get wearable burn if available
-      let burnCalories: number | undefined;
-      if (user.burnMode === "wearable") {
-        const activities = await storage.getDailyActivity(user.id, date);
-        const totalBurn = activities.reduce(
-          (sum, a) => sum + (a.caloriesBurned ?? 0),
-          0
-        );
-        if (totalBurn > 0) burnCalories = totalBurn;
-      }
-
       // Most recent weight log — MUST be fetched before computeDailyTargets
       // so the latest logged weight drives tier + buffer calculations
       const recentWeightLogs = await storage.getWeightLogs(user.id, 1);
       const recentWeightKg = recentWeightLogs[0]?.weightKg ?? user.weightKg;
 
-      const targets = computeDailyTargets(user, burnCalories, date, recentWeightKg);
+      const targets = computeDailyTargets(user, undefined, date, recentWeightKg);
       if (!targets) {
         return res.status(400).json({
           error: "Profile incomplete — please finish setup to get targets",
@@ -1027,140 +997,7 @@ export async function registerRoutes(
     }
   });
 
-  // ── Wearables ─────────────────────────────────────────────────────────────
-
-  // Fitbit OAuth2
-  app.get(
-    "/api/wearables/fitbit/connect",
-    requireAuth as any,
-    (req: AuthRequest, res) => {
-      if (!process.env.FITBIT_CLIENT_ID) {
-        return res.status(503).json({ error: "Fitbit integration not configured" });
-      }
-      const state = `${req.user!.id}:${randomUUID()}`;
-      const url = getFitbitAuthUrl(state);
-      res.json({ url });
-    }
-  );
-
-  app.get("/api/wearables/fitbit/callback", async (req, res) => {
-    try {
-      const { code, state } = req.query as {
-        code: string;
-        state: string;
-      };
-      const userId = state?.split(":")?.[0];
-      if (!userId || !code) {
-        return res.status(400).send("Invalid OAuth callback");
-      }
-
-      const tokens = await exchangeFitbitCode(code);
-      await storage.upsertWearableToken({
-        userId,
-        source: "fitbit",
-        accessToken: tokens.access_token,
-        refreshToken: tokens.refresh_token,
-        expiresAt: new Date(Date.now() + tokens.expires_in * 1000),
-        scope: tokens.scope,
-        rawPayload: tokens as any,
-      });
-
-      // Kick off initial sync
-      syncUserWearable(userId, "fitbit").catch(console.error);
-
-      res.redirect("/#/settings?connected=fitbit");
-    } catch (err) {
-      console.error("[fitbit callback]", err);
-      res.redirect("/#/settings?error=fitbit");
-    }
-  });
-
-  app.delete(
-    "/api/wearables/:source",
-    requireAuth as any,
-    async (req: AuthRequest, res) => {
-      const source = req.params.source as string as "fitbit" | "garmin";
-      if (!["fitbit", "garmin"].includes(source)) {
-        return res.status(400).json({ error: "Invalid source" });
-      }
-      await storage.deleteWearableToken(req.user!.id, source);
-      res.json({ ok: true });
-    }
-  );
-
-  // Garmin OAuth2
-  app.get(
-    "/api/wearables/garmin/connect",
-    requireAuth as any,
-    (req: AuthRequest, res) => {
-      if (!process.env.GARMIN_CLIENT_ID) {
-        return res.status(503).json({ error: "Garmin integration not configured" });
-      }
-      const state = `${req.user!.id}:${randomUUID()}`;
-      const url = getGarminAuthUrl(state);
-      res.json({ url });
-    }
-  );
-
-  app.get("/api/wearables/garmin/callback", async (req, res) => {
-    try {
-      const { oauth_token, oauth_verifier, state } = req.query as {
-        oauth_token: string;
-        oauth_verifier: string;
-        state: string;
-      };
-      const code = (req.query.code as string) ?? oauth_token;
-      const userId = state?.split(":")?.[0];
-      if (!userId || !code) {
-        return res.status(400).send("Invalid OAuth callback");
-      }
-
-      const tokens = await exchangeGarminCode(code);
-      await storage.upsertWearableToken({
-        userId,
-        source: "garmin",
-        accessToken: tokens.access_token,
-        refreshToken: tokens.refresh_token,
-        expiresAt: new Date(Date.now() + tokens.expires_in * 1000),
-        rawPayload: tokens as any,
-      });
-
-      syncUserWearable(userId, "garmin").catch(console.error);
-      res.redirect("/#/settings?connected=garmin");
-    } catch (err) {
-      console.error("[garmin callback]", err);
-      res.redirect("/#/settings?error=garmin");
-    }
-  });
-
-  app.get(
-    "/api/wearables/status",
-    requireAuth as any,
-    async (req: AuthRequest, res) => {
-      const fitbit = await storage.getWearableToken(req.user!.id, "fitbit");
-      const garmin = await storage.getWearableToken(req.user!.id, "garmin");
-      res.json({
-        fitbit: !!fitbit,
-        garmin: !!garmin,
-      });
-    }
-  );
-
-  app.post(
-    "/api/wearables/sync",
-    requireAuth as any,
-    async (req: AuthRequest, res) => {
-      const source = req.body.source as "fitbit" | "garmin";
-      try {
-        await syncUserWearable(req.user!.id, source);
-        res.json({ ok: true });
-      } catch (err) {
-        res.status(500).json({ error: "Sync failed" });
-      }
-    }
-  );
-
-  // Activity (wearable data for UI)
+  // Activity (manual daily activity rows for UI)
   app.get(
     "/api/activity",
     requireAuth as any,
@@ -1175,242 +1012,6 @@ export async function registerRoutes(
     }
   );
 
-  // ── Garmin MVP (unofficial garmin-connect integration) ──────────────────────
-
-  // Connect Garmin via email/password
-  app.post(
-    "/api/garmin/connect",
-    requireAuth as any,
-    async (req: AuthRequest, res) => {
-      try {
-        const schema = z.object({
-          email: z.string().email(),
-          password: z.string().min(1),
-        });
-        const { email, password } = schema.parse(req.body);
-        const result = await garminLogin(req.user!.id, email, password);
-        if (!result.ok) {
-          return res.status(401).json({ error: result.error });
-        }
-        // Kick off initial sync in background
-        syncGarminData(req.user!.id).catch(console.error);
-        res.json({ ok: true });
-      } catch (err: any) {
-        if (err.name === "ZodError") {
-          return res.status(400).json({ error: err.errors[0].message });
-        }
-        console.error("[garmin/connect]", err);
-        res.status(500).json({ error: "Garmin connection failed" });
-      }
-    }
-  );
-
-  // Get Garmin connection status + latest summary
-  app.get(
-    "/api/garmin/status",
-    requireAuth as any,
-    async (req: AuthRequest, res) => {
-      try {
-        const status = await getGarminStatus(req.user!.id);
-        const date = (req.query.date as string) || new Date().toISOString().slice(0, 10);
-        const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
-        let summary = status.connected ? await getGarminSummary(req.user!.id, date) : null;
-        if (!summary && status.connected) {
-          summary = await getGarminSummary(req.user!.id, yesterday);
-        }
-        res.json({ ...status, summary });
-      } catch (err) {
-        console.error("[garmin/status]", err);
-        res.status(500).json({ error: "Failed to get Garmin status" });
-      }
-    }
-  );
-
-  // Sync / refresh Garmin data
-  app.post(
-    "/api/garmin/sync",
-    requireAuth as any,
-    async (req: AuthRequest, res) => {
-      try {
-        const result = await syncGarminData(req.user!.id);
-        if (!result.ok) {
-          return res.status(400).json({ error: result.error });
-        }
-        const today = new Date().toISOString().slice(0, 10);
-        const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
-        let summary = await getGarminSummary(req.user!.id, today);
-        if (!summary) {
-          summary = await getGarminSummary(req.user!.id, yesterday);
-        }
-        res.json({ ok: true, categories: result.categories, summary });
-      } catch (err: any) {
-        console.error("[garmin/sync]", err);
-        res.status(500).json({ error: err?.message || "Sync failed" });
-      }
-    }
-  );
-
-  // Disconnect Garmin
-  app.delete(
-    "/api/garmin/disconnect",
-    requireAuth as any,
-    async (req: AuthRequest, res) => {
-      try {
-        await disconnectGarmin(req.user!.id);
-        res.json({ ok: true });
-      } catch (err) {
-        console.error("[garmin/disconnect]", err);
-        res.status(500).json({ error: "Disconnect failed" });
-      }
-    }
-  );
-
-  // Import Garmin DI token (available to all authenticated users)
-  app.post(
-    "/api/garmin/import-di-token",
-    requireAuth as any,
-    async (req: AuthRequest, res) => {
-      try {
-        const schema = z.object({
-          di_token: z.string().min(1, "di_token is required"),
-          di_refresh_token: z.string().min(1, "di_refresh_token is required"),
-          di_client_id: z.string().min(1, "di_client_id is required"),
-        });
-        const { di_token, di_refresh_token, di_client_id } = schema.parse(req.body);
-        const result = await importDiToken(req.user!.id, di_token, di_refresh_token, di_client_id);
-        if (!result.ok) {
-          return res.status(400).json({ error: result.error });
-        }
-        // Kick off initial sync in background
-        syncGarminData(req.user!.id).catch(console.error);
-        res.json({ ok: true });
-      } catch (err: any) {
-        if (err.name === "ZodError") {
-          return res.status(400).json({ error: err.errors[0].message });
-        }
-        console.error("[garmin/import-di-token]", err);
-        res.status(500).json({ error: "DI token import failed" });
-      }
-    }
-  );
-
-  // Get effective weight (considering Garmin vs manual precedence)
-  app.get(
-    "/api/weight/effective",
-    requireAuth as any,
-    async (req: AuthRequest, res) => {
-      try {
-        const logs = await storage.getWeightLogs(req.user!.id, 1);
-        const latest = logs[0];
-        res.json({
-          weightKg: latest?.weightKg ?? req.user!.weightKg ?? null,
-          source: (latest as any)?.source ?? "manual",
-          date: latest?.date ?? null,
-        });
-      } catch (err) {
-        res.status(500).json({ error: "Failed to get effective weight" });
-      }
-    }
-  );
-
-  // ── Dev / Testing ──────────────────────────────────────────────────────────
-  // Seed 7 days of fake Garmin sleep data for the authenticated user.
-  // Gated to non-production environments so it can never run on prod.
-  // Usage: POST /api/dev/seed-garmin-sleep  (no body needed)
-  app.post(
-    "/api/dev/seed-garmin-sleep",
-    requireAuth as any,
-    async (req: AuthRequest, res) => {
-      if (process.env.NODE_ENV === "production") {
-        return res.status(403).json({ error: "Not available in production" });
-      }
-      try {
-        const userId = req.user!.id;
-
-        // Ensure a garmin_sessions row exists so getGarminCoachContext sees status=connected
-        await pool.query(
-          `INSERT INTO garmin_sessions (user_id, encrypted_tokens, status, token_type, updated_at)
-           VALUES ($1, 'seed', 'connected', 'seed', now())
-           ON CONFLICT (user_id) DO UPDATE SET
-             status = 'connected',
-             token_type = 'seed',
-             last_error = NULL,
-             updated_at = now()`,
-          [userId]
-        );
-
-        // Realistic sleep data for a collegiate powerlifter — slight fatigue trend
-        // heading into a meet week (scores drop, less deep sleep)
-        const seedDays = [
-          { daysAgo: 7, durMin: 452, score: 79, deep: 72, rem: 88, light: 252, awake: 18, hrv: 62, rhr: 52 },
-          { daysAgo: 6, durMin: 438, score: 75, deep: 68, rem: 82, light: 243, awake: 21, hrv: 58, rhr: 53 },
-          { daysAgo: 5, durMin: 461, score: 81, deep: 80, rem: 91, light: 248, awake: 15, hrv: 65, rhr: 51 },
-          { daysAgo: 4, durMin: 423, score: 71, deep: 58, rem: 76, light: 244, awake: 27, hrv: 54, rhr: 55 },
-          { daysAgo: 3, durMin: 445, score: 74, deep: 64, rem: 85, light: 249, awake: 22, hrv: 57, rhr: 54 },
-          { daysAgo: 2, durMin: 397, score: 66, deep: 50, rem: 70, light: 238, awake: 31, hrv: 49, rhr: 57 },
-          { daysAgo: 1, durMin: 418, score: 69, deep: 55, rem: 78, light: 241, awake: 28, hrv: 52, rhr: 56 },
-        ];
-
-        const now = Date.now();
-        let inserted = 0;
-
-        for (const d of seedDays) {
-          const dateStr = new Date(now - d.daysAgo * 86400000).toISOString().slice(0, 10);
-          await pool.query(
-            `INSERT INTO garmin_daily_summary (
-              user_id, date,
-              sleep_duration_min, sleep_score,
-              deep_sleep_min, light_sleep_min, rem_sleep_min, awake_sleep_min,
-              avg_overnight_hrv, hrv_status,
-              resting_heart_rate,
-              total_steps, calories_burned, active_minutes,
-              synced_at
-            ) VALUES (
-              $1, $2,
-              $3, $4,
-              $5, $6, $7, $8,
-              $9, $10,
-              $11,
-              $12, $13, $14,
-              now()
-            )
-            ON CONFLICT (user_id, date) DO UPDATE SET
-              sleep_duration_min = $3,
-              sleep_score        = $4,
-              deep_sleep_min     = $5,
-              light_sleep_min    = $6,
-              rem_sleep_min      = $7,
-              awake_sleep_min    = $8,
-              avg_overnight_hrv  = $9,
-              hrv_status         = $10,
-              resting_heart_rate = $11,
-              synced_at          = now()`,
-            [
-              userId, dateStr,
-              d.durMin, d.score,
-              d.deep, d.light, d.rem, d.awake,
-              d.hrv, "BALANCED",
-              d.rhr,
-              8000 + Math.floor(Math.random() * 4000),  // steps
-              300 + Math.floor(Math.random() * 200),     // calories
-              45 + Math.floor(Math.random() * 30),       // active minutes
-            ]
-          );
-          inserted++;
-        }
-
-        res.json({
-          ok: true,
-          inserted,
-          message: `Seeded ${inserted} days of fake Garmin sleep data for user ${userId}. The AI coach will now include sleep history context.`,
-        });
-      } catch (err: any) {
-        console.error("[dev/seed-garmin-sleep]", err);
-        res.status(500).json({ error: err.message });
-      }
-    }
-  );
-
   // ── Background Job Triggers (for Railway cron or external triggers) ────────
 
   app.post("/api/jobs/scrape", async (req, res) => {
@@ -1421,15 +1022,6 @@ export async function registerRoutes(
     const date = (req.body.date as string) ?? todayString();
     scrapeAllLocations(date).catch(console.error);
     res.json({ ok: true, date });
-  });
-
-  app.post("/api/jobs/sync-wearables", async (req, res) => {
-    const secret = req.headers["x-cron-secret"];
-    if (secret !== CRON_SECRET) {
-      return res.status(401).json({ error: "Unauthorized" });
-    }
-    // would iterate all users in production
-    res.json({ ok: true });
   });
 
   // ── Dashboard summary ──────────────────────────────────────────────────────
@@ -1462,22 +1054,12 @@ export async function registerRoutes(
           { calories: 0, protein: 0, carbs: 0, fat: 0 }
         );
 
-        // Wearable activity
-        let burnCalories: number | undefined;
-        const activities = await storage.getDailyActivity(user.id, date);
-        if (activities.length > 0) {
-          burnCalories = activities.reduce(
-            (sum, a) => sum + (a.caloriesBurned ?? 0),
-            0
-          );
-        }
-
         // Recent weight — must be fetched before computeDailyTargets
         const recentWeights = await storage.getWeightLogs(user.id, 7);
 
         // Targets — pass most recent weight so tier+buffer uses real current weight
         const mostRecentForTargets = recentWeights[0]?.weightKg ?? user.weightKg;
-        const targets = computeDailyTargets(user, burnCalories, date, mostRecentForTargets);
+        const targets = computeDailyTargets(user, undefined, date, mostRecentForTargets);
 
         // Recent activity (7 days)
         const recentActivity = await storage.getRecentActivity(user.id, 7);

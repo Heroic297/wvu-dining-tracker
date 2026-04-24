@@ -91,34 +91,9 @@ export const api = {
   logWater: (date: string, mlLogged: number) =>
     apiRequest("POST", "/api/water", { date, mlLogged }),
 
-  // Wearables
-  getWearableStatus: () => apiRequest("GET", "/api/wearables/status"),
-  getFitbitAuthUrl: () => apiRequest("GET", "/api/wearables/fitbit/connect"),
-  getGarminAuthUrl: () => apiRequest("GET", "/api/wearables/garmin/connect"),
-  disconnectWearable: (source: string) =>
-    apiRequest("DELETE", `/api/wearables/${source}`),
-  syncWearable: (source: string) =>
-    apiRequest("POST", "/api/wearables/sync", { source }),
-
   // Activity
   getActivity: (days?: number) =>
     apiRequest("GET", `/api/activity${days ? `?days=${days}` : ""}`),
-
-  // Garmin MVP
-  garminConnect: (email: string, password: string) =>
-    apiRequest("POST", "/api/garmin/connect", { email, password }),
-  garminStatus: (date?: string) =>
-    apiRequest("GET", `/api/garmin/status${date ? `?date=${date}` : ""}`),
-  garminSync: () =>
-    apiRequest("POST", "/api/garmin/sync"),
-  garminDisconnect: () =>
-    apiRequest("DELETE", "/api/garmin/disconnect"),
-  garminImportDiToken: (diToken: string, diRefreshToken: string, diClientId: string) =>
-    apiRequest("POST", "/api/garmin/import-di-token", {
-      di_token: diToken, di_refresh_token: diRefreshToken, di_client_id: diClientId,
-    }),
-  getEffectiveWeight: () =>
-    apiRequest("GET", "/api/weight/effective"),
 
   // AI Coach
   coachChat: (message: string) =>

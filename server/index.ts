@@ -152,84 +152,17 @@ async function runMigrations() {
       await pool.query(`ALTER TYPE nutrition_source ADD VALUE IF NOT EXISTS 'open_food_facts'`);
     } catch { /* already exists */ }
 
-    // ── Garmin MVP tables ──────────────────────────────────────────────────
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS garmin_sessions (
-        id              VARCHAR(36) PRIMARY KEY DEFAULT gen_random_uuid(),
-        user_id         VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE UNIQUE,
-        encrypted_tokens TEXT NOT NULL,
-        status          TEXT NOT NULL DEFAULT 'connected',
-        last_sync_at    TIMESTAMPTZ,
-        last_error      TEXT,
-        created_at      TIMESTAMPTZ DEFAULT now(),
-        updated_at      TIMESTAMPTZ DEFAULT now()
-      )
-    `);
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS garmin_daily_summary (
-        id                  VARCHAR(36) PRIMARY KEY DEFAULT gen_random_uuid(),
-        user_id             VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        date                DATE NOT NULL,
-        total_steps         INTEGER,
-        calories_burned     INTEGER,
-        active_minutes      INTEGER,
-        sleep_duration_min  INTEGER,
-        deep_sleep_min      INTEGER,
-        light_sleep_min     INTEGER,
-        rem_sleep_min       INTEGER,
-        awake_sleep_min     INTEGER,
-        sleep_score         INTEGER,
-        resting_heart_rate  INTEGER,
-        max_heart_rate      INTEGER,
-        avg_stress          INTEGER,
-        body_battery_high   INTEGER,
-        body_battery_low    INTEGER,
-        avg_overnight_hrv   REAL,
-        hrv_status          TEXT,
-        weight_kg           REAL,
-        body_fat_pct        REAL,
-        recent_activities   JSONB,
-        raw_payload         JSONB,
-        synced_at           TIMESTAMPTZ DEFAULT now(),
-        UNIQUE(user_id, date)
-      )
-    `);
-    // Add token_type column to garmin_sessions for DI token support
-    await pool.query(`
-      ALTER TABLE garmin_sessions ADD COLUMN IF NOT EXISTS token_type TEXT NOT NULL DEFAULT 'garmin-connect'
-    `);
     // Add source column to weight_log if missing
     await pool.query(`
       ALTER TABLE weight_log ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'manual'
     `);
 
-    // ── Apple Health ──────────────────────────────────────────────────────
-    try { await pool.query(`ALTER TYPE wearable_source ADD VALUE IF NOT EXISTS 'apple_health'`); } catch { /* already exists */ }
-    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS apple_health_token TEXT`);
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS apple_health_daily (
-        id                 VARCHAR(36) PRIMARY KEY DEFAULT gen_random_uuid(),
-        user_id            VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        date               DATE NOT NULL,
-        total_steps        INTEGER,
-        calories_burned    INTEGER,
-        active_minutes     INTEGER,
-        sleep_duration_min INTEGER,
-        deep_sleep_min     INTEGER,
-        rem_sleep_min      INTEGER,
-        resting_heart_rate INTEGER,
-        avg_overnight_hrv  REAL,
-        weight_kg          REAL,
-        body_fat_pct       REAL,
-        synced_at          TIMESTAMPTZ DEFAULT now(),
-        UNIQUE(user_id, date)
-      )
-    `);
-
-    // ── Apple Health extra columns (workouts, VO2, respiratory) ─────────
-    await pool.query(`ALTER TABLE apple_health_daily ADD COLUMN IF NOT EXISTS workouts JSONB`);
-    await pool.query(`ALTER TABLE apple_health_daily ADD COLUMN IF NOT EXISTS vo2_max REAL`);
-    await pool.query(`ALTER TABLE apple_health_daily ADD COLUMN IF NOT EXISTS respiratory_rate REAL`);
+    // ── Wearables teardown: drop removed integration tables ─────────────────
+    await pool.query(`DROP TABLE IF EXISTS wearable_tokens`);
+    await pool.query(`DROP TABLE IF EXISTS garmin_sessions`);
+    await pool.query(`DROP TABLE IF EXISTS garmin_daily_summary`);
+    await pool.query(`DROP TABLE IF EXISTS apple_health_daily`);
+    await pool.query(`ALTER TABLE users DROP COLUMN IF EXISTS apple_health_token`);
 
     // ── Micronutrient columns on user_meal_items ──────────────────────────
     await pool.query(`ALTER TABLE user_meal_items ADD COLUMN IF NOT EXISTS fiber_g REAL`);

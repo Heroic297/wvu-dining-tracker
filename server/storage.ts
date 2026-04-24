@@ -6,7 +6,6 @@ import { db, pool } from "./db.js";
 import { eq, and, desc, sql, gte, lte } from "drizzle-orm";
 import {
   users,
-  wearableTokens,
   dailyActivity,
   diningLocations,
   diningMenus,
@@ -19,8 +18,6 @@ import {
   inviteCodes,
   type User,
   type InsertUser,
-  type WearableToken,
-  type InsertWearableToken,
   type DailyActivity,
   type InsertDailyActivity,
   type DiningLocation,
@@ -49,12 +46,6 @@ export interface IStorage {
   getUserByEmail(email: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
   updateUser(id: string, data: Partial<InsertUser>): Promise<User | undefined>;
-
-  // Wearables
-  getWearableToken(userId: string, source: string): Promise<WearableToken | undefined>;
-  getAllWearableTokens(): Promise<WearableToken[]>;
-  upsertWearableToken(token: InsertWearableToken): Promise<WearableToken>;
-  deleteWearableToken(userId: string, source: string): Promise<void>;
 
   // Daily Activity
   getDailyActivity(userId: string, date: string): Promise<DailyActivity[]>;
@@ -154,55 +145,6 @@ export class PgStorage implements IStorage {
       .where(eq(users.id, id))
       .returning();
     return row;
-  }
-
-  // ── Wearables ──────────────────────────────────────────────────────────────
-
-  async getWearableToken(userId: string, source: string) {
-    const [row] = await db
-      .select()
-      .from(wearableTokens)
-      .where(
-        and(
-          eq(wearableTokens.userId, userId),
-          eq(wearableTokens.source, source as any)
-        )
-      );
-    return row;
-  }
-
-  async upsertWearableToken(token: InsertWearableToken) {
-    const [row] = await db
-      .insert(wearableTokens)
-      .values(token)
-      .onConflictDoUpdate({
-        target: [wearableTokens.userId, wearableTokens.source],
-        set: {
-          accessToken: token.accessToken,
-          refreshToken: token.refreshToken,
-          expiresAt: token.expiresAt,
-          scope: token.scope,
-          rawPayload: token.rawPayload,
-          updatedAt: sql`now()`,
-        },
-      })
-      .returning();
-    return row;
-  }
-
-  async getAllWearableTokens() {
-    return db.select().from(wearableTokens);
-  }
-
-  async deleteWearableToken(userId: string, source: string) {
-    await db
-      .delete(wearableTokens)
-      .where(
-        and(
-          eq(wearableTokens.userId, userId),
-          eq(wearableTokens.source, source as any)
-        )
-      );
   }
 
   // ── Daily Activity ─────────────────────────────────────────────────────────
