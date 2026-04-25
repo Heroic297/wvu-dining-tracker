@@ -1,15 +1,11 @@
 import { Link } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
 import { cn } from "@/lib/utils";
-import { useAuth } from "@/contexts/AuthContext";
 import { PRIMARY_TABS } from "@/lib/nav-config";
 
 export default function BottomTabBar() {
   const [loc] = useHashLocation();
-  const { user } = useAuth();
-
-  const showPhysique = user?.enablePhysiqueTracking === true;
-  const tabs = PRIMARY_TABS.filter(t => !t.requiresPhysique || showPhysique);
+  const tabs = PRIMARY_TABS;
 
   return (
     <nav className="fixed bottom-0 inset-x-0 z-40 md:hidden border-t border-white/5 bg-slate-950/80 backdrop-blur-xl safe-area-bottom">

@@ -120,7 +120,7 @@ body {
   color: hsl(var(--foreground));
   font-family: var(--font-body);
   font-size: 1rem;
-  line-height: 1.6;
+  line-height: 1.45;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -134,10 +134,50 @@ h1, h2, h3, h4, h5, h6 {
 
 /* ─────────────────────────────────────────────
    Macro color utilities
+   Blue protein / amber carbs / rose fat
+   (matches UI ring and bar colors throughout)
 ───────────────────────────────────────────── */
-.macro-protein { color: var(--color-protein); }
-.macro-carbs   { color: var(--color-carbs); }
-.macro-fat     { color: var(--color-fat); }
+:root {
+  --macro-protein: #60a5fa;
+  --macro-carbs:   #f59e0b;
+  --macro-fat:     #fb7185;
+}
+.macro-protein { color: var(--macro-protein); }
+.macro-carbs   { color: var(--macro-carbs); }
+.macro-fat     { color: var(--macro-fat); }
+
+/* ─────────────────────────────────────────────
+   Type scale utilities
+───────────────────────────────────────────── */
+.text-display {
+  font-family: var(--font-display);
+  font-size: clamp(1.75rem, 5vw, 2.5rem);
+  font-weight: 800;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+.text-title {
+  font-family: var(--font-display);
+  font-size: 1.125rem;
+  font-weight: 700;
+  line-height: 1.25;
+}
+.text-body {
+  font-size: 0.9375rem;
+  line-height: 1.45;
+}
+.text-meta {
+  font-size: 0.6875rem;
+  line-height: 1.4;
+  color: hsl(var(--muted-foreground));
+}
+
+/* Standardised 150ms transitions for interactive elements */
+.transition-fast {
+  transition-property: color, background-color, border-color, box-shadow, opacity, transform;
+  transition-duration: 150ms;
+  transition-timing-function: ease-out;
+}
 
 /* ─────────────────────────────────────────────
    Track ring animation

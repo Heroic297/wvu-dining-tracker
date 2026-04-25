@@ -35,9 +35,7 @@ function LogoMark({ size = 28 }: { size?: number }) {
 export default function TopNav() {
   const [loc] = useHashLocation();
   const { user, logout } = useAuth();
-  const showPhysique = user?.enablePhysiqueTracking === true;
-
-  const visibleTabs = PRIMARY_TABS.filter(t => !t.requiresPhysique || showPhysique);
+  const visibleTabs = PRIMARY_TABS;
   const initials = (user?.displayName ?? user?.email ?? "?")[0].toUpperCase();
 
   return (

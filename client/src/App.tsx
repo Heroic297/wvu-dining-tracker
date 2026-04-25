@@ -1,4 +1,4 @@
-import { Route, Router, Switch } from "wouter";
+import { Route, Router, Switch, Redirect } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
@@ -9,9 +9,7 @@ import Layout from "@/components/Layout";
 import LoginPage from "@/pages/LoginPage";
 import OnboardingPage from "@/pages/OnboardingPage";
 import DashboardPage from "@/pages/DashboardPage";
-import LogMealPage from "@/pages/LogMealPage";
-import HistoryPage from "@/pages/HistoryPage";
-import DietPlanPage from "@/pages/DietPlanPage";
+import NutritionPage from "@/pages/NutritionPage";
 import SettingsPage from "@/pages/SettingsPage";
 import InvitePage from "@/pages/InvitePage";
 import CoachPage from "@/pages/CoachPage";
@@ -44,15 +42,18 @@ function AppRoutes() {
     <Layout>
       <Switch>
         <Route path="/" component={DashboardPage} />
-        <Route path="/log" component={LogMealPage} />
-        <Route path="/history" component={HistoryPage} />
-        <Route path="/plan" component={DietPlanPage} />
+        <Route path="/nutrition" component={NutritionPage} />
+        <Route path="/training" component={TrainingPage} />
         <Route path="/settings" component={SettingsPage} />
         <Route path="/wearables" component={WearablesPage} />
         <Route path="/invites" component={InvitePage} />
         <Route path="/coach" component={CoachPage} />
         <Route path="/physique" component={PhysiquePage} />
-        <Route path="/train" component={TrainingPage} />
+        {/* Backwards-compat redirects */}
+        <Route path="/log"><Redirect to="/nutrition?tab=log" /></Route>
+        <Route path="/history"><Redirect to="/nutrition?tab=history" /></Route>
+        <Route path="/plan"><Redirect to="/nutrition?tab=plan" /></Route>
+        <Route path="/train"><Redirect to="/training" /></Route>
         <Route component={NotFoundPage} />
       </Switch>
     </Layout>
