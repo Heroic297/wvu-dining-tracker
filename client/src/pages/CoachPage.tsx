@@ -10,7 +10,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import CoachBriefCard from '../components/CoachBriefCard';
 
 import {
   Brain,
@@ -1016,8 +1015,6 @@ export default function CoachPage() {
                   </SheetTitle>
                 </SheetHeader>
                 <div className="mt-4">{sidebarContent}</div>
-                <div className="border-t border-border my-4" />
-                <CoachBriefCard />
               </SheetContent>
             </Sheet>
           </div>
@@ -1085,8 +1082,6 @@ export default function CoachPage() {
       {/* ── Desktop sidebar ── */}
       <div className="hidden lg:flex flex-col w-72 border-l border-border overflow-y-auto p-4 flex-shrink-0">
         {sidebarContent}
-        {sidebarContent && <div className="border-t border-border my-4" />}
-        <CoachBriefCard />
       </div>
     </div>
   );
