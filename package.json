@@ -61,7 +61,6 @@
     "express": "^5.0.1",
     "express-session": "^1.18.1",
     "framer-motion": "^11.13.1",
-    "groq-sdk": "^1.1.1",
     "input-otp": "^1.4.2",
     "jsonwebtoken": "^9.0.3",
     "lucide-react": "^0.453.0",

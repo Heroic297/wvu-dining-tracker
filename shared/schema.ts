@@ -94,8 +94,6 @@ export const users = pgTable("users", {
   waterBottles: jsonb("water_bottles").$type<Array<{id: string; name: string; mlSize: number}>>(),
   /** Preferred display unit for water */
   waterUnit: text("water_unit").$type<"ml" | "oz" | "L" | "gal">().default("oz"),
-  // Physique tracking
-  enablePhysiqueTracking: boolean("enable_physique_tracking").default(false),
   // Onboarding
   onboardingComplete: boolean("onboarding_complete").default(false),
   // AI Coach — per-provider encrypted API keys (AES-256-GCM, hex-encoded iv:tag:ciphertext)
@@ -559,35 +557,6 @@ export const insertSupplementLogSchema = createInsertSchema(supplementLogs).omit
 });
 export type InsertSupplementLog = z.infer<typeof insertSupplementLogSchema>;
 export type SupplementLog = typeof supplementLogs.$inferSelect;
-
-// ─── Physique Photos ─────────────────────────────────────────────────────────
-
-export const physiquePhotos = pgTable(
-  "physique_photos",
-  {
-    id: varchar("id", { length: 36 })
-      .primaryKey()
-      .default(sql`gen_random_uuid()`),
-    userId: varchar("user_id", { length: 36 })
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-    photoUrl: text("photo_url").notNull(),
-    weightKg: real("weight_kg"),
-    bodyFatPct: real("body_fat_pct"),
-    notes: text("notes"),
-    photoDate: date("photo_date").notNull(),
-    groqAnalysis: text("groq_analysis"),
-    createdAt: timestamp("created_at").default(sql`now()`),
-  },
-  (t) => [index("physique_photos_user_date").on(t.userId, t.photoDate)]
-);
-
-export const insertPhysiquePhotoSchema = createInsertSchema(physiquePhotos).omit({
-  id: true,
-  createdAt: true,
-});
-export type InsertPhysiquePhoto = z.infer<typeof insertPhysiquePhotoSchema>;
-export type PhysiquePhoto = typeof physiquePhotos.$inferSelect;
 
 // ─── Training Programs ───────────────────────────────────────────────────────
 

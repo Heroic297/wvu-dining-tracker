@@ -14,24 +14,17 @@
 import type { Express, Response } from "express";
 import { pool } from "./db.js";
 import { requireAuth, type AuthRequest } from "./auth.js";
+import { callAIChat } from "./ai.js";
 import { z } from "zod";
 
 // ─── Helper functions (internal) ─────────────────────────────────────────────
 
 async function parseWithGroq(rawText: string): Promise<any> {
-  const groqKey = process.env.GROQ_API_KEY!;
-  const resp = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${groqKey}`,
-    },
-    body: JSON.stringify({
-      model: "llama-3.3-70b-versatile",
-      messages: [
-        {
-          role: "system",
-          content: `You are a training program parser. You receive raw text (often CSV or pasted text) representing a strength/powerlifting/hypertrophy training program. Your job is to extract the structured program data and return ONLY valid JSON — no markdown, no explanation, no code fences.
+  const data = await callAIChat(
+    [
+      {
+        role: "system",
+        content: `You are a training program parser. You receive raw text (often CSV or pasted text) representing a strength/powerlifting/hypertrophy training program. Your job is to extract the structured program data and return ONLY valid JSON — no markdown, no explanation, no code fences.
 
 Output schema:
 {
@@ -60,17 +53,14 @@ Rules:
 - rpe and notes can be null if not present.
 - Preserve exercise order as written.
 - If a day label is not clear, use "Day 1", "Day 2", etc.`,
-        },
-        {
-          role: "user",
-          content: `Parse this training program:\n\n${rawText.slice(0, 12000)}`,
-        },
-      ],
-      max_tokens: 8192,
-      temperature: 0.05,
-    }),
-  });
-  const data = await resp.json();
+      },
+      {
+        role: "user",
+        content: `Parse this training program:\n\n${rawText.slice(0, 12000)}`,
+      },
+    ],
+    { maxTokens: 8192, temperature: 0.05 }
+  );
   const content = data.choices?.[0]?.message?.content ?? "{}";
 
   // Strip markdown code fences if present
@@ -269,28 +259,17 @@ async function extractSpreadsheet(base64: string, ext: string): Promise<Spreadsh
 }
 
 async function generateProgram(params: any): Promise<string> {
-  const groqKey = process.env.GROQ_API_KEY!;
   const prompt = `Generate a complete ${params.daysPerWeek}-day per week training program.
 Goal: ${params.goal}
 Experience level: ${params.experienceLevel}
 Equipment: ${params.equipment}
 Include: exercise names, sets, reps, weight guidance (% of 1RM or RPE), and progression notes.
 Format as a clear weekly program with Day 1, Day 2, etc.`;
-  const resp = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${groqKey}`,
-    },
-    body: JSON.stringify({
-      model: "llama-3.3-70b-versatile",
-      messages: [{ role: "user", content: prompt }],
-      max_tokens: 4096,
-      temperature: 0.7,
-    }),
+  const result = await callAIChat([{ role: "user", content: prompt }], {
+    maxTokens: 4096,
+    temperature: 0.7,
   });
-  const data = await resp.json();
-  return data.choices?.[0]?.message?.content ?? "";
+  return result.choices?.[0]?.message?.content ?? "";
 }
 
 // Column aliases so the API returns camelCase keys the client expects

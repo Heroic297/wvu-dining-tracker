@@ -13,7 +13,7 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { ChevronRight, ChevronLeft, User, Target, Droplets, Camera, Dumbbell } from "lucide-react";
+import { ChevronRight, ChevronLeft, User, Target, Droplets, Dumbbell } from "lucide-react";
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -31,7 +31,6 @@ const schema = z.object({
   waterUnit: z.enum(["oz", "ml", "L"]).optional(),
   waterBottleName: z.string().optional(),
   waterBottleMl: z.number().optional(),
-  enablePhysiqueTracking: z.boolean().optional(),
   trainingDays: z.array(z.number()).optional(),
   meetDate: z.string().optional(),
   enableWaterCut: z.boolean().optional(),
@@ -44,14 +43,12 @@ const STEP_FIELDS: Record<number, (keyof FormData)[]> = {
   1: ["goalType"],
   2: [],
   3: [],
-  4: [],
 };
 
 const STEP_META = [
   { title: "Body stats",        subtitle: "Used to calculate your calorie targets",    icon: User     },
   { title: "Goal setting",      subtitle: "What are you working toward?",              icon: Target   },
   { title: "Hydration",         subtitle: "Optional water intake tracking",            icon: Droplets },
-  { title: "Physique tracking", subtitle: "Optional progress photo tracking",          icon: Camera   },
   { title: "Powerlifting",      subtitle: "Configure your training and meet",          icon: Dumbbell },
 ];
 
@@ -76,7 +73,6 @@ export default function OnboardingPage() {
       goalType: "maintenance",
       enableWaterTracking: false,
       waterUnit: "oz",
-      enablePhysiqueTracking: false,
       trainingDays: [1, 3, 5],
       enableWaterCut: false,
     },
@@ -86,8 +82,8 @@ export default function OnboardingPage() {
   const isPowerlifting = goalType?.includes("powerlifting");
 
   const steps = [
-    ...STEP_META.slice(0, 4),
-    ...(isPowerlifting ? [STEP_META[4]] : []),
+    ...STEP_META.slice(0, 3),
+    ...(isPowerlifting ? [STEP_META[3]] : []),
   ];
 
   const handleNext = async () => {
@@ -117,7 +113,6 @@ export default function OnboardingPage() {
         activityLevel: data.activityLevel,
         goalType: data.goalType,
         enableWaterTracking: data.enableWaterTracking ?? false,
-        enablePhysiqueTracking: data.enablePhysiqueTracking ?? false,
         onboardingComplete: true,
         burnMode: "tdee",
         ...(targetWeightKg !== undefined && { targetWeightKg }),
@@ -408,40 +403,8 @@ export default function OnboardingPage() {
                     </div>
                   )}
 
-                  {/* Step 3: Physique Tracking */}
-                  {step === 3 && (
-                    <div className="space-y-4">
-                      <p className="text-sm text-white/50">
-                        Upload progress photos over time. Stored privately, only visible to you.
-                      </p>
-                      <div className="flex items-center gap-3 p-3 rounded-xl bg-white/5 border border-white/8">
-                        <Checkbox
-                          id="enablePhysique"
-                          checked={form.watch("enablePhysiqueTracking")}
-                          onCheckedChange={(v) => form.setValue("enablePhysiqueTracking", !!v)}
-                        />
-                        <Label htmlFor="enablePhysique" className="cursor-pointer font-medium text-white/80">
-                          Enable physique tracking
-                        </Label>
-                      </div>
-                      {form.watch("enablePhysiqueTracking") && (
-                        <motion.div
-                          initial={{ opacity: 0, height: 0 }}
-                          animate={{ opacity: 1, height: "auto" }}
-                          className="space-y-1.5 overflow-hidden"
-                        >
-                          <div className="p-3 rounded-xl bg-primary/8 border border-primary/20 text-sm text-white/60 space-y-1">
-                            <p>A <strong className="text-white/80">Physique</strong> tab will appear in the app</p>
-                            <p>Upload front/side/back photos with date and weight</p>
-                            <p>AI-powered comparison notes included</p>
-                          </div>
-                        </motion.div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Step 4: Powerlifting */}
-                  {step === 4 && isPowerlifting && (
+                  {/* Step 3: Powerlifting */}
+                  {step === 3 && isPowerlifting && (
                     <div className="space-y-5">
                       <div className="space-y-2">
                         <Label className="text-white/70 text-xs">Training days</Label>

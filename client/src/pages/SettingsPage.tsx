@@ -10,7 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { CheckCircle, Loader2, Activity, Scale, Droplets, Plus, Trash2, Brain, Eye, EyeOff, Globe, Sun, Moon, LogOut, Target, Users, Download, HardDrive, AlertTriangle, X, ShieldAlert } from "lucide-react";
+import { Loader2, Activity, Scale, Droplets, Plus, Trash2, Brain, Globe, Sun, Moon, LogOut, Target, Users, ShieldAlert } from "lucide-react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -23,7 +23,6 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Checkbox } from "@/components/ui/checkbox";
-import { useQuery } from "@tanstack/react-query";
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -93,51 +92,6 @@ export default function SettingsPage() {
 
   const removeBottle = (id: string) => setWaterBottles(prev => prev.filter(b => b.id !== id));
 
-  // AI Coach — provider + key (simplified)
-  const [aiKeyInput, setAiKeyInput] = useState("");
-  const [showAiKey, setShowAiKey] = useState(false);
-  const [aiKeySaving, setAiKeySaving] = useState(false);
-  // selectedProvider tracks which tab is active in the UI right now
-  const [selectedProvider, setSelectedProvider] = useState<"groq"|"openrouter">("groq");
-  const { data: coachProfile } = useQuery({
-    queryKey: ["coachProfile"],
-    queryFn: () => api.coachProfile().then((r) => r.json()),
-  });
-
-  const savedProvider: string = (coachProfile as any)?.provider ?? "groq";
-  const savedModel: string   = (coachProfile as any)?.aiModel ?? "";
-  const hasOwnKey: boolean   = !!(coachProfile as any)?.hasOwnKey;
-  const savedKeys: Record<string, string | null> = (coachProfile as any)?.savedKeys ?? { groq: null, openrouter: null };
-  const hasGroqKey: boolean = !!(coachProfile as any)?.hasGroqKey;
-  const hasOpenrouterKey: boolean = !!(coachProfile as any)?.hasOpenrouterKey;
-
-  const PROVIDERS = [
-    { id: "groq"       as const, label: "Groq",        placeholder: "gsk_...",      url: "https://console.groq.com",    note: "Free tier — fast Llama models" },
-    { id: "openrouter" as const, label: "OpenRouter",   placeholder: "sk-or-v1-...", url: "https://openrouter.ai/keys",  note: "BYOK — many free models" },
-  ];
-  const activeProvider = PROVIDERS.find(p => p.id === selectedProvider) ?? PROVIDERS[0];
-  const providerHasKey = (id: string) => id === "groq" ? hasGroqKey : hasOpenrouterKey;
-
-  const saveAiKey = async () => {
-    const key = aiKeyInput.trim();
-    if (!key) return;
-    setAiKeySaving(true);
-    try {
-      // Save key for the selected provider only — does not touch the other provider's key
-      const res = await api.coachSaveApiKey(key, selectedProvider, "");
-      const data = await res.json();
-      if (!res.ok) { toast({ title: "Error", description: data.error ?? "Save failed", variant: "destructive" }); return; }
-      toast({ title: "API key saved", description: `${activeProvider.label} — ${data.masked}` });
-      setAiKeyInput("");
-      await queryClient.invalidateQueries({ queryKey: ["coachProfile"] });
-    } catch { toast({ title: "Failed to save key", variant: "destructive" }); }
-    finally { setAiKeySaving(false); }
-  };
-  const removeAiKey = async (provider: "groq" | "openrouter") => {
-    await api.coachDeleteApiKey(provider);
-    toast({ title: `${PROVIDERS.find(p => p.id === provider)?.label} key removed` });
-    await queryClient.invalidateQueries({ queryKey: ["coachProfile"] });
-  };
 
 
   const saveProfile = async () => {
@@ -441,96 +395,27 @@ export default function SettingsPage() {
       </section>
 
 
-      {/* AI Coach — provider + key */}
-      <section className="space-y-3">
+      {/* AI Coach */}
+      <section className="bg-card border border-border rounded-xl p-4 space-y-3">
         <div className="flex items-center gap-2">
           <Brain className="w-4 h-4 text-primary" />
           <h2 className="text-sm font-semibold">AI Coach</h2>
         </div>
-
-        {/* Per-provider saved key badges */}
-        {(hasGroqKey || hasOpenrouterKey) && (
-          <div className="space-y-1.5">
-            {PROVIDERS.map(p => {
-              if (!providerHasKey(p.id)) return null;
-              const isActive = savedProvider === p.id;
-              return (
-                <div key={p.id} className="flex items-center justify-between bg-secondary rounded-xl px-3 py-2">
-                  <div className="flex items-center gap-2">
-                    <CheckCircle className={`w-4 h-4 ${isActive ? "text-green-400" : "text-muted-foreground"}`} />
-                    <div>
-                      <p className="text-xs font-semibold">
-                        {p.label}
-                        {savedKeys[p.id] && <span className="text-muted-foreground font-normal"> — {savedKeys[p.id]}</span>}
-                        {isActive && <span className="text-green-400 font-normal"> (active)</span>}
-                      </p>
-                      {isActive && savedModel && (
-                        <p className="text-xs text-muted-foreground">
-                          Model: {savedModel.split("/").pop()?.replace(":free","") ?? savedModel} — select in Coach tab
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                  <Button size="sm" variant="destructive" onClick={() => removeAiKey(p.id)} className="h-7 text-xs">Remove</Button>
-                </div>
-              );
-            })}
+        <div className="flex items-center gap-2">
+          <div className="w-2 h-2 rounded-full bg-green-400" />
+          <span className="text-sm font-medium text-green-400">Connected</span>
+        </div>
+        <div className="space-y-1 text-sm text-muted-foreground">
+          <div className="flex justify-between">
+            <span>Model</span>
+            <span className="text-foreground font-medium">DeepSeek V4 Pro</span>
           </div>
-        )}
-
-        {/* Step 1: pick provider */}
-        <div className="space-y-1.5">
-          <p className="text-xs font-semibold">1. Select provider</p>
-          <div className="grid grid-cols-2 gap-1.5">
-            {PROVIDERS.map(p => (
-              <button
-                key={p.id}
-                onClick={() => setSelectedProvider(p.id)}
-                className={`py-2.5 px-1 rounded-xl border text-xs font-medium transition-colors flex flex-col items-center gap-0.5 ${
-                  selectedProvider === p.id
-                    ? "border-primary bg-primary/10 text-primary"
-                    : "border-border bg-secondary hover:border-primary/40"
-                }`}
-              >
-                <span>{p.label}{providerHasKey(p.id) ? " ✓" : ""}</span>
-                <span className={`text-[10px] font-normal ${ selectedProvider === p.id ? "text-primary/70" : "text-muted-foreground"}`}>{p.note}</span>
-              </button>
-            ))}
+          <div className="flex justify-between">
+            <span>Provider</span>
+            <span className="text-foreground font-medium">NVIDIA NIM</span>
           </div>
         </div>
-
-        {/* Step 2: paste key */}
-        <div className="space-y-1.5">
-          <p className="text-xs font-semibold">
-            2. Paste your {activeProvider.label} API key{" "}
-            <a href={activeProvider.url} target="_blank" rel="noopener noreferrer" className="underline text-primary font-normal">Get free key →</a>
-          </p>
-          <div className="flex gap-2">
-            <div className="relative flex-1">
-              <Input
-                type={showAiKey ? "text" : "password"}
-                placeholder={activeProvider.placeholder}
-                value={aiKeyInput}
-                onChange={e => setAiKeyInput(e.target.value)}
-                className="pr-8 text-sm h-9"
-                onKeyDown={e => { if (e.key === "Enter") saveAiKey(); }}
-              />
-              <button type="button" onClick={() => setShowAiKey(v => !v)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
-                {showAiKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-              </button>
-            </div>
-            <Button size="sm" onClick={saveAiKey} disabled={!aiKeyInput.trim() || aiKeySaving} className="h-9">
-              {aiKeySaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Save"}
-            </Button>
-          </div>
-          <p className="text-xs text-muted-foreground">
-            {providerHasKey(selectedProvider)
-              ? `${activeProvider.label} key saved — paste a new key to replace it.`
-              : `Without a key you get ${(coachProfile as any)?.dailyCap ?? 15} free messages/day via Groq.`}
-            {" "}Pick your AI model in the Coach tab after saving.
-          </p>
-        </div>
+        <p className="text-xs text-muted-foreground">AI is provided automatically — no API key required</p>
       </section>
 
       {/* Quick links */}
@@ -613,7 +498,6 @@ type HistoryCounts = {
   waterLogs: number;
   supplementLogs: number;
   workoutLogs: number;
-  physiquePhotos: number;
 };
 
 type HistoryScopeKey = keyof HistoryCounts | "coachMemory";
@@ -624,7 +508,6 @@ const SCOPE_LABELS: Record<HistoryScopeKey, { label: string; desc: string }> = {
   waterLogs:      { label: "Water log",        desc: "Daily ml totals" },
   supplementLogs: { label: "Supplement log",   desc: "Daily supplement servings (keeps supplements themselves)" },
   workoutLogs:    { label: "Workout log",      desc: "Training-log entries (keeps the program itself)" },
-  physiquePhotos: { label: "Physique photos",  desc: "Progress photos + AI analysis notes" },
   coachMemory:    { label: "Coach memory",     desc: "Chat history + the rolling summary (profile preferences kept)" },
 };
 
@@ -639,7 +522,6 @@ function DangerZone() {
     waterLogs: false,
     supplementLogs: false,
     workoutLogs: false,
-    physiquePhotos: false,
     coachMemory: false,
   });
   const [counts, setCounts] = useState<HistoryCounts | null>(null);
@@ -701,13 +583,12 @@ function DangerZone() {
         waterLogs:      scopes.waterLogs,
         supplementLogs: scopes.supplementLogs,
         workoutLogs:    scopes.workoutLogs,
-        physiquePhotos: scopes.physiquePhotos,
         coachMemory:    scopes.coachMemory,
       });
       const { deleted } = await res.json();
       const total =
         deleted.meals + deleted.weightLogs + deleted.waterLogs +
-        deleted.supplementLogs + deleted.workoutLogs + deleted.physiquePhotos;
+        deleted.supplementLogs + deleted.workoutLogs;
       toast({
         title: "History cleared",
         description: `Removed ${total} row${total === 1 ? "" : "s"}${deleted.coachMemoryCleared ? " + coach memory" : ""}.`,

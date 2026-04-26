@@ -71,12 +71,9 @@ interface CoachProfile {
   notes?: string;
   coachTone?: "coach" | "data" | "balanced";
   rollingSummary?: string;
-  hasOwnKey: boolean;
-  dailyUsage: number;
-  dailyCap: number;
-  provider?: string;
   aiModel?: string;
-  modelCatalog?: Record<string, Array<{ id: string; label: string; description: string }>>;
+  aiProvider?: string;
+  status?: string;
 }
 
 // ─── Onboarding Q+A ──────────────────────────────────────────────────────────
@@ -579,30 +576,6 @@ function CoachKnows({
             </p>
           )}
 
-          {/* Usage meter */}
-          {!profile.hasOwnKey && (
-            <div className="border-t border-border pt-3 space-y-1.5">
-              <p className="text-xs text-muted-foreground font-medium">Free messages today</p>
-              <div className="h-1.5 bg-secondary rounded-full overflow-hidden">
-                <div
-                  className="h-full rounded-full bg-primary transition-all"
-                  style={{ width: `${Math.min(100, (profile.dailyUsage / profile.dailyCap) * 100)}%` }}
-                />
-              </div>
-              <p className="text-xs text-muted-foreground">
-                {profile.dailyUsage} / {profile.dailyCap} used
-                {profile.dailyUsage >= profile.dailyCap && " — add your API key in Settings for unlimited"}
-              </p>
-            </div>
-          )}
-
-          {profile.hasOwnKey && (
-            <div className="flex items-center gap-2 text-xs text-green-400">
-              <Check className="w-3.5 h-3.5" />
-              <span>API key active — unlimited messages</span>
-            </div>
-          )}
-
           {/* Clear memory */}
           <div className="border-t border-border pt-3">
             <AlertDialog>
@@ -783,7 +756,6 @@ export default function CoachPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
-  const [showNeedKey, setShowNeedKey] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLInputElement>(null);
 
@@ -828,31 +800,13 @@ export default function CoachPage() {
         { role: "assistant", content: "Thinking...", pending: true },
       ]);
       setIsStreaming(true);
-      setShowNeedKey(false);
     },
     onSuccess: (data) => {
       setIsStreaming(false);
-      if (data.needsKey) {
-        setShowNeedKey(true);
+      if (data.error) {
         setMessages((prev) => [
           ...prev.slice(0, -1),
           { role: "assistant", content: data.error, error: true },
-        ]);
-        return;
-      }
-      if (data.error) {
-        // Server errors already come pre-normalized for most provider issues;
-        // apply final client-side cleanup for any raw status codes that slipped through
-        let msg: string = data.error;
-        if (/\b401\b/.test(msg) && !msg.includes("rejected") && !msg.includes("Settings"))
-          msg = "API key rejected — check your key in Settings → AI Coach.";
-        else if (/\b429\b/.test(msg) && !msg.includes("rate"))
-          msg = "Rate limit hit — try again in a moment, or switch to a different model.";
-        else if (/\b403\b/.test(msg) && !msg.includes("access"))
-          msg = "API key doesn't have access to this model — check Settings → AI Coach.";
-        setMessages((prev) => [
-          ...prev.slice(0, -1),
-          { role: "assistant", content: msg, error: true },
         ]);
         return;
       }
@@ -860,10 +814,6 @@ export default function CoachPage() {
         ...prev.slice(0, -1),
         { role: "assistant", content: data.message, model: data.model, provider: data.provider },
       ]);
-      // Refresh profile (daily usage may have changed) — skip for local inference
-      if (data.provider !== "local") {
-        qc.invalidateQueries({ queryKey: ["coachProfile"] });
-      }
     },
     onError: () => {
       setIsStreaming(false);
@@ -882,7 +832,6 @@ export default function CoachPage() {
     mutationFn: () => api.coachClearMemory().then((r) => r.json()),
     onSuccess: () => {
       setMessages([]);
-      setShowNeedKey(false);
       qc.invalidateQueries({ queryKey: ["coachProfile"] });
       qc.invalidateQueries({ queryKey: ["coachHistory"] });
     },
@@ -955,50 +904,9 @@ export default function CoachPage() {
             </h1>
           </div>
           <div className="flex items-center gap-2">
-            {/* Cloud model selector */}
-            {profile?.hasOwnKey && (() => {
-              const provider = profile.provider ?? "groq";
-              const FALLBACK: Record<string, Array<{id:string;label:string}>> = {
-                groq: [
-                  { id: "llama-3.1-8b-instant",    label: "Llama 3.1 8B Instant (recommended)" },
-                  { id: "llama-3.3-70b-versatile",  label: "Llama 3.3 70B Versatile" },
-                ],
-                openrouter: [
-                  { id: "openrouter/free",                            label: "Auto (Free)" },
-                  { id: "qwen/qwen3.6-plus:free",                    label: "Qwen 3.6 Plus (recommended)" },
-                  { id: "meta-llama/llama-3.3-70b-instruct:free",     label: "Llama 3.3 70B" },
-                  { id: "nvidia/nemotron-3-super-120b-a12b:free",     label: "Nemotron 120B" },
-                  { id: "stepfun/step-3.5-flash:free",                label: "Step 3.5 Flash" },
-                ],
-              };
-              const models = (profile.modelCatalog?.[provider] ?? FALLBACK[provider] ?? []) as Array<{id:string;label:string}>;
-              const currentModel = profile.aiModel ?? "";
-              const effectiveModel = models.some((m) => m.id === currentModel)
-                ? currentModel
-                : (models[0]?.id ?? "");
-              return (
-                <Select
-                  value={effectiveModel}
-                  onValueChange={async (model) => {
-                    try {
-                      await api.coachUpdateProvider(provider, model);
-                    } catch { /* refresh to current server state */ }
-                    qc.invalidateQueries({ queryKey: ["coachProfile"] });
-                  }}
-                >
-                  <SelectTrigger className="h-7 text-xs w-auto max-w-[150px] border-slate-700 bg-slate-800 text-slate-300">
-                    <SelectValue placeholder="Select model" />
-                  </SelectTrigger>
-                  <SelectContent align="end" className="max-w-[220px]">
-                    {models.map((m) => (
-                      <SelectItem key={m.id} value={m.id} className="text-xs">
-                        {m.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              );
-            })()}
+            <Badge variant="secondary" className="text-xs text-slate-400 hidden sm:inline-flex">
+              DeepSeek V4 Pro · NVIDIA NIM
+            </Badge>
             {/* Mobile: Coach Knows sheet trigger */}
             <Sheet>
               <SheetTrigger asChild>
@@ -1047,9 +955,6 @@ export default function CoachPage() {
           ))}
           <div ref={bottomRef} />
         </div>
-
-        {/* Need key banner */}
-        {showNeedKey && !profile?.hasOwnKey && <NoKeyBanner />}
 
         {/* Fixed input */}
         <div className="border-t border-slate-800 bg-slate-950/95 backdrop-blur px-4 py-3 pb-20 flex-shrink-0">

@@ -14,6 +14,7 @@ import { z } from "zod";
 import { registerCoachRoutes } from "./coach.js";
 import { registerProgramRoutes } from "./programs.js";
 import { authLimiter, nutritionLimiter } from "./rateLimit.js";
+import { callAIVision } from "./ai.js";
 
 const CRON_SECRET = process.env.CRON_SECRET;
 const ADMIN_SECRET = process.env.ADMIN_SECRET;
@@ -300,7 +301,6 @@ export async function registerRoutes(
           waterLogs:      z.boolean().optional(),
           supplementLogs: z.boolean().optional(),
           workoutLogs:    z.boolean().optional(),
-          physiquePhotos: z.boolean().optional(),
           coachMemory:    z.boolean().optional(),
         });
         const body = schema.parse(req.body);
@@ -318,7 +318,6 @@ export async function registerRoutes(
           waterLogs:      0,
           supplementLogs: 0,
           workoutLogs:    0,
-          physiquePhotos: 0,
           coachMemoryCleared: false,
         };
 
@@ -344,13 +343,6 @@ export async function registerRoutes(
             params,
           );
           deleted.workoutLogs = r.rowCount ?? 0;
-        }
-        if (body.physiquePhotos) {
-          const r = await pool.query(
-            `DELETE FROM physique_photos WHERE user_id=$1 ${rangeClause("photo_date")}`,
-            params,
-          );
-          deleted.physiquePhotos = r.rowCount ?? 0;
         }
         if (body.coachMemory) {
           // Clear rolling summary + chat messages so the coach starts from scratch
@@ -1245,33 +1237,21 @@ export async function registerRoutes(
       if (!/^[A-Za-z0-9+/]+=*$/.test(base64Data.slice(0, 100))) {
         return res.status(400).json({ error: "Invalid image data" });
       }
-      const groqKey = process.env.GROQ_API_KEY;
-      if (!groqKey) return res.status(503).json({ error: "Vision service unavailable" });
 
-      const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${groqKey}` },
-        body: JSON.stringify({
-          model: "meta-llama/llama-4-scout-17b-16e-instruct",
-          messages: [{
-            role: "user",
-            content: [
-              { type: "image_url", image_url: { url: `data:image/jpeg;base64,${base64Data}` } },
-              { type: "text", text: `Analyze this food image. Identify each distinct food item visible.\nFor each item return a JSON array with this exact shape:\n[{ "name": string, "calories": number, "proteinG": number, "carbsG": number, "fatG": number, "servingSize": string, "confidence": "high"|"medium"|"low" }]\nUse realistic nutritional estimates based on visible portion size.\nRespond ONLY with the JSON array, no other text.` },
-            ],
-          }],
-          max_tokens: 512,
-          temperature: 0.1,
-        }),
-      });
-
-      if (!response.ok) {
-        const err = await response.text();
-        console.error("[vision] Groq error:", err);
-        return res.status(502).json({ error: "Vision analysis failed" });
+      let data: any;
+      try {
+        data = await callAIVision([{
+          role: "user",
+          content: [
+            { type: "image_url", image_url: { url: `data:image/jpeg;base64,${base64Data}` } },
+            { type: "text", text: `Analyze this food image. Identify each distinct food item visible.\nFor each item return a JSON array with this exact shape:\n[{ "name": string, "calories": number, "proteinG": number, "carbsG": number, "fatG": number, "servingSize": string, "confidence": "high"|"medium"|"low" }]\nUse realistic nutritional estimates based on visible portion size.\nRespond ONLY with the JSON array, no other text.` },
+          ],
+        }], { maxTokens: 512 });
+      } catch (aiErr: any) {
+        console.error("[vision] AI error:", aiErr.message);
+        return res.status(503).json({ error: "Vision analysis temporarily unavailable, try again" });
       }
 
-      const data = await response.json();
       const content = data.choices?.[0]?.message?.content ?? "[]";
       let items: any[] = [];
       try {
@@ -1395,82 +1375,6 @@ export async function registerRoutes(
       await pool.query("DELETE FROM supplement_logs WHERE id=$1 AND user_id=$2", [req.params.id, userId]);
       res.json({ ok: true });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
-  });
-
-  // ── Physique Tracking ──────────────────────────────────────────────────────
-  app.get("/api/physique/photos", requireAuth, async (req: AuthRequest, res) => {
-    try {
-      const userId = req.user!.id;
-      const result = await pool.query(
-        "SELECT * FROM physique_photos WHERE user_id=$1 ORDER BY photo_date DESC",
-        [userId]
-      );
-      res.json(result.rows);
-    } catch (err: any) { res.status(500).json({ error: err.message }); }
-  });
-
-  app.post("/api/physique/photos", requireAuth, async (req: AuthRequest, res) => {
-    try {
-      const userId = req.user!.id;
-      const { photoUrl, photoDate, weightKg, bodyFatPct, notes } = req.body;
-      if (!photoUrl || !photoDate) return res.status(400).json({ error: "photoUrl and photoDate required" });
-      const result = await pool.query(
-        "INSERT INTO physique_photos (user_id, photo_url, photo_date, weight_kg, body_fat_pct, notes) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *",
-        [userId, photoUrl, photoDate, weightKg ?? null, bodyFatPct ?? null, notes ?? null]
-      );
-      res.json(result.rows[0]);
-    } catch (err: any) { res.status(500).json({ error: err.message }); }
-  });
-
-  app.delete("/api/physique/photos/:id", requireAuth, async (req: AuthRequest, res) => {
-    try {
-      const userId = req.user!.id;
-      await pool.query("DELETE FROM physique_photos WHERE id=$1 AND user_id=$2", [req.params.id, userId]);
-      res.json({ ok: true });
-    } catch (err: any) { res.status(500).json({ error: err.message }); }
-  });
-
-  app.post("/api/physique/compare", requireAuth, async (req: AuthRequest, res) => {
-    try {
-      const { photoId1, photoId2 } = req.body;
-      const userId = req.user!.id;
-      const photos = await pool.query(
-        "SELECT * FROM physique_photos WHERE id = ANY($1) AND user_id=$2",
-        [[photoId1, photoId2], userId]
-      );
-      if (photos.rows.length !== 2) return res.status(404).json({ error: "Photos not found" });
-
-      const [p1, p2] = photos.rows.sort((a: any, b: any) =>
-        new Date(a.photo_date).getTime() - new Date(b.photo_date).getTime()
-      );
-      const groqKey = process.env.GROQ_API_KEY;
-      if (!groqKey) return res.status(503).json({ error: "AI unavailable" });
-
-      const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${groqKey}` },
-        body: JSON.stringify({
-          model: "meta-llama/llama-4-scout-17b-16e-instruct",
-          messages: [{
-            role: "user",
-            content: [
-              { type: "image_url", image_url: { url: p1.photo_url } },
-              { type: "image_url", image_url: { url: p2.photo_url } },
-              { type: "text", text: `These are two physique progress photos. The first is from ${p1.photo_date}${p1.weight_kg ? ` at ${(p1.weight_kg * 2.20462).toFixed(1)} lbs` : ""}. The second is from ${p2.photo_date}${p2.weight_kg ? ` at ${(p2.weight_kg * 2.20462).toFixed(1)} lbs` : ""}.\nProvide a concise, factual comparison focusing on visible changes in muscle definition, body composition, and overall physique. Be specific and positive. Under 150 words.` }
-            ]
-          }],
-          max_tokens: 200,
-          temperature: 0.4,
-        }),
-      });
-      const data = await response.json();
-      const analysis = data.choices?.[0]?.message?.content ?? "No analysis available.";
-      await pool.query("UPDATE physique_photos SET groq_analysis=$1 WHERE id=$2", [analysis, p2.id]);
-      res.json({ analysis, photo1: p1, photo2: p2 });
-    } catch (err: any) {
-      console.error("[physique] compare error:", err.message);
-      res.status(500).json({ error: "Comparison failed" });
-    }
   });
 
   // ── Daily Micronutrients ───────────────────────────────────────────────────

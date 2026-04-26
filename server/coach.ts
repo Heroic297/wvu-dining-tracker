@@ -2,7 +2,7 @@
  * AI Coach — backend logic.
  *
  * POST /api/coach/chat        — send a message, get a response
- * GET  /api/coach/profile     — get AI profile + masked key
+ * GET  /api/coach/profile     — get AI profile
  * PATCH /api/coach/profile    — update AI profile fields
  * DELETE /api/coach/memory    — wipe chat history + rolling summary
  * GET  /api/coach/history     — last N messages for display
@@ -11,75 +11,19 @@ import type { Express } from "express";
 import { pool } from "./db.js";
 import { requireAuth, type AuthRequest } from "./auth.js";
 import { coachLimiter } from "./rateLimit.js";
-import { encryptString, decryptString, maskApiKey } from "./crypto.js";
 import { scrapeLocationDate } from "./scraper.js";
 import { lookupNutrition } from "./nutrition.js";
 import { computeDailyTargets, analyzeWaterCut } from "./tdee.js";
 import { storage } from "./storage.js";
 import { buildContextSnapshot } from "./memoryBridge.js";
+import { callAIChat, AI_MODEL, AI_PROVIDER_NAME } from "./ai.js";
 import { z } from "zod";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const FREE_DAILY_CAP = 200; // Server-pooled Groq key — higher cap for all users
 const RECENT_WINDOW = 15;
 const COMPACT_THRESHOLD = 5;
 const INITIAL_SUMMARY_THRESHOLD = 5;
-
-// Default models per provider (all free)
-export const DEFAULT_MODELS: Record<string, string> = {
-  groq:       "llama-3.1-8b-instant",   // 8B instant is fastest + least rate-limited on Groq free tier
-  openrouter: "qwen/qwen3.6-plus:free",
-};
-
-// Curated free model catalog shown in the UI
-// Models removed from free tiers — getAiConfig auto-migrates users stuck on these
-const DEAD_MODELS = new Set([
-  // Groq models that were deprecated
-  "gemma2-9b-it",             // deprecated on Groq — replaced by llama-3.1-8b-instant
-  "mixtral-8x7b-32768",       // deprecated on Groq 2025-03-20
-  // Gemini models — provider removed entirely
-  "gemini-2.0-flash",
-  "gemini-1.5-flash",
-  "gemini-1.5-flash-8b",
-  // Old IDs / removed from OpenRouter free tier — auto-migrate to provider default
-  "deepseek/deepseek-r1:free",
-  "microsoft/phi-4:free",
-  "qwen/qwen-2.5-72b-instruct:free",
-  "google/gemini-2.0-flash-exp:free",
-  "qwen/qwen3.6-plus-preview:free",         // renamed — use qwen3.6-plus:free
-  "openai/gpt-oss-120b:free",               // removed from free tier
-  "nousresearch/hermes-3-llama-3.1-405b:free", // removed from free tier
-  "qwen/qwen3-coder:free",                  // removed from catalog
-  "google/gemma-3-27b-it:free",             // removed from catalog (no tool calling)
-]);
-
-export const FREE_MODEL_CATALOG: Record<string, Array<{ id: string; label: string; description: string }>> = {
-  groq: [
-    { id: "llama-3.1-8b-instant",    label: "Llama 3.1 8B Instant",    description: "Fastest — almost never rate-limited, great for coaching (recommended)" },
-    { id: "llama-3.3-70b-versatile", label: "Llama 3.3 70B Versatile", description: "Stronger reasoning, may hit rate limits on free tier" },
-  ],
-  openrouter: [
-    { id: "openrouter/free",                        label: "Auto (Free)",       description: "OpenRouter picks the best available free model automatically" },
-    { id: "qwen/qwen3.6-plus:free",                 label: "Qwen 3.6 Plus",    description: "1M context, tool calling — best all-around free model (recommended)" },
-    { id: "meta-llama/llama-3.3-70b-instruct:free", label: "Llama 3.3 70B",    description: "Strong instruction following, tool calling" },
-    { id: "nvidia/nemotron-3-super-120b-a12b:free",  label: "Nemotron 120B",    description: "120B parameter model, tool calling — powerful reasoning" },
-    { id: "stepfun/step-3.5-flash:free",             label: "Step 3.5 Flash",   description: "Fast and capable, tool calling" },
-  ],
-};
-
-// Build a set of valid model IDs per provider from the catalog for validation
-const VALID_MODELS: Record<string, Set<string>> = Object.fromEntries(
-  Object.entries(FREE_MODEL_CATALOG).map(([prov, models]) => [
-    prov,
-    new Set(models.map((m) => m.id)),
-  ])
-);
-
-/** Check if model belongs to provider */
-function isValidModelForProvider(provider: string, model: string): boolean {
-  return VALID_MODELS[provider]?.has(model) ?? false;
-}
 
 // Known prompt-injection patterns — reject before sending to model
 const INJECTION_PATTERNS = [
@@ -98,85 +42,6 @@ function containsInjection(text: string): boolean {
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-
-type Provider = "groq" | "openrouter";
-
-interface AiConfig {
-  provider: Provider;
-  model: string;
-  key: string;
-  isOwn: boolean;
-}
-
-async function getAiConfig(userId: string): Promise<AiConfig> {
-  const res = await pool.query(
-    "SELECT groq_api_key_encrypted, openrouter_api_key_encrypted, ai_provider, ai_model FROM users WHERE id=$1",
-    [userId]
-  );
-  const row = res.rows[0];
-  const rawProvider = row?.ai_provider || "groq";
-  // Migrate Gemini users to Groq — Gemini integration has been removed
-  const provider: Provider = rawProvider === "gemini" ? "groq" : (rawProvider as Provider);
-  const savedModel = row?.ai_model || "";
-
-  // Auto-fallback: dead model OR model that doesn't belong to the current provider
-  const isDead = savedModel && DEAD_MODELS.has(savedModel);
-  const isMismatch = savedModel && !isDead && !isValidModelForProvider(provider, savedModel);
-  const model = (savedModel && !isDead && !isMismatch)
-    ? savedModel
-    : DEFAULT_MODELS[provider] || DEFAULT_MODELS.groq;
-
-  // If model was dead or mismatched, update the DB silently so it stays fixed
-  const providerChanged = rawProvider === "gemini";
-  if (isDead || isMismatch || providerChanged) {
-    const reason = providerChanged ? "gemini-removed" : isDead ? "dead" : "provider-mismatch";
-    console.log(`[coach] auto-migrating ${reason} model ${savedModel} → ${model} provider ${rawProvider} → ${provider} for user ${userId}`);
-    pool.query("UPDATE users SET ai_model=$1, ai_provider=$2 WHERE id=$3", [model, provider, userId]).catch(() => {});
-  }
-
-  // Pick the encrypted key column for the active provider
-  const enc = provider === "openrouter"
-    ? row?.openrouter_api_key_encrypted
-    : row?.groq_api_key_encrypted;
-  if (enc) {
-    try {
-      const key = decryptString(enc);
-      console.log(`[coach] getAiConfig: provider=${provider} model=${model} key=${key.slice(0,8)}... isOwn=true`);
-      return { provider, model, key, isOwn: true };
-    } catch (decryptErr: any) {
-      console.error(`[coach] DECRYPTION FAILED for user ${userId}:`, decryptErr.message);
-      // Key is corrupt — treat as no key so user gets a clear error
-      return { provider: "groq", model: DEFAULT_MODELS.groq, key: "", isOwn: false };
-    }
-  }
-  // No own key for this provider — fall back to master Groq key
-  const master = process.env.GROQ_API_KEY ?? "";
-  console.log(`[coach] getAiConfig: no own key for ${provider}, using master Groq key, provider=groq`);
-  return { provider: "groq", model: DEFAULT_MODELS.groq, key: master, isOwn: false };
-}
-
-/** Check and increment daily usage for master-key users. Returns true if allowed. */
-async function checkDailyUsage(userId: string): Promise<boolean> {
-  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
-  const res = await pool.query(
-    "SELECT ai_daily_usage, ai_daily_usage_date FROM users WHERE id=$1",
-    [userId]
-  );
-  const row = res.rows[0];
-  const usageDate: string | null = row?.ai_daily_usage_date
-    ? new Date(row.ai_daily_usage_date).toISOString().slice(0, 10)
-    : null;
-  const usage: number = usageDate === today ? (row?.ai_daily_usage ?? 0) : 0;
-
-  if (usage >= FREE_DAILY_CAP) return false;
-
-  // Increment
-  await pool.query(
-    "UPDATE users SET ai_daily_usage=$1, ai_daily_usage_date=$2 WHERE id=$3",
-    [usage + 1, today, userId]
-  );
-  return true;
-}
 
 /** Map raw snake_case DB row to camelCase for the client */
 function camelCaseProfile(row: any) {
@@ -614,7 +479,7 @@ async function executeTool(name: string, args: any, userId: string, profile: any
       // Validate: must be a simple food query string, no injection
       const query = String(args.query ?? "").slice(0, 200);
       if (containsInjection(query)) return JSON.stringify({ error: "Invalid query" });
-  const result = await lookupNutrition(query);
+      const result = await lookupNutrition(query);
       if (!result) return JSON.stringify({ error: "Food not found in database" });
       return JSON.stringify({
         food: result.foodName,
@@ -666,7 +531,7 @@ async function executeTool(name: string, args: any, userId: string, profile: any
     }
 
     if (name === "get_user_stats") {
-      // Groq sometimes returns days as a string "3" instead of number 3 — coerce defensively
+      // Model sometimes returns days as a string "3" instead of number 3 — coerce defensively
       const days = Math.min(30, Math.max(1, Number(args.days ?? 7)));
       // Compute cutoff date in JS — no SQL interval arithmetic needed
       const cutoffDate = new Date();
@@ -735,136 +600,15 @@ async function executeTool(name: string, args: any, userId: string, profile: any
   }
 }
 
-// ─── Groq API Call ────────────────────────────────────────────────────────────
-
-// ─── Multi-provider AI caller ─────────────────────────────────────────────────────────
-
-// OpenRouter free models that do NOT support tool/function calling
-// For these we strip tools and let the model answer from context alone
-// openrouter/free auto-routes and may pick a model without tool support
-const OPENROUTER_NO_TOOLS = new Set([
-  "openrouter/free",
-  "google/gemma-3-27b-it:free",
-  "google/gemma-3-12b-it:free",
-  "google/gemma-3-4b-it:free",
-  "google/gemma-3n-e4b-it:free",
-  "google/gemma-3n-e2b-it:free",
-  "meta-llama/llama-3.2-3b-instruct:free",
-  "liquid/lfm-2.5-1.2b-instruct:free",
-  "liquid/lfm-2.5-1.2b-thinking:free",
-  "cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
-]);
-
-/** OpenAI-compatible call (Groq + OpenRouter share the same format) */
-async function callOpenAICompat(
-  baseUrl: string,
-  apiKey: string,
-  model: string,
-  messages: any[],
-  tools: any[],
-  isOpenRouter = false
-): Promise<any> {
-  // Strip tools for OpenRouter models that don't support function calling
-  const effectiveTools = (isOpenRouter && OPENROUTER_NO_TOOLS.has(model)) ? [] : tools;
-
-  const body: any = { model, messages, max_tokens: 1024, temperature: 0.7 };
-  // Some models (e.g. MiniMax) support tools but not tool_choice — send tools without it for those
-  const NO_TOOL_CHOICE = new Set(["minimax/minimax-m2.5:free", "minimax/minimax-m2.5"]);
-  if (effectiveTools.length > 0) {
-    body.tools = effectiveTools;
-    if (!NO_TOOL_CHOICE.has(model)) body.tool_choice = "auto";
-  }
-
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    Authorization: `Bearer ${apiKey}`,
-  };
-  // OpenRouter requires these headers to identify the app
-  if (isOpenRouter) {
-    headers["HTTP-Referer"] = "https://wvu-dining-tracker.onrender.com";
-    headers["X-Title"] = "Macro Coach";
-  }
-
-  const res = await fetch(`${baseUrl}/chat/completions`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`API error ${res.status}: ${errText}`);
-  }
-  return res.json();
-}
-
-
-/**
- * Normalize raw provider error messages into user-friendly text.
- * Returns null if the error doesn't match any known pattern (caller should use a generic fallback).
- */
-function normalizeProviderError(msg: string): string | null {
-  if (msg.includes("guardrail") || msg.includes("data policy") || msg.includes("privacy")) {
-    return "OpenRouter is blocking this request due to your account's data policy settings. Go to openrouter.ai/settings/privacy and enable access to providers that train on inputs — this is required for free models.";
-  }
-  if (msg.includes("404") || msg.includes("No endpoints") || msg.includes("not found")) {
-    return "The model you selected is no longer available. Please use the model selector in the Coach tab header to pick a different one.";
-  }
-  if (msg.includes("429") || msg.includes("rate-limited") || msg.includes("rate_limit") || msg.includes("quota")) {
-    return "This model is temporarily rate-limited by the provider. Please wait 30 seconds and try again, or switch to a different model using the selector in the Coach tab header.";
-  }
-  if (msg.includes("401") || msg.includes("invalid_api_key") || msg.includes("Unauthorized")) {
-    return "Your API key was rejected by the provider. Please go to Settings → AI Coach and re-enter your key.";
-  }
-  if (msg.includes("403") || msg.includes("Forbidden") || msg.includes("permission")) {
-    return "Your API key doesn't have access to this model. Check your provider account or switch to a different model.";
-  }
-  if (msg.includes("timeout") || msg.includes("ETIMEDOUT") || msg.includes("ECONNREFUSED")) {
-    return "The AI provider is not responding. Please try again in a moment.";
-  }
-  if (msg.includes("API error")) {
-    // Extract the meaningful part after the status code
-    const detail = msg.replace(/^.*?API error \d+:\s*/i, "").slice(0, 200);
-    return `Provider error: ${detail || msg}. Try switching models in the Coach tab header.`;
-  }
-  return null;
-}
-
-/** Unified AI caller — dispatches to the right provider */
-async function callAI(
-  config: AiConfig,
-  messages: any[],
-  tools: any[]
-): Promise<any> {
-  console.log(`[coach] callAI: provider=${config.provider} model=${config.model} key=${config.key.slice(0,8)}...`);
-  if (config.provider === "openrouter") {
-    return callOpenAICompat(
-      "https://openrouter.ai/api/v1",
-      config.key,
-      config.model,
-      messages,
-      tools,
-      true  // isOpenRouter — adds required headers + strips tools for unsupported models
-    );
-  }
-  // Default: Groq
-  return callOpenAICompat(
-    "https://api.groq.com/openai/v1",
-    config.key,
-    config.model,
-    messages,
-    tools
-  );
-}
-
 // ─── Compaction ───────────────────────────────────────────────────────────────
 
-async function maybeCompact(userId: string, config: AiConfig): Promise<void> {
+async function maybeCompact(userId: string): Promise<void> {
   const countRes = await pool.query(
     "SELECT COUNT(*) as n FROM chat_messages WHERE user_id=$1",
     [userId]
   );
   const n = parseInt(countRes.rows[0]?.n ?? "0", 10);
-  
+
   // Get existing summary and profile
   const profRes = await pool.query(
     "SELECT rolling_summary, preferred_name, main_goal, is_wvu_student, experience_level, notes, coach_tone FROM ai_profiles WHERE user_id=$1",
@@ -872,10 +616,10 @@ async function maybeCompact(userId: string, config: AiConfig): Promise<void> {
   );
   const profile = profRes.rows[0];
   const existingSummary = profile?.rolling_summary ?? "";
-  
+
   // Check if we need initial summary generation (no summary yet, but enough messages)
   const needsInitialSummary = !existingSummary && n >= INITIAL_SUMMARY_THRESHOLD;
-  
+
   if (!needsInitialSummary && n <= COMPACT_THRESHOLD) {
     return;
   }
@@ -886,7 +630,7 @@ async function maybeCompact(userId: string, config: AiConfig): Promise<void> {
     [userId]
   );
   const user = userRes.rows[0];
-  
+
   // Get recent messages for context
   const recentRes = await pool.query(
     `SELECT id, role, content FROM chat_messages WHERE user_id=$1
@@ -929,9 +673,9 @@ Write a new rolling summary that:
 Return ONLY the summary text, no preamble.`;
 
   try {
-    const compactRes = await callAI(config, [
+    const compactRes = await callAIChat([
       { role: "user", content: compactionPrompt },
-    ], []);
+    ]);
     const newSummary = compactRes.choices?.[0]?.message?.content?.trim() ?? existingSummary;
 
     // Save summary (and delete compacted messages if we're doing regular compaction)
@@ -939,7 +683,7 @@ Return ONLY the summary text, no preamble.`;
       "UPDATE ai_profiles SET rolling_summary=$1, updated_at=now() WHERE user_id=$2",
       [newSummary, userId]
     );
-    
+
     // Only delete messages if we're doing regular compaction (not initial summary)
     if (!needsInitialSummary) {
       const ids = messages.map((r: any) => r.id);
@@ -979,66 +723,11 @@ export function registerCoachRoutes(app: Express): void {
     try {
       const userId = req.user!.id;
       const profile = await getOrCreateProfile(userId);
-
-      const keyRes = await pool.query(
-        "SELECT groq_api_key_encrypted, openrouter_api_key_encrypted, ai_daily_usage, ai_daily_usage_date, ai_provider, ai_model FROM users WHERE id=$1",
-        [userId]
-      );
-      const row = keyRes.rows[0];
-      const rawProvider = row?.ai_provider || "groq";
-      // Migrate Gemini users to Groq — Gemini integration has been removed
-      const provider: Provider = rawProvider === "gemini" ? "groq" : (rawProvider as Provider);
-      const savedModel = row?.ai_model || "";
-
-      // Per-provider key status
-      const hasGroqKey = !!row?.groq_api_key_encrypted;
-      const hasOpenrouterKey = !!row?.openrouter_api_key_encrypted;
-      // hasOwnKey = the active provider has a saved key
-      const hasOwnKey = provider === "openrouter" ? hasOpenrouterKey : hasGroqKey;
-
-      // Apply same dead-model / provider-mismatch resolution as getAiConfig
-      // so the profile always reflects the effective model the chat endpoint will use.
-      const isDead = savedModel && DEAD_MODELS.has(savedModel);
-      const isMismatch = savedModel && !isDead && !isValidModelForProvider(provider, savedModel);
-      const aiModel = (savedModel && !isDead && !isMismatch)
-        ? savedModel
-        : DEFAULT_MODELS[provider] || DEFAULT_MODELS.groq;
-
-      // Persist the migration so DB stays in sync
-      const providerChanged = rawProvider === "gemini";
-      if (isDead || isMismatch || providerChanged) {
-        pool.query("UPDATE users SET ai_model=$1, ai_provider=$2 WHERE id=$3", [aiModel, provider, userId]).catch(() => {});
-      }
-
-      const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
-      const usageDate = row?.ai_daily_usage_date
-        ? new Date(row.ai_daily_usage_date).toISOString().slice(0, 10)
-        : null;
-      const dailyUsage = usageDate === today ? (row?.ai_daily_usage ?? 0) : 0;
-
-      // Build per-provider masked keys
-      const savedKeys: Record<string, string | null> = { groq: null, openrouter: null };
-      if (row?.groq_api_key_encrypted) {
-        try { savedKeys.groq = maskApiKey(decryptString(row.groq_api_key_encrypted)); } catch { /* ignore */ }
-      }
-      if (row?.openrouter_api_key_encrypted) {
-        try { savedKeys.openrouter = maskApiKey(decryptString(row.openrouter_api_key_encrypted)); } catch { /* ignore */ }
-      }
-      // maskedKey for backward compat: the active provider's masked key
-      const maskedKey = savedKeys[provider] ?? null;
-
       res.json({
         ...profile,
-        hasOwnKey,
-        hasGroqKey,
-        hasOpenrouterKey,
-        savedKeys,
-        provider,
-        aiModel,
-        maskedKey,
-        dailyUsage,
-        dailyCap: FREE_DAILY_CAP,
-        modelCatalog: FREE_MODEL_CATALOG,
+        aiModel: AI_MODEL,
+        aiProvider: AI_PROVIDER_NAME,
+        status: "active",
       });
     } catch (err: any) {
       console.error("[coach] profile error:", err.message);
@@ -1098,105 +787,6 @@ export function registerCoachRoutes(app: Express): void {
     }
   });
 
-  // PATCH /api/coach/apikey  — save encrypted key for a specific provider (without touching the other)
-  app.patch("/api/coach/apikey", requireAuth, async (req: AuthRequest, res) => {
-    try {
-      const userId = req.user!.id;
-      const schema = z.object({
-        apiKey:   z.string().min(6).max(300),
-        provider: z.enum(["groq", "openrouter"]).default("groq"),
-        model:    z.string().max(120).optional(),
-      });
-      const { apiKey, provider, model } = schema.parse(req.body);
-
-      const encrypted = encryptString(apiKey);
-      const resolvedModel = model || DEFAULT_MODELS[provider];
-
-      // Validate model belongs to provider
-      if (resolvedModel && !isValidModelForProvider(provider, resolvedModel)) {
-        return res.status(400).json({
-          error: `Model "${resolvedModel}" is not available for ${provider}. Using default.`,
-        });
-      }
-
-      // Save key to the provider-specific column only; switch active provider + model
-      const keyColumn = provider === "openrouter"
-        ? "openrouter_api_key_encrypted"
-        : "groq_api_key_encrypted";
-      await pool.query(
-        `UPDATE users SET ${keyColumn}=$1, ai_provider=$2, ai_model=$3 WHERE id=$4`,
-        [encrypted, provider, resolvedModel, userId]
-      );
-      res.json({ ok: true, masked: maskApiKey(apiKey), provider, model: resolvedModel });
-    } catch (err: any) {
-      if (err.name === "ZodError") return res.status(400).json({ error: err.errors[0].message });
-      res.status(500).json({ error: "Failed to save API key" });
-    }
-  });
-
-  // PATCH /api/coach/provider  — switch active provider/model (uses saved key for that provider)
-  app.patch("/api/coach/provider", requireAuth, async (req: AuthRequest, res) => {
-    try {
-      const userId = req.user!.id;
-      const schema = z.object({
-        provider: z.enum(["groq", "openrouter"]),
-        model:    z.string().max(120).optional(),
-      });
-      const { provider, model } = schema.parse(req.body);
-      const resolvedModel = model || DEFAULT_MODELS[provider];
-
-      // Validate model belongs to this provider — prevent cross-provider mismatch
-      if (!isValidModelForProvider(provider, resolvedModel)) {
-        return res.status(400).json({
-          error: `Model "${resolvedModel}" is not available for ${provider}. Please select a valid model.`,
-        });
-      }
-
-      await pool.query(
-        "UPDATE users SET ai_provider=$1, ai_model=$2 WHERE id=$3",
-        [provider, resolvedModel, userId]
-      );
-
-      // Check if the target provider has a saved key
-      const keyColumn = provider === "openrouter"
-        ? "openrouter_api_key_encrypted"
-        : "groq_api_key_encrypted";
-      const keyRes = await pool.query(
-        `SELECT ${keyColumn} FROM users WHERE id=$1`,
-        [userId]
-      );
-      const hasKey = !!keyRes.rows[0]?.[keyColumn];
-
-      res.json({ ok: true, provider, model: resolvedModel, hasOwnKey: hasKey });
-    } catch (err: any) {
-      if (err.name === "ZodError") return res.status(400).json({ error: err.errors[0].message });
-      res.status(500).json({ error: "Failed to update provider" });
-    }
-  });
-
-  // DELETE /api/coach/apikey  — remove key for a specific provider (query ?provider=groq|openrouter)
-  app.delete("/api/coach/apikey", requireAuth, async (req: AuthRequest, res) => {
-    try {
-      const provider = (req.query.provider as string) || "";
-      const userId = req.user!.id;
-
-      if (provider === "groq") {
-        await pool.query("UPDATE users SET groq_api_key_encrypted=NULL WHERE id=$1", [userId]);
-      } else if (provider === "openrouter") {
-        await pool.query("UPDATE users SET openrouter_api_key_encrypted=NULL WHERE id=$1", [userId]);
-      } else {
-        // No provider specified — clear both (backward compat / "remove all")
-        await pool.query(
-          "UPDATE users SET groq_api_key_encrypted=NULL, openrouter_api_key_encrypted=NULL WHERE id=$1",
-          [userId]
-        );
-      }
-      res.json({ ok: true });
-    } catch (err: any) {
-      res.status(500).json({ error: "Failed to remove API key" });
-    }
-  });
-
   // DELETE /api/coach/memory  — wipe history + rolling summary
   app.delete("/api/coach/memory", requireAuth, async (req: AuthRequest, res) => {
     try {
@@ -1235,25 +825,6 @@ export function registerCoachRoutes(app: Express): void {
         });
       }
 
-      // Get AI config (provider + model + key)
-      const aiConfig = await getAiConfig(userId);
-      if (!aiConfig.key) {
-        return res.status(402).json({
-          error: "No API key configured. Add your free AI API key in Settings → AI Coach.",
-          needsKey: true,
-        });
-      }
-      if (!aiConfig.isOwn) {
-        const allowed = await checkDailyUsage(userId);
-        if (!allowed) {
-          return res.status(429).json({
-            error: `You've used your ${FREE_DAILY_CAP} free messages for today. Add your own free API key in Settings for unlimited access.`,
-            needsKey: true,
-            cap: FREE_DAILY_CAP,
-          });
-        }
-      }
-
       // Load user via raw query — avoids Drizzle crashing on missing columns mid-migration
       const userRes = await pool.query("SELECT * FROM users WHERE id=$1", [userId]);
       const user = userRes.rows[0];
@@ -1269,10 +840,10 @@ export function registerCoachRoutes(app: Express): void {
       await saveMessage(userId, "user", message);
 
       // Build messages array: system + recent history (user + assistant text only)
-      // Tool call messages are NOT replayed — they lack tool_call_id and break Groq validation.
+      // Tool call messages are NOT replayed — they lack tool_call_id and break validation.
       // The rolling memory summary captures useful context; tool calls are ephemeral.
       const recentMsgs = await getRecentMessages(userId, RECENT_WINDOW);
-      const groqMessages: any[] = [
+      const chatMessages: any[] = [
         { role: "system", content: systemPrompt },
         ...recentMsgs
           .filter((m: any) => m.role === "user" || m.role === "assistant")
@@ -1286,13 +857,11 @@ export function registerCoachRoutes(app: Express): void {
 
       while (iterations < MAX_ITERATIONS) {
         iterations++;
-        // If Groq rejects our tool call (e.g. type coercion issue), retry without tools
-        let usedTools = TOOLS;
         try {
-          response = await callAI(aiConfig, groqMessages, usedTools);
+          response = await callAIChat(chatMessages, { tools: TOOLS });
         } catch (aiErr: any) {
           if (aiErr.message?.includes("tool_use_failed") || aiErr.message?.includes("tool call validation")) {
-            response = await callAI(aiConfig, groqMessages, []);
+            response = await callAIChat(chatMessages, { tools: [] });
           } else {
             throw aiErr;
           }
@@ -1308,20 +877,20 @@ export function registerCoachRoutes(app: Express): void {
         }
 
         // Process tool calls
-        groqMessages.push(assistantMsg);
+        chatMessages.push(assistantMsg);
 
         for (const tc of assistantMsg.tool_calls) {
           const toolName = tc.function.name;
           let toolArgs: any = {};
           try {
             toolArgs = JSON.parse(tc.function.arguments);
-            // Coerce known numeric fields that Groq sometimes returns as strings
+            // Coerce known numeric fields that models sometimes return as strings
             if (toolArgs.days !== undefined) toolArgs.days = Number(toolArgs.days);
           } catch { /* ignore */ }
 
           const toolResult = await executeTool(toolName, toolArgs, userId, profile);
 
-          groqMessages.push({
+          chatMessages.push({
             role: "tool",
             tool_call_id: tc.id,
             content: toolResult,
@@ -1345,23 +914,15 @@ export function registerCoachRoutes(app: Express): void {
       await saveMessage(userId, "assistant", safeOutput);
 
       // Async compaction — don't await, fire and forget
-      maybeCompact(userId, aiConfig).catch((e) =>
+      maybeCompact(userId).catch((e) =>
         console.error("[coach] background compact error:", e.message)
       );
 
-      res.json({ message: safeOutput, model: aiConfig.model, provider: aiConfig.provider });
+      res.json({ message: safeOutput, model: AI_MODEL, provider: AI_PROVIDER_NAME });
     } catch (err: any) {
       if (err.name === "ZodError") return res.status(400).json({ error: err.errors[0].message });
-      // Log full error so Render logs show the real cause
       console.error("[coach] chat error:", err.message, err.stack?.split("\n")[1] ?? "");
-
-      // Normalize raw provider errors into readable, actionable messages
-      const msg: string = err.message ?? "";
-      const normalized = normalizeProviderError(msg);
-      if (normalized) {
-        return res.status(200).json({ message: normalized });
-      }
-      res.status(500).json({ error: "Coach is temporarily unavailable. Please try again." });
+      res.status(503).json({ error: "AI temporarily unavailable, try again" });
     }
   });
 }

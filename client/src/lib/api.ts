@@ -82,7 +82,6 @@ export const api = {
     waterLogs?: boolean;
     supplementLogs?: boolean;
     workoutLogs?: boolean;
-    physiquePhotos?: boolean;
     coachMemory?: boolean;
   }) => apiRequest("DELETE", "/api/user/history", data),
 

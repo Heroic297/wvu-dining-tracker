@@ -111,7 +111,6 @@ export interface IStorage {
     waterLogs: number;
     supplementLogs: number;
     workoutLogs: number;
-    physiquePhotos: number;
   }>;
 
   // Invite Codes
@@ -625,7 +624,6 @@ export class PgStorage implements IStorage {
       `SELECT COUNT(*)::int AS n FROM water_logs       WHERE user_id=$1 ${range("date")}`,
       `SELECT COUNT(*)::int AS n FROM supplement_logs  WHERE user_id=$1 ${range("date")}`,
       `SELECT COUNT(*)::int AS n FROM workout_logs     WHERE user_id=$1 ${range("date")}`,
-      `SELECT COUNT(*)::int AS n FROM physique_photos  WHERE user_id=$1 ${range("photo_date")}`,
     ];
     const results = await Promise.all(
       queries.map(q => pool.query(q, params).then(r => r.rows[0]?.n ?? 0))
@@ -636,7 +634,6 @@ export class PgStorage implements IStorage {
       waterLogs:      results[2],
       supplementLogs: results[3],
       workoutLogs:    results[4],
-      physiquePhotos: results[5],
     };
   }
 

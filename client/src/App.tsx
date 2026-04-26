@@ -14,7 +14,6 @@ import SettingsPage from "@/pages/SettingsPage";
 import InvitePage from "@/pages/InvitePage";
 import CoachPage from "@/pages/CoachPage";
 import WearablesPage from "@/pages/WearablesPage";
-import PhysiquePage from "@/pages/PhysiquePage";
 import TrainingPage from "@/pages/TrainingPage";
 import NotFoundPage from "@/pages/not-found";
 import { Loader2 } from "lucide-react";
@@ -48,8 +47,7 @@ function AppRoutes() {
         <Route path="/wearables" component={WearablesPage} />
         <Route path="/invites" component={InvitePage} />
         <Route path="/coach" component={CoachPage} />
-        <Route path="/physique" component={PhysiquePage} />
-        {/* Backwards-compat redirects */}
+{/* Backwards-compat redirects */}
         <Route path="/log"><Redirect to="/nutrition?tab=log" /></Route>
         <Route path="/history"><Redirect to="/nutrition?tab=history" /></Route>
         <Route path="/plan"><Redirect to="/nutrition?tab=plan" /></Route>
