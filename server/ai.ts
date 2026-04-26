@@ -26,7 +26,8 @@ export async function callAIChat(
     model: AI_MODEL,
     messages,
     temperature: options?.temperature ?? 0.7,
-    max_tokens: options?.maxTokens ?? 1024,
+    max_tokens: options?.maxTokens ?? 4096,
+    stream: false,
     extra_body: { chat_template_kwargs: { thinking: false } },
   };
 
@@ -72,7 +73,7 @@ export async function callAIChatStream(
     model: AI_MODEL,
     messages,
     temperature: options?.temperature ?? 0.7,
-    max_tokens: options?.maxTokens ?? 1024,
+    max_tokens: options?.maxTokens ?? 4096,
     extra_body: { chat_template_kwargs: { thinking: false } },
     stream: true,
   };
