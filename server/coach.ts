@@ -871,6 +871,11 @@ export function registerCoachRoutes(app: Express): void {
 
         if (!assistantMsg) break;
 
+        // Warn if response was truncated due to token limit
+        if (choice?.finish_reason === "length") {
+          console.warn("[coach] Response truncated (finish_reason=length) — consider increasing max_tokens");
+        }
+
         // No tool call — we have final answer
         if (!assistantMsg.tool_calls || assistantMsg.tool_calls.length === 0) {
           break;
