@@ -119,7 +119,11 @@ export default function DashboardPage() {
         />
 
         {/* Training Today */}
-        {trainingToday && <TrainingTodayRow training={trainingToday} />}
+        {trainingToday && (
+          <div className="mt-2">
+            <TrainingTodayRow training={trainingToday} />
+          </div>
+        )}
 
         {/* Recent Meals */}
         <RecentMealsList meals={meals} />
@@ -130,16 +134,12 @@ export default function DashboardPage() {
           water={waterProps}
           weightData={weightData}
           activities={activities}
+          targetWeightKg={data?.targetWeightKg ?? null}
         />
 
         {/* Peak Week (bottom, only near meet day) */}
         {showPeakWeek && <PeakWeekCard day={peakWeekToday} />}
 
-        <p className="text-center text-xs text-slate-600 pb-2">
-          <a href="https://www.perplexity.ai/computer" target="_blank" rel="noopener noreferrer" className="hover:text-slate-400 transition-colors">
-            Created with Perplexity Computer
-          </a>
-        </p>
       </div>
     </div>
   );

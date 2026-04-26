@@ -38,6 +38,9 @@ import {
   type InsertWaterLog,
   type InviteCode,
   type InsertInviteCode,
+  mealFavorites,
+  type MealFavorite,
+  type InsertMealFavorite,
 } from "../shared/schema.js";
 
 export interface IStorage {
@@ -118,6 +121,11 @@ export interface IStorage {
   consumeInviteCode(code: string): Promise<boolean>;
   revokeInviteCode(id: string): Promise<void>;
   deleteInviteCode(id: string): Promise<void>;
+
+  // Meal Favorites
+  getMealFavorites(userId: string): Promise<MealFavorite[]>;
+  createMealFavorite(data: InsertMealFavorite): Promise<MealFavorite>;
+  deleteMealFavorite(id: string, userId: string): Promise<void>;
 }
 
 export class PgStorage implements IStorage {
@@ -687,6 +695,21 @@ export class PgStorage implements IStorage {
 
   async deleteInviteCode(id: string) {
     await db.delete(inviteCodes).where(eq(inviteCodes.id, id));
+  }
+
+  // ── Meal Favorites ─────────────────────────────────────────────────────────
+
+  async getMealFavorites(userId: string) {
+    return db.select().from(mealFavorites).where(eq(mealFavorites.userId, userId)).orderBy(mealFavorites.name);
+  }
+
+  async createMealFavorite(data: InsertMealFavorite) {
+    const [row] = await db.insert(mealFavorites).values(data as any).returning();
+    return row;
+  }
+
+  async deleteMealFavorite(id: string, userId: string) {
+    await db.delete(mealFavorites).where(and(eq(mealFavorites.id, id), eq(mealFavorites.userId, userId)));
   }
 }
 

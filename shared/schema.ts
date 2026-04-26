@@ -652,6 +652,34 @@ export const insertWorkoutLogSchema = createInsertSchema(workoutLogs).omit({
 export type InsertWorkoutLog = z.infer<typeof insertWorkoutLogSchema>;
 export type WorkoutLog = typeof workoutLogs.$inferSelect;
 
+// ─── Meal Favorites ───────────────────────────────────────────────────────────
+
+export const mealFavorites = pgTable(
+  "meal_favorites",
+  {
+    id: varchar("id", { length: 36 })
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    userId: varchar("user_id", { length: 36 })
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    calories: real("calories").notNull(),
+    proteinG: real("protein_g").notNull(),
+    carbsG: real("carbs_g").notNull(),
+    fatG: real("fat_g").notNull(),
+    servingSize: text("serving_size"),
+    barcode: text("barcode"),
+    source: nutritionSourceEnum("source").default("manual_exact"),
+    createdAt: timestamp("created_at").default(sql`now()`),
+  },
+  (t) => [index("meal_favorites_user_id").on(t.userId)]
+);
+
+export const insertMealFavoriteSchema = createInsertSchema(mealFavorites).omit({ id: true, createdAt: true });
+export type InsertMealFavorite = z.infer<typeof insertMealFavoriteSchema>;
+export type MealFavorite = typeof mealFavorites.$inferSelect;
+
 // ─── Sessions (express-session via pg) ───────────────────────────────────────
 
 export const sessions = pgTable("session", {

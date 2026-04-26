@@ -1181,6 +1181,7 @@ export async function registerRoutes(
           waterBottles: user.waterBottles ?? [],
           waterUnit: user.waterUnit ?? "oz",
           trainingToday,
+          targetWeightKg: user.targetWeightKg ?? null,
         });
       } catch (err) {
         console.error("[dashboard]", err);
@@ -1188,6 +1189,50 @@ export async function registerRoutes(
       }
     }
   );
+
+  // ── Meal Favorites ────────────────────────────────────────────────────────
+
+  app.get("/api/favorites", requireAuth as any, async (req: AuthRequest, res) => {
+    try {
+      const favorites = await storage.getMealFavorites(req.user!.id);
+      res.json(favorites);
+    } catch (err) {
+      console.error("[favorites/get]", err);
+      res.status(500).json({ error: "Failed to fetch favorites" });
+    }
+  });
+
+  app.post("/api/favorites", requireAuth as any, async (req: AuthRequest, res) => {
+    try {
+      const schema = z.object({
+        name:        z.string().min(1).max(200),
+        calories:    z.number().nonnegative(),
+        proteinG:    z.number().nonnegative(),
+        carbsG:      z.number().nonnegative(),
+        fatG:        z.number().nonnegative(),
+        servingSize: z.string().max(100).optional(),
+        barcode:     z.string().max(50).optional(),
+        source:      z.enum(["wvu","usda","usda_branded","open_food_facts","ai_estimated","manual_exact"]).optional(),
+      });
+      const data = schema.parse(req.body);
+      const fav = await storage.createMealFavorite({ ...data, userId: req.user!.id });
+      res.status(201).json(fav);
+    } catch (err: any) {
+      if (err?.name === "ZodError") return res.status(400).json({ error: err.errors[0].message });
+      console.error("[favorites/post]", err);
+      res.status(500).json({ error: "Failed to save favorite" });
+    }
+  });
+
+  app.delete("/api/favorites/:id", requireAuth as any, async (req: AuthRequest, res) => {
+    try {
+      await storage.deleteMealFavorite(req.params.id as string, req.user!.id);
+      res.status(204).send();
+    } catch (err) {
+      console.error("[favorites/delete]", err);
+      res.status(500).json({ error: "Failed to delete favorite" });
+    }
+  });
 
   // ── Vision — Food Photo Analysis ──────────────────────────────────────────
   app.post("/api/vision/analyze-food", requireAuth, async (req: AuthRequest, res) => {

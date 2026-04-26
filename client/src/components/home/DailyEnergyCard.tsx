@@ -25,12 +25,10 @@ function MiniRing({ value, max, color, label, unit = "g" }: MiniRingProps) {
   return (
     <div className="flex flex-col items-center gap-1.5">
       <ProgressRing value={value} max={max} size={72} strokeWidth={7} color={color}>
-        <span className="text-[13px] font-bold text-slate-100 leading-none">{value}</span>
+        <span className="text-[12px] font-bold text-slate-100 leading-none">{value}</span>
+        <span className="text-[9px] text-slate-500 leading-none mt-0.5">/{max}{unit}</span>
       </ProgressRing>
-      <div className="text-center">
-        <p className="text-[11px] font-semibold text-slate-300">{label}</p>
-        <p className="text-[10px] text-slate-500">/ {max}{unit}</p>
-      </div>
+      <p className="text-[11px] font-semibold text-slate-300">{label}</p>
     </div>
   );
 }

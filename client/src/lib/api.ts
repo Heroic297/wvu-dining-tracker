@@ -110,6 +110,20 @@ export const api = {
   coachUpdateProvider: (provider: string, model: string) =>
     apiRequest("PATCH", "/api/coach/provider", { provider, model }),
   coachLiveContext: () => apiRequest("GET", "/api/coach/live-context"),
+
+  // Meal Favorites
+  getFavorites: () => apiRequest("GET", "/api/favorites"),
+  saveFavorite: (data: {
+    name: string;
+    calories: number;
+    proteinG: number;
+    carbsG: number;
+    fatG: number;
+    servingSize?: string;
+    barcode?: string;
+    source?: string;
+  }) => apiRequest("POST", "/api/favorites", data),
+  deleteFavorite: (id: string) => apiRequest("DELETE", `/api/favorites/${id}`),
 };
 
 /** Store the JWT token in memory */

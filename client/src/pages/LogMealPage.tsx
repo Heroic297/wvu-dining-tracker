@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Trash2, Search, Loader2, ChefHat, ScanBarcode, CheckCheck, Camera } from "lucide-react";
+import { Plus, Trash2, Search, Loader2, ChefHat, ScanBarcode, CheckCheck, Camera, Bookmark, ChevronDown } from "lucide-react";
 import BarcodeScanner from "@/components/BarcodeScanner";
 
 
@@ -118,6 +118,153 @@ function ComponentRow({ comp, idx, qty, customQty, onPreset, onCustom, selected,
         />
         <span className="text-xs text-muted-foreground">×</span>
       </div>
+    </div>
+  );
+}
+
+// ── Favorites section ─────────────────────────────────────────────────────────
+
+interface FavoriteItem {
+  id: string;
+  name: string;
+  calories: number;
+  proteinG: number;
+  carbsG: number;
+  fatG: number;
+  servingSize?: string | null;
+  source?: string | null;
+}
+
+const FAV_QTY_PRESETS = [0.5, 1, 1.5, 2];
+
+function FavoritesSection({
+  onAdd,
+  onDelete,
+}: {
+  onAdd: (item: FavoriteItem, qty: number) => Promise<void>;
+  onDelete: (id: string) => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [favQtys, setFavQtys] = useState<Record<string, number>>({});
+  const [favCustomQtys, setFavCustomQtys] = useState<Record<string, string>>({});
+
+  const { data: favorites = [], isLoading } = useQuery<FavoriteItem[]>({
+    queryKey: ["/api/favorites"],
+    queryFn: async () => {
+      const res = await api.getFavorites();
+      return res.json();
+    },
+  });
+
+  if (!isLoading && favorites.length === 0 && !open) return null;
+
+  const getQty = (id: string) => favQtys[id] ?? 1;
+  const getCq  = (id: string) => favCustomQtys[id] ?? "";
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen(v => !v)}
+        className="w-full flex items-center justify-between mb-3"
+      >
+        <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-2">
+          <Bookmark className="w-4 h-4" />
+          Favorites{favorites.length > 0 && <span className="text-xs font-normal normal-case">({favorites.length})</span>}
+        </h2>
+        <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform duration-200 ${open ? "rotate-180" : ""}`} />
+      </button>
+
+      {open && (
+        <div className="space-y-2">
+          {isLoading ? (
+            <Skeleton className="h-14 rounded-lg" />
+          ) : favorites.length === 0 ? (
+            <div className="bg-card border border-border rounded-xl p-4 text-center text-sm text-muted-foreground">
+              No favorites yet. Save a food with the <Bookmark className="w-3 h-3 inline" /> button after searching.
+            </div>
+          ) : (
+            favorites.map((fav) => {
+              const qty = getQty(fav.id);
+              const cq  = getCq(fav.id);
+              return (
+                <div key={fav.id} className="bg-card border border-border rounded-xl p-3 space-y-2 hover:border-primary/50 transition-colors">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium truncate">{fav.name}</p>
+                      <div className="flex items-center gap-2 mt-0.5 flex-wrap text-xs text-muted-foreground">
+                        {qty !== 1
+                          ? <><span className="line-through opacity-50">{Math.round(fav.calories)}</span>{" "}<span className="text-primary font-medium">{Math.round(fav.calories * qty)}</span> kcal</>
+                          : <span>{Math.round(fav.calories)} kcal</span>
+                        }
+                        <span className="macro-protein">P:{fmt1(fav.proteinG * qty)}g</span>
+                        <span className="macro-carbs">C:{fmt1(fav.carbsG * qty)}g</span>
+                        <span className="macro-fat">F:{fmt1(fav.fatG * qty)}g</span>
+                        {fav.servingSize && <span>· {fav.servingSize}</span>}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      <Button
+                        size="sm" variant="ghost"
+                        onClick={() => onDelete(fav.id)}
+                        className="h-8 w-8 p-0 text-muted-foreground hover:text-destructive"
+                        title="Remove favorite"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </Button>
+                      <Button
+                        size="sm" variant="ghost"
+                        onClick={() => {
+                          onAdd(fav, qty).then(() => {
+                            setFavQtys(prev => { const n = { ...prev }; delete n[fav.id]; return n; });
+                            setFavCustomQtys(prev => { const n = { ...prev }; delete n[fav.id]; return n; });
+                          });
+                        }}
+                        className="h-8 w-8 p-0"
+                        title="Add to meal"
+                      >
+                        <Plus className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-xs text-muted-foreground mr-0.5">Qty:</span>
+                    {FAV_QTY_PRESETS.map((q) => (
+                      <button
+                        key={q} type="button"
+                        onClick={() => {
+                          setFavQtys(prev => ({ ...prev, [fav.id]: q }));
+                          setFavCustomQtys(prev => ({ ...prev, [fav.id]: "" }));
+                        }}
+                        className={`px-2 py-0.5 rounded text-xs font-medium border transition-colors ${
+                          qty === q && !cq
+                            ? "bg-primary text-primary-foreground border-primary"
+                            : "bg-secondary text-secondary-foreground border-border hover:border-primary/60"
+                        }`}
+                      >
+                        {q === 1 ? "1×" : `${q}×`}
+                      </button>
+                    ))}
+                    <input
+                      type="number" min="0.1" step="0.1" placeholder="Custom" value={cq}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setFavCustomQtys(prev => ({ ...prev, [fav.id]: val }));
+                        const v = parseFloat(val);
+                        if (!isNaN(v) && v > 0) setFavQtys(prev => ({ ...prev, [fav.id]: v }));
+                      }}
+                      className={`w-16 h-6 rounded border text-xs text-center bg-background px-1 outline-none transition-colors ${
+                        cq ? "border-primary" : "border-border"
+                      } focus:border-primary`}
+                    />
+                    <span className="text-xs text-muted-foreground">×</span>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -256,6 +403,36 @@ export default function LogMealPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] });
     } catch {
       toast({ title: "Failed to remove item", variant: "destructive" });
+    }
+  };
+
+  const addFavoriteToMeal = async (fav: FavoriteItem, qty: number) => {
+    try {
+      const meal = await ensureMeal();
+      await api.addMealItem(meal.id, {
+        customName: fav.name,
+        calories: Math.round(fav.calories * qty),
+        proteinG: Math.round(fav.proteinG * qty * 10) / 10,
+        carbsG:   Math.round(fav.carbsG   * qty * 10) / 10,
+        fatG:     Math.round(fav.fatG     * qty * 10) / 10,
+        servings: qty,
+        source:   fav.source ?? "manual_exact",
+      });
+      await refetchMeals();
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] });
+      toast({ title: `${qty === 1 ? fav.name : `${fav.name} ×${qty}`} added` });
+    } catch {
+      toast({ title: "Failed to add favorite", variant: "destructive" });
+    }
+  };
+
+  const deleteFavoriteItem = async (id: string) => {
+    try {
+      await api.deleteFavorite(id);
+      queryClient.invalidateQueries({ queryKey: ["/api/favorites"] });
+      toast({ title: "Favorite removed" });
+    } catch {
+      toast({ title: "Failed to remove favorite", variant: "destructive" });
     }
   };
 
@@ -620,6 +797,9 @@ export default function LogMealPage() {
         )}
 
         {/* Quantity bar moved into custom food section below */}
+
+        {/* Favorites */}
+        <FavoritesSection onAdd={addFavoriteToMeal} onDelete={deleteFavoriteItem} />
 
         {/* Dining hall menu */}
         {activeSlug && (
@@ -1031,6 +1211,31 @@ export default function LogMealPage() {
                   {searchResult.servingSize && (
                     <span className="text-xs text-muted-foreground">· {searchResult.servingSize}</span>
                   )}
+                  <button
+                    type="button"
+                    title="Save as favorite"
+                    onClick={async () => {
+                      try {
+                        await api.saveFavorite({
+                          name: searchResult.foodName ?? customSearch.trim(),
+                          calories: parseFloat(manualCalories) || searchResult.calories || 0,
+                          proteinG: parseFloat(manualProtein) || searchResult.proteinG || 0,
+                          carbsG:   parseFloat(manualCarbs)   || searchResult.carbsG   || 0,
+                          fatG:     parseFloat(manualFat)     || searchResult.fatG     || 0,
+                          servingSize: searchResult.servingSize ?? undefined,
+                          barcode: searchResult.barcode ?? undefined,
+                          source: searchResult.source ?? "manual_exact",
+                        });
+                        queryClient.invalidateQueries({ queryKey: ["/api/favorites"] });
+                        toast({ title: "Saved to favorites" });
+                      } catch {
+                        toast({ title: "Failed to save favorite", variant: "destructive" });
+                      }
+                    }}
+                    className="ml-auto p-1.5 rounded-lg hover:bg-secondary text-muted-foreground hover:text-primary transition-colors"
+                  >
+                    <Bookmark className="w-4 h-4" />
+                  </button>
                 </div>
               </div>
             )}

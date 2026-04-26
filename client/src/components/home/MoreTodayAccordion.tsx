@@ -25,6 +25,7 @@ interface Props {
   water: WaterProps;
   weightData: Array<{ date: string; weightKg: number }> | undefined;
   activities: ActivityEntry[];
+  targetWeightKg?: number | null;
 }
 
 const ML_TO: Record<string, number> = { ml: 1, oz: 1/29.5735, L: 1/1000, gal: 1/3785.41 };
@@ -102,7 +103,7 @@ function MicrosSection({ date }: { date: string }) {
   );
 }
 
-export default function MoreTodayAccordion({ date, water, weightData, activities }: Props) {
+export default function MoreTodayAccordion({ date, water, weightData, activities, targetWeightKg }: Props) {
   const [open, setOpen] = useState(false);
   const { waterMl, waterTargetMl, waterUnit, waterBottles, enableWaterTracking, today } = water;
 
@@ -135,6 +136,16 @@ export default function MoreTodayAccordion({ date, water, weightData, activities
   const prevWeight = weightChartData.length > 1 ? weightChartData[weightChartData.length - 2] : null;
   const weightDelta = latestWeight !== null && prevWeight !== null ? +(latestWeight - prevWeight).toFixed(1) : null;
 
+  const weightDeltaColor = (() => {
+    if (targetWeightKg != null && latestWeight !== null && prevWeight !== null) {
+      const targetLbs = kgToLbs(targetWeightKg);
+      return Math.abs(latestWeight - targetLbs) < Math.abs(prevWeight - targetLbs)
+        ? "text-emerald-400"
+        : "text-rose-400";
+    }
+    return weightDelta !== null && weightDelta > 0 ? "text-rose-400" : "text-emerald-400";
+  })();
+
   const waterPct = waterTargetMl
     ? Math.min(100, (waterMl / waterTargetMl) * 100)
     : Math.min(100, ((waterMl / 237) / 8) * 100);
@@ -142,129 +153,136 @@ export default function MoreTodayAccordion({ date, water, weightData, activities
   const hasContent = enableWaterTracking || (latestWeight !== null) || activities.length > 0;
   if (!hasContent) return null;
 
+  const hasAccordionContent = activities.length > 0;
+
   return (
     <div className="surface-card overflow-hidden">
-      <button
-        onClick={() => setOpen(v => !v)}
-        className="w-full flex items-center justify-between px-4 py-3"
-      >
-        <span className="text-sm font-semibold text-slate-300">More today</span>
-        <ChevronDown className={cn("w-4 h-4 text-slate-500 transition-transform duration-200", open && "rotate-180")} />
-      </button>
 
-      {open && (
-        <div className="px-4 pb-4 space-y-5 border-t border-white/5 pt-4">
-          {/* Micronutrients */}
-          <MicrosSection date={date} />
+      {/* Always-visible: Water */}
+      {enableWaterTracking && (
+        <div className={cn("px-4 pt-4 pb-4 space-y-3", (latestWeight !== null || hasAccordionContent) && "border-b border-white/5")}>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1.5">
+              <Droplets className="w-3.5 h-3.5 text-sky-400" />
+              <span className="text-xs font-semibold text-slate-400">Water</span>
+            </div>
+            <span className="text-sky-400 font-semibold text-xs">
+              {fmtWater(waterMl, waterUnit)}{waterTargetMl ? ` / ${fmtWater(waterTargetMl, waterUnit)}` : ""}
+            </span>
+          </div>
+          {waterTargetMl && (
+            <div className="bg-slate-800 rounded-full h-2">
+              <div className="h-full rounded-full bg-sky-400 transition-all duration-500" style={{ width: `${waterPct}%` }} />
+            </div>
+          )}
+          {waterBottles.length > 0 ? (
+            <div className="space-y-2">
+              {waterBottles.map(bottle => (
+                <div key={bottle.id} className="bg-slate-800/60 rounded-xl p-2.5">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-xs font-medium text-slate-300">{bottle.name}</span>
+                    <span className="text-xs text-slate-500">{fmtWater(bottle.mlSize, waterUnit)}</span>
+                  </div>
+                  <div className="flex gap-1.5 flex-wrap">
+                    {(["1/4", "1/2", "3/4", "1"] as const).map(frac => {
+                      const fracMap: Record<string, number> = {"1/4": 0.25, "1/2": 0.5, "3/4": 0.75, "1": 1};
+                      const addMl = Math.round(bottle.mlSize * fracMap[frac]);
+                      return (
+                        <button
+                          key={frac}
+                          onClick={() => waterMutation.mutate(addMl)}
+                          disabled={waterMutation.isPending}
+                          className="flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-900 border border-slate-700 hover:border-sky-400/60 text-xs font-medium text-slate-300 transition-colors"
+                        >
+                          <Plus className="w-3 h-3" />{frac}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="flex gap-1.5 flex-wrap">
+              {([240, 355, 500, 750] as const).map(ml => (
+                <button
+                  key={ml}
+                  onClick={() => waterMutation.mutate(ml)}
+                  disabled={waterMutation.isPending}
+                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-medium text-slate-300 transition-colors"
+                >
+                  <Plus className="w-3 h-3" />{fmtWater(ml, waterUnit)}
+                </button>
+              ))}
+            </div>
+          )}
+          <button
+            onClick={() => waterMutation.mutate(-237)}
+            disabled={waterMutation.isPending || waterMl === 0}
+            className="flex items-center gap-1 text-xs text-slate-500 hover:text-rose-400 transition-colors"
+          >
+            <Minus className="w-3 h-3" /> Undo 8oz
+          </button>
+        </div>
+      )}
 
-          {/* Water */}
-          {enableWaterTracking && (
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-1.5">
-                  <Droplets className="w-3.5 h-3.5 text-sky-400" />
-                  <span className="text-xs font-semibold text-slate-400">Water</span>
+      {/* Always-visible: Weight */}
+      {latestWeight !== null && (
+        <div className={cn("px-4 pt-4 pb-4", hasAccordionContent && "border-b border-white/5")}>
+          <div className="flex items-center gap-1.5 mb-2">
+            <TrendingUp className="w-3.5 h-3.5 text-slate-500" />
+            <span className="text-xs font-semibold text-slate-400">Weight</span>
+          </div>
+          <div className="flex items-baseline gap-2">
+            <span className="text-2xl font-bold text-slate-100">{latestWeight}</span>
+            <span className="text-sm text-slate-500">lbs</span>
+            {weightDelta !== null && weightDelta !== 0 && (
+              <span className={`text-xs font-medium ${weightDeltaColor}`}>
+                {weightDelta > 0 ? "↑" : "↓"} {Math.abs(weightDelta)}
+              </span>
+            )}
+          </div>
+          <Sparkline data={weightChartData} />
+        </div>
+      )}
+
+      {/* Collapsible: Micros + Activity */}
+      {hasAccordionContent && (
+        <>
+          <button
+            onClick={() => setOpen(v => !v)}
+            className="w-full flex items-center justify-between px-4 py-3"
+          >
+            <span className="text-sm font-semibold text-slate-300">More today</span>
+            <ChevronDown className={cn("w-4 h-4 text-slate-500 transition-transform duration-200", open && "rotate-180")} />
+          </button>
+
+          {open && (
+            <div className="px-4 pb-4 space-y-5 border-t border-white/5 pt-4">
+              {/* Micronutrients */}
+              <MicrosSection date={date} />
+
+              {/* Activity */}
+              <div>
+                <div className="flex items-center gap-1.5 mb-2">
+                  <Flame className="w-3.5 h-3.5 text-orange-400" />
+                  <span className="text-xs font-semibold text-slate-400">Activity</span>
                 </div>
-                <span className="text-sky-400 font-semibold text-xs">
-                  {fmtWater(waterMl, waterUnit)}{waterTargetMl ? ` / ${fmtWater(waterTargetMl, waterUnit)}` : ""}
-                </span>
-              </div>
-              {waterTargetMl && (
-                <div className="bg-slate-800 rounded-full h-2">
-                  <div className="h-full rounded-full bg-sky-400 transition-all duration-500" style={{ width: `${waterPct}%` }} />
-                </div>
-              )}
-              {waterBottles.length > 0 ? (
-                <div className="space-y-2">
-                  {waterBottles.map(bottle => (
-                    <div key={bottle.id} className="bg-slate-800/60 rounded-xl p-2.5">
-                      <div className="flex items-center justify-between mb-1.5">
-                        <span className="text-xs font-medium text-slate-300">{bottle.name}</span>
-                        <span className="text-xs text-slate-500">{fmtWater(bottle.mlSize, waterUnit)}</span>
-                      </div>
-                      <div className="flex gap-1.5 flex-wrap">
-                        {(["1/4", "1/2", "3/4", "1"] as const).map(frac => {
-                          const fracMap: Record<string, number> = {"1/4": 0.25, "1/2": 0.5, "3/4": 0.75, "1": 1};
-                          const addMl = Math.round(bottle.mlSize * fracMap[frac]);
-                          return (
-                            <button
-                              key={frac}
-                              onClick={() => waterMutation.mutate(addMl)}
-                              disabled={waterMutation.isPending}
-                              className="flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-900 border border-slate-700 hover:border-sky-400/60 text-xs font-medium text-slate-300 transition-colors"
-                            >
-                              <Plus className="w-3 h-3" />{frac}
-                            </button>
-                          );
-                        })}
-                      </div>
+                <div className="grid grid-cols-3 gap-2">
+                  {activities.slice(0, 3).map((a) => (
+                    <div key={a.id} className="bg-slate-800 rounded-xl p-2.5 text-center">
+                      <p className="text-xs text-slate-500">{a.date.slice(5)}</p>
+                      <p className="font-bold text-sm text-slate-100 mt-0.5">{a.caloriesBurned?.toLocaleString()}</p>
+                      <p className="text-xs text-slate-500">kcal</p>
                     </div>
                   ))}
                 </div>
-              ) : (
-                <div className="flex gap-1.5 flex-wrap">
-                  {([240, 355, 500, 750] as const).map(ml => (
-                    <button
-                      key={ml}
-                      onClick={() => waterMutation.mutate(ml)}
-                      disabled={waterMutation.isPending}
-                      className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-medium text-slate-300 transition-colors"
-                    >
-                      <Plus className="w-3 h-3" />{fmtWater(ml, waterUnit)}
-                    </button>
-                  ))}
-                </div>
-              )}
-              <button
-                onClick={() => waterMutation.mutate(-237)}
-                disabled={waterMutation.isPending || waterMl === 0}
-                className="flex items-center gap-1 text-xs text-slate-500 hover:text-rose-400 transition-colors"
-              >
-                <Minus className="w-3 h-3" /> Undo 8oz
-              </button>
-            </div>
-          )}
-
-          {/* Weight */}
-          {latestWeight !== null && (
-            <div>
-              <div className="flex items-center gap-1.5 mb-2">
-                <TrendingUp className="w-3.5 h-3.5 text-slate-500" />
-                <span className="text-xs font-semibold text-slate-400">Weight</span>
-              </div>
-              <div className="flex items-baseline gap-2">
-                <span className="text-2xl font-bold text-slate-100">{latestWeight}</span>
-                <span className="text-sm text-slate-500">lbs</span>
-                {weightDelta !== null && weightDelta !== 0 && (
-                  <span className={`text-xs font-medium ${weightDelta > 0 ? "text-rose-400" : "text-emerald-400"}`}>
-                    {weightDelta > 0 ? "↑" : "↓"} {Math.abs(weightDelta)}
-                  </span>
-                )}
-              </div>
-              <Sparkline data={weightChartData} />
-            </div>
-          )}
-
-          {/* Activity */}
-          {activities.length > 0 && (
-            <div>
-              <div className="flex items-center gap-1.5 mb-2">
-                <Flame className="w-3.5 h-3.5 text-orange-400" />
-                <span className="text-xs font-semibold text-slate-400">Activity</span>
-              </div>
-              <div className="grid grid-cols-3 gap-2">
-                {activities.slice(0, 3).map((a) => (
-                  <div key={a.id} className="bg-slate-800 rounded-xl p-2.5 text-center">
-                    <p className="text-xs text-slate-500">{a.date.slice(5)}</p>
-                    <p className="font-bold text-sm text-slate-100 mt-0.5">{a.caloriesBurned?.toLocaleString()}</p>
-                    <p className="text-xs text-slate-500">kcal</p>
-                  </div>
-                ))}
               </div>
             </div>
           )}
-        </div>
+        </>
       )}
+
     </div>
   );
 }
